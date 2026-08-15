@@ -8,6 +8,8 @@ import {
   IconEllipse,
   IconHighlight,
   IconRect,
+  IconRedo,
+  IconSelect,
   IconTrash,
   IconUndo,
 } from "@/components/icons";
@@ -28,7 +30,9 @@ import { SWATCHES } from "@/windows/editor/tools";
  *     A hung renderer cannot report that it hung, so silence is the signal.
  */
 
-type Tool = "pen" | "arrow" | "rect" | "ellipse" | "highlight";
+type DrawTool = "pen" | "arrow" | "rect" | "ellipse" | "highlight";
+/** `select` draws nothing; it is the pointer, as in the editor. */
+type Tool = DrawTool | "select";
 
 interface Point {
   x: number;
@@ -37,13 +41,105 @@ interface Point {
 
 interface Stroke {
   id: string;
-  tool: Tool;
+  tool: DrawTool;
   color: string;
   width: number;
   points: Point[];
 }
 
+interface Bounds {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+type Handle = "nw" | "ne" | "sw" | "se";
+
+/**
+ * What the pointer is currently doing.
+ *
+ * Held in a ref rather than state: these update on every pointer move, and
+ * re-rendering the whole overlay to store a drag offset would cost frames on
+ * the one interaction where smoothness is the entire point.
+ */
+type Gesture =
+  | { kind: "draw" }
+  | { kind: "move"; ids: string[]; origin: Point; before: Stroke[] }
+  | { kind: "resize"; handle: Handle; box: Bounds; before: Stroke[] };
+
+// ------------------------------------------------------------------ geometry
+
+/**
+ * Bounding box of some strokes, padded by half their stroke width.
+ *
+ * The padding matters: a horizontal line has zero height as a set of points,
+ * and a selection box drawn through the middle of it would be invisible and
+ * impossible to grab.
+ */
+function boundsOf(strokes: Stroke[]): Bounds | null {
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+
+  for (const s of strokes) {
+    const pad = s.width / 2;
+    for (const p of s.points) {
+      minX = Math.min(minX, p.x - pad);
+      minY = Math.min(minY, p.y - pad);
+      maxX = Math.max(maxX, p.x + pad);
+      maxY = Math.max(maxY, p.y + pad);
+    }
+  }
+
+  if (!Number.isFinite(minX)) return null;
+  return { x: minX, y: minY, width: maxX - minX, height: maxY - minY };
+}
+
+const translate = (s: Stroke, dx: number, dy: number): Stroke => ({
+  ...s,
+  points: s.points.map((p) => ({ x: p.x + dx, y: p.y + dy })),
+});
+
+/**
+ * Scale a stroke about an anchor point.
+ *
+ * Uniform across every tool because a stroke is only ever a list of points —
+ * freehand scribbles resize by exactly the same arithmetic as rectangles,
+ * with no per-shape special cases.
+ */
+const scale = (s: Stroke, anchor: Point, sx: number, sy: number): Stroke => ({
+  ...s,
+  points: s.points.map((p) => ({
+    x: anchor.x + (p.x - anchor.x) * sx,
+    y: anchor.y + (p.y - anchor.y) * sy,
+  })),
+});
+
+const HANDLES: { id: Handle; cursor: string }[] = [
+  { id: "nw", cursor: "nwse-resize" },
+  { id: "ne", cursor: "nesw-resize" },
+  { id: "sw", cursor: "nesw-resize" },
+  { id: "se", cursor: "nwse-resize" },
+];
+
+const handleAt = (b: Bounds, h: Handle): Point => ({
+  x: h === "nw" || h === "sw" ? b.x : b.x + b.width,
+  y: h === "nw" || h === "ne" ? b.y : b.y + b.height,
+});
+
+/** The corner diagonally opposite the one being dragged — it stays put. */
+const anchorFor = (b: Bounds, h: Handle): Point =>
+  handleAt(b, (({ nw: "se", ne: "sw", sw: "ne", se: "nw" }) as const)[h]);
+
 const HEARTBEAT_MS = 1000;
+/** How many undo steps to keep. Deep enough for a session, cheap to hold. */
+const HISTORY_LIMIT = 60;
+/** The highlighter draws this much wider than the nominal stroke width. */
+const HIGHLIGHT_SCALE = 4;
+/** Minimum grabbable thickness, so a hairline is still selectable. */
+const HIT_WIDTH = 18;
 /** Mirrors `AnnotateLayout` in `src-tauri/src/annotate.rs`. */
 interface Layout {
   left: number;
@@ -81,12 +177,32 @@ interface Screen {
   height: number;
 }
 
-const TOOLS: { id: Tool; label: string; key: string; icon: () => React.ReactNode }[] = [
+interface ToolButton {
+  id: Tool;
+  label: string;
+  key: string;
+  icon: () => React.ReactNode;
+}
+
+/** The drawing tools, which is also the set the keyboard shortcuts match on. */
+const TOOLS: ToolButton[] = [
   { id: "pen", label: "Pen", key: "P", icon: () => <PenGlyph /> },
   { id: "arrow", label: "Arrow", key: "A", icon: () => <IconArrow /> },
   { id: "rect", label: "Rectangle", key: "R", icon: () => <IconRect /> },
   { id: "ellipse", label: "Ellipse", key: "E", icon: () => <IconEllipse /> },
   { id: "highlight", label: "Highlighter", key: "H", icon: () => <IconHighlight /> },
+];
+
+/**
+ * What the toolbar shows: select first, as in the editor.
+ *
+ * Select is rarely needed — dragging a stroke moves it whatever tool is
+ * active — but it is the way to click a stroke without any chance of drawing,
+ * and its presence is what tells you the strokes are objects at all.
+ */
+const TOOLBAR_TOOLS: ToolButton[] = [
+  { id: "select", label: "Select", key: "V", icon: () => <IconSelect /> },
+  ...TOOLS,
 ];
 
 export function AnnotateApp() {
@@ -96,7 +212,12 @@ export function AnnotateApp() {
   const [width, setWidth] = useState(4);
 
   const drawing = useRef<Stroke | null>(null);
+  const gesture = useRef<Gesture | null>(null);
   const [, force] = useState(0);
+  const [selected, setSelected] = useState<string[]>([]);
+  /** Undo stack of whole stroke lists. Small enough that diffing would be fuss. */
+  const [past, setPast] = useState<Stroke[][]>([]);
+  const [future, setFuture] = useState<Stroke[][]>([]);
   /** Displays this overlay can sit on. One entry means no picker is shown. */
   const [screens, setScreens] = useState<Screen[]>([]);
   /** The area not covered by the menu bar or the Dock. */
@@ -181,48 +302,229 @@ export function AnnotateApp() {
     };
   }, []);
 
+  // ---------------------------------------------------------------- history
+
+  /** Record the current strokes before a change, so ⌘Z can come back to them. */
+  const snapshot = useCallback(() => {
+    setPast((prev) => [...prev, strokes].slice(-HISTORY_LIMIT));
+    setFuture([]);
+  }, [strokes]);
+
+  const undo = useCallback(() => {
+    setPast((prev) => {
+      if (prev.length === 0) return prev;
+      const restored = prev[prev.length - 1];
+      setFuture((f) => [strokes, ...f]);
+      setStrokes(restored);
+      setSelected((ids) => ids.filter((id) => restored.some((s) => s.id === id)));
+      return prev.slice(0, -1);
+    });
+  }, [strokes]);
+
+  const redo = useCallback(() => {
+    setFuture((prev) => {
+      if (prev.length === 0) return prev;
+      const [next, ...rest] = prev;
+      setPast((p) => [...p, strokes]);
+      setStrokes(next);
+      return rest;
+    });
+  }, [strokes]);
+
+  // --------------------------------------------------------------- selection
+
+  const selectedStrokes = strokes.filter((s) => selected.includes(s.id));
+  const selectionBox = boundsOf(selectedStrokes);
+
+  /** Apply a style change to the selection, and make it the new default. */
+  const restyle = useCallback(
+    (patch: Partial<Pick<Stroke, "color" | "width">>) => {
+      if (selected.length === 0) return;
+      snapshot();
+      setStrokes((prev) =>
+        prev.map((s) =>
+          selected.includes(s.id)
+            ? {
+                ...s,
+                ...patch,
+                // The highlighter's stroke is drawn several times wider than
+                // the nominal width, exactly as when it was first laid down.
+                ...(patch.width !== undefined && s.tool === "highlight"
+                  ? { width: patch.width * HIGHLIGHT_SCALE }
+                  : {}),
+              }
+            : s,
+        ),
+      );
+    },
+    [selected, snapshot],
+  );
+
+  const applyColor = useCallback(
+    (next: string) => {
+      setColor(next);
+      restyle({ color: next });
+    },
+    [restyle],
+  );
+
+  const applyWidth = useCallback(
+    (next: number) => {
+      setWidth(next);
+      restyle({ width: next });
+    },
+    [restyle],
+  );
+
+  const deleteSelected = useCallback(() => {
+    if (selected.length === 0) return;
+    snapshot();
+    setStrokes((prev) => prev.filter((s) => !selected.includes(s.id)));
+    setSelected([]);
+  }, [selected, snapshot]);
+
+  const clearAll = useCallback(() => {
+    if (strokes.length === 0) return;
+    snapshot();
+    setStrokes([]);
+    setSelected([]);
+  }, [strokes.length, snapshot]);
+
   // --------------------------------------------------------------- drawing
 
+  /** Pointer down on the backdrop: draw, or clear the selection. */
   const begin = (e: React.PointerEvent) => {
     if (e.button !== 0) return;
     (e.currentTarget as Element).setPointerCapture(e.pointerId);
 
+    if (tool === "select") {
+      setSelected([]);
+      return;
+    }
+
+    setSelected([]);
+    gesture.current = { kind: "draw" };
     drawing.current = {
       id: crypto.randomUUID(),
       tool,
       color,
-      width: tool === "highlight" ? width * 4 : width,
+      width: tool === "highlight" ? width * HIGHLIGHT_SCALE : width,
       points: [{ x: e.clientX, y: e.clientY }],
     };
     force((n) => n + 1);
   };
 
+  /**
+   * Pointer down on an existing stroke: select it and start moving.
+   *
+   * Matches the editor — dragging a shape moves it whatever tool is active,
+   * with Alt to draw straight through instead. Without that escape hatch a
+   * highlight covering the area would make everything under it unreachable.
+   */
+  const grab = (e: React.PointerEvent, id: string) => {
+    if (e.button !== 0) return;
+    if (e.altKey && tool !== "select") return;
+    e.stopPropagation();
+    (e.currentTarget as Element).setPointerCapture(e.pointerId);
+
+    const already = selected.includes(id);
+    const ids = e.shiftKey
+      ? already
+        ? selected.filter((x) => x !== id)
+        : [...selected, id]
+      : already
+        ? selected
+        : [id];
+
+    setSelected(ids);
+    if (ids.length === 0) return;
+
+    snapshot();
+    gesture.current = {
+      kind: "move",
+      ids,
+      origin: { x: e.clientX, y: e.clientY },
+      before: strokes,
+    };
+  };
+
+  const grabHandle = (e: React.PointerEvent, handle: Handle) => {
+    if (e.button !== 0 || !selectionBox) return;
+    e.stopPropagation();
+    (e.currentTarget as Element).setPointerCapture(e.pointerId);
+
+    snapshot();
+    gesture.current = { kind: "resize", handle, box: selectionBox, before: strokes };
+  };
+
   const extend = (e: React.PointerEvent) => {
-    const active = drawing.current;
+    const active = gesture.current;
     if (!active) return;
 
-    if (active.tool === "pen" || active.tool === "highlight") {
-      // Freehand keeps every sample; the shapes only ever need two.
-      active.points.push({ x: e.clientX, y: e.clientY });
-    } else {
-      active.points[1] = { x: e.clientX, y: e.clientY };
+    if (active.kind === "draw") {
+      const stroke = drawing.current;
+      if (!stroke) return;
+      if (stroke.tool === "pen" || stroke.tool === "highlight") {
+        // Freehand keeps every sample; the shapes only ever need two.
+        stroke.points.push({ x: e.clientX, y: e.clientY });
+      } else {
+        stroke.points[1] = { x: e.clientX, y: e.clientY };
+      }
+      force((n) => n + 1);
+      return;
     }
-    force((n) => n + 1);
+
+    if (active.kind === "move") {
+      let dx = e.clientX - active.origin.x;
+      let dy = e.clientY - active.origin.y;
+      // Shift locks to the dominant axis, as in the editor.
+      if (e.shiftKey) {
+        if (Math.abs(dx) > Math.abs(dy)) dy = 0;
+        else dx = 0;
+      }
+      setStrokes(
+        active.before.map((s) => (active.ids.includes(s.id) ? translate(s, dx, dy) : s)),
+      );
+      return;
+    }
+
+    // Resize: scale the selection about the corner opposite the one held.
+    const anchor = anchorFor(active.box, active.handle);
+    const corner = handleAt(active.box, active.handle);
+    const spanX = corner.x - anchor.x;
+    const spanY = corner.y - anchor.y;
+    // A zero span cannot be scaled — a flat selection would collapse to
+    // nothing and never come back.
+    const sx = Math.abs(spanX) < 1 ? 1 : (e.clientX - anchor.x) / spanX;
+    const sy = Math.abs(spanY) < 1 ? 1 : (e.clientY - anchor.y) / spanY;
+
+    // Shift keeps the aspect ratio, as it does when drawing.
+    const [fx, fy] = e.shiftKey ? [Math.min(sx, sy), Math.min(sx, sy)] : [sx, sy];
+    setStrokes(
+      active.before.map((s) => (selected.includes(s.id) ? scale(s, anchor, fx, fy) : s)),
+    );
   };
 
   const finish = () => {
-    const active = drawing.current;
-    drawing.current = null;
+    const active = gesture.current;
+    gesture.current = null;
     if (!active) return;
+
+    if (active.kind !== "draw") return;
+
+    const stroke = drawing.current;
+    drawing.current = null;
+    if (!stroke) return;
 
     // A click that produced no line is not a stroke.
     const moved =
-      active.points.length > 1 &&
-      (Math.abs(active.points[0].x - active.points[active.points.length - 1].x) > 2 ||
-        Math.abs(active.points[0].y - active.points[active.points.length - 1].y) > 2);
+      stroke.points.length > 1 &&
+      (Math.abs(stroke.points[0].x - stroke.points[stroke.points.length - 1].x) > 2 ||
+        Math.abs(stroke.points[0].y - stroke.points[stroke.points.length - 1].y) > 2);
     if (!moved) return force((n) => n + 1);
 
-    setStrokes((prev) => [...prev, active]);
+    snapshot();
+    setStrokes((prev) => [...prev, stroke]);
   };
 
   // -------------------------------------------------------------- keyboard
@@ -231,28 +533,40 @@ export function AnnotateApp() {
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
         e.preventDefault();
-        exit();
+        // Layered, as in the editor: drop the selection first, leave on the
+        // second press. Only when something is selected — with nothing to
+        // deselect this stays the plain way out.
+        if (selected.length > 0) setSelected([]);
+        else exit();
         return;
       }
       if (e.metaKey && e.code === "KeyZ") {
         e.preventDefault();
-        setStrokes((prev) => prev.slice(0, -1));
+        if (e.shiftKey) redo();
+        else undo();
+        return;
+      }
+      if (e.code === "Backspace" || e.code === "Delete") {
+        e.preventDefault();
+        deleteSelected();
         return;
       }
       if (e.metaKey || e.ctrlKey || e.altKey) return;
 
       const digit = Number(e.key);
       if (digit >= 1 && digit <= SWATCHES.length) {
-        setColor(SWATCHES[digit - 1].value);
+        applyColor(SWATCHES[digit - 1].value);
         return;
       }
+
+      if (e.code === "KeyV") return setTool("select");
 
       const match = TOOLS.find((t) => t.key.toLowerCase() === e.key.toLowerCase());
       if (match) setTool(match.id);
       else if (e.code === "KeyS") nextScreen();
-      else if (e.code === "KeyC") setStrokes([]);
-      else if (e.code === "BracketLeft") setWidth((w) => Math.max(1, w - 1));
-      else if (e.code === "BracketRight") setWidth((w) => Math.min(24, w + 1));
+      else if (e.code === "KeyC") clearAll();
+      else if (e.code === "BracketLeft") applyWidth(Math.max(1, width - 1));
+      else if (e.code === "BracketRight") applyWidth(Math.min(24, width + 1));
     };
 
     // Capture phase, plus keyup as a second chance for Escape specifically:
@@ -268,12 +582,23 @@ export function AnnotateApp() {
       window.removeEventListener("keydown", onKeyDown, { capture: true });
       window.removeEventListener("keyup", onKeyUp, { capture: true });
     };
-  }, [exit, nextScreen]);
+  }, [
+    exit,
+    nextScreen,
+    selected.length,
+    undo,
+    redo,
+    deleteSelected,
+    clearAll,
+    applyColor,
+    applyWidth,
+    width,
+  ]);
 
   const live = drawing.current;
 
   return (
-    <div className="fixed inset-0" style={{ cursor: "crosshair" }}>
+    <div className="fixed inset-0" style={{ cursor: tool === "select" ? "default" : "crosshair" }}>
       <svg
         className="absolute inset-0 h-full w-full"
         onPointerDown={begin}
@@ -284,10 +609,55 @@ export function AnnotateApp() {
         {/* A fully transparent hit area: without a painted rect, pointer events
             fall through the SVG and drawing never starts. */}
         <rect width="100%" height="100%" fill="transparent" />
+
         {strokes.map((s) => (
-          <StrokeShape key={s.id} stroke={s} />
+          <g key={s.id} onPointerDown={(e) => grab(e, s.id)} style={{ cursor: "move" }}>
+            {/* An invisible fat copy underneath, so a 2px line is grabbable
+                without demanding pixel-perfect aim. */}
+            <StrokeShape stroke={s} hitArea />
+            <StrokeShape stroke={s} />
+          </g>
         ))}
+
         {live && <StrokeShape stroke={live} />}
+
+        {/* Drawn during a drag as well as after it: the box is derived from the
+            strokes themselves, so it tracks them live. Hiding it mid-gesture
+            would also mean hiding it forever, since `gesture` is a ref and
+            clearing it triggers no re-render. */}
+        {selectionBox && (
+          <g>
+            <rect
+              x={selectionBox.x}
+              y={selectionBox.y}
+              width={selectionBox.width}
+              height={selectionBox.height}
+              fill="none"
+              stroke="var(--color-accent)"
+              strokeWidth={1.5}
+              strokeDasharray="5 3"
+              pointerEvents="none"
+            />
+            {HANDLES.map((h) => {
+              const at = handleAt(selectionBox, h.id);
+              return (
+                <rect
+                  key={h.id}
+                  x={at.x - 5}
+                  y={at.y - 5}
+                  width={10}
+                  height={10}
+                  rx={2}
+                  fill="var(--color-accent)"
+                  stroke="#fff"
+                  strokeWidth={1.5}
+                  style={{ cursor: h.cursor }}
+                  onPointerDown={(e) => grabHandle(e, h.id)}
+                />
+              );
+            })}
+          </g>
+        )}
       </svg>
 
       <Toolbar
@@ -299,21 +669,36 @@ export function AnnotateApp() {
         tool={tool}
         setTool={setTool}
         color={color}
-        setColor={setColor}
+        setColor={applyColor}
         width={width}
-        setWidth={setWidth}
-        canUndo={strokes.length > 0}
-        onUndo={() => setStrokes((prev) => prev.slice(0, -1))}
-        onClear={() => setStrokes([])}
+        setWidth={applyWidth}
+        canUndo={past.length > 0}
+        onUndo={undo}
+        canRedo={future.length > 0}
+        onRedo={redo}
+        selectedCount={selected.length}
+        onClear={clearAll}
+        onDeleteSelected={deleteSelected}
         onExit={exit}
       />
     </div>
   );
 }
 
-function StrokeShape({ stroke }: { stroke: Stroke }) {
+/**
+ * A stroke, or an invisible fattened copy of it for hit testing.
+ *
+ * `hitArea` keeps the geometry and throws away the paint: a transparent stroke
+ * wide enough to grab. Deliberately stroke-only, never a filled interior — an
+ * unfilled rectangle should be selectable by its outline and stay click-through
+ * in the middle, or a large one would swallow everything drawn beneath it.
+ */
+function StrokeShape({ stroke, hitArea = false }: { stroke: Stroke; hitArea?: boolean }) {
   const { tool, color, width, points } = stroke;
   if (points.length === 0) return null;
+
+  const paint = hitArea ? "transparent" : color;
+  const thickness = hitArea ? Math.max(width, HIT_WIDTH) : width;
 
   if (tool === "pen" || tool === "highlight") {
     const d = points.map((p, i) => `${i === 0 ? "M" : "L"} ${p.x} ${p.y}`).join(" ");
@@ -321,12 +706,12 @@ function StrokeShape({ stroke }: { stroke: Stroke }) {
       <path
         d={d}
         fill="none"
-        stroke={color}
-        strokeWidth={width}
+        stroke={paint}
+        strokeWidth={thickness}
         strokeLinecap="round"
         strokeLinejoin="round"
-        opacity={tool === "highlight" ? 0.35 : 1}
-        style={tool === "highlight" ? { mixBlendMode: "multiply" } : undefined}
+        opacity={!hitArea && tool === "highlight" ? 0.35 : 1}
+        style={!hitArea && tool === "highlight" ? { mixBlendMode: "multiply" } : undefined}
       />
     );
   }
@@ -355,7 +740,7 @@ function StrokeShape({ stroke }: { stroke: Stroke }) {
             },
           }),
         )}
-        fill={color}
+        fill={paint}
       />
     );
   }
@@ -366,7 +751,7 @@ function StrokeShape({ stroke }: { stroke: Stroke }) {
   const h = Math.abs(b.y - a.y);
 
   return tool === "rect" ? (
-    <rect x={x} y={y} width={w} height={h} rx={4} fill="none" stroke={color} strokeWidth={width} />
+    <rect x={x} y={y} width={w} height={h} rx={4} fill="none" stroke={paint} strokeWidth={thickness} />
   ) : (
     <ellipse
       cx={x + w / 2}
@@ -374,8 +759,8 @@ function StrokeShape({ stroke }: { stroke: Stroke }) {
       rx={Math.max(w / 2, 1)}
       ry={Math.max(h / 2, 1)}
       fill="none"
-      stroke={color}
-      strokeWidth={width}
+      stroke={paint}
+      strokeWidth={thickness}
     />
   );
 }
@@ -402,7 +787,11 @@ function Toolbar({
   setWidth,
   canUndo,
   onUndo,
+  canRedo,
+  onRedo,
+  selectedCount,
   onClear,
+  onDeleteSelected,
   onExit,
 }: {
   layout: Layout | null;
@@ -418,7 +807,12 @@ function Toolbar({
   setWidth: (w: number) => void;
   canUndo: boolean;
   onUndo: () => void;
+  canRedo: boolean;
+  onRedo: () => void;
+  /** How many strokes are selected, which decides what the bin does. */
+  selectedCount: number;
   onClear: () => void;
+  onDeleteSelected: () => void;
   onExit: () => void;
 }) {
   const current = screens.find((s) => s.isCurrent);
@@ -511,7 +905,7 @@ function Toolbar({
           <GripGlyph />
         </button>
 
-        {TOOLS.map((t) => (
+        {TOOLBAR_TOOLS.map((t) => (
           <button
             key={t.id}
             type="button"
@@ -527,7 +921,7 @@ function Toolbar({
           >
             {t.icon()}
           </button>
-        ))}
+          ))}
 
         <span className="mx-1 h-5 w-px bg-white/10" />
 
@@ -576,9 +970,21 @@ function Toolbar({
         </button>
         <button
           type="button"
-          onClick={onClear}
-          title="Clear all (C)"
-          aria-label="Clear all"
+          onClick={onRedo}
+          disabled={!canRedo}
+          title="Redo (⌘⇧Z)"
+          aria-label="Redo"
+          className="grid h-[30px] w-[30px] place-items-center rounded-lg text-ink-2 hover:bg-hover hover:text-ink disabled:opacity-35"
+        >
+          <IconRedo />
+        </button>
+        {/* One bin, two jobs: with a selection it removes just that, matching
+            the editor, and otherwise it wipes the board. */}
+        <button
+          type="button"
+          onClick={selectedCount > 0 ? onDeleteSelected : onClear}
+          title={selectedCount > 0 ? `Delete ${selectedCount} selected (\u232b)` : "Clear all (C)"}
+          aria-label={selectedCount > 0 ? "Delete selection" : "Clear all"}
           className="grid h-[30px] w-[30px] place-items-center rounded-lg text-ink-2 hover:bg-hover hover:text-danger"
         >
           <IconTrash />
