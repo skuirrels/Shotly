@@ -45,10 +45,21 @@ export function docSize(doc: Doc): { width: number; height: number } {
   return { width: doc.crop.width, height: doc.crop.height };
 }
 
+/**
+ * Where a fresh annotation starts.
+ *
+ * Sizes are in *image* pixels, and a Retina capture carries two of those for
+ * every point on screen — so these numbers read about half as large as they
+ * look written down. Judged against a real @2x capture rather than picked: at
+ * 32px an annotation was smaller than the body text of the page underneath it,
+ * which is the wrong way round for something meant to be read first. 48 sits
+ * above body text without reaching the headings, and a 10px stroke gives an
+ * arrow enough weight to compete with the interface it is pointing at.
+ */
 const DEFAULT_STYLE: Style = {
   color: "#FF3B30",
-  strokeWidth: 4,
-  fontSize: 24,
+  strokeWidth: 10,
+  fontSize: 48,
   fillOpacity: 0,
   blurRadius: 12,
   dim: 0.55,
