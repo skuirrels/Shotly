@@ -1,0 +1,208 @@
+@import "tailwindcss";
+
+/* ------------------------------------------------------------------ tokens
+   A dark, dense, pro-tool palette. Surfaces are near-black and slightly cool
+   so that captured screenshots — which are usually bright — read as the
+   subject and the chrome recedes around them.
+
+   The accent is warm orange: it survives being drawn on top of arbitrary
+   screen content (which is mostly blue-white UI), and it reads as "capture".
+*/
+@theme {
+  --color-canvas: #0a0b0d;
+  --color-inset: #060708;
+  --color-surface: #131519;
+  --color-raised: #1a1d22;
+  --color-hover: #22262c;
+  --color-pressed: #2a2f36;
+
+  --color-line-subtle: #1f2329;
+  --color-line: #2a2f36;
+  --color-line-strong: #3a4048;
+
+  --color-ink: #eceef1;
+  --color-ink-2: #9ca3ae;
+  --color-ink-3: #6b7280;
+  --color-ink-4: #4a5058;
+
+  --color-accent: #ff6b35;
+  --color-accent-hi: #ff7f4f;
+  --color-accent-lo: #e85a28;
+  --color-accent-fg: #120904;
+
+  --color-danger: #ff453a;
+  --color-success: #32d74b;
+  --color-warn: #ffd60a;
+
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --radius-xl: 16px;
+
+  --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Inter", system-ui, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, monospace;
+
+  /* macOS-flavoured easing: quick to leave, slow to settle. */
+  --ease-out: cubic-bezier(0.2, 0, 0, 1);
+  --ease-spring: cubic-bezier(0.34, 1.36, 0.64, 1);
+}
+
+@layer theme {
+  :root {
+    --shadow-float: 0 0 0 1px rgb(255 255 255 / 0.06), 0 12px 40px rgb(0 0 0 / 0.6),
+      0 2px 8px rgb(0 0 0 / 0.45);
+    --shadow-pop: 0 0 0 1px rgb(255 255 255 / 0.08), 0 16px 48px rgb(0 0 0 / 0.7);
+    --shadow-inset-hairline: inset 0 1px 0 0 rgb(255 255 255 / 0.05);
+
+    /* Annotation ink colours, shared by the picker and the renderer. */
+    --swatch-red: #ff3b30;
+    --swatch-orange: #ff9500;
+    --swatch-yellow: #ffcc00;
+    --swatch-green: #34c759;
+    --swatch-blue: #0a84ff;
+    --swatch-purple: #bf5af2;
+    --swatch-pink: #ff2d55;
+    --swatch-white: #ffffff;
+    --swatch-black: #1c1c1e;
+  }
+}
+
+/* ------------------------------------------------------------------- base */
+@layer base {
+  * {
+    box-sizing: border-box;
+  }
+
+  html,
+  body,
+  #root {
+    height: 100%;
+    margin: 0;
+  }
+
+  body {
+    background: var(--color-canvas);
+    color: var(--color-ink);
+    font-family: var(--font-sans);
+    font-size: 13px;
+    line-height: 1.45;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+
+    /* A desktop app is not a document: nothing should rubber-band, and text
+       should not be selectable unless we opt an element back in. */
+    overflow: hidden;
+    overscroll-behavior: none;
+    user-select: none;
+    -webkit-user-select: none;
+    cursor: default;
+  }
+
+  /* The overlay window is a hole punched through to the desktop. */
+  body.overlay-body {
+    background: transparent;
+    cursor: crosshair;
+  }
+
+  input,
+  textarea {
+    font: inherit;
+    color: inherit;
+    user-select: text;
+    -webkit-user-select: text;
+  }
+
+  :focus-visible {
+    outline: 2px solid var(--color-accent);
+    outline-offset: 2px;
+  }
+
+  /* Focus rings are for keyboard users; pointer interaction has its own
+     hover/active affordances and a ring on click just looks broken. */
+  :focus:not(:focus-visible) {
+    outline: none;
+  }
+
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: var(--color-line-strong);
+    border: 3px solid transparent;
+    background-clip: content-box;
+    border-radius: 999px;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: var(--color-ink-4);
+    background-clip: content-box;
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+}
+
+/* ------------------------------------------------------------- primitives */
+@layer components {
+  /* Floating chrome: toolbars, popovers, the command palette. The layered
+     background keeps it legible over both dark and bright screenshots. */
+  .surface-float {
+    background: color-mix(in srgb, var(--color-raised) 88%, transparent);
+    backdrop-filter: blur(24px) saturate(1.6);
+    -webkit-backdrop-filter: blur(24px) saturate(1.6);
+    box-shadow: var(--shadow-float), var(--shadow-inset-hairline);
+  }
+
+  .surface-pop {
+    background: color-mix(in srgb, var(--color-raised) 94%, transparent);
+    backdrop-filter: blur(32px) saturate(1.6);
+    -webkit-backdrop-filter: blur(32px) saturate(1.6);
+    box-shadow: var(--shadow-pop), var(--shadow-inset-hairline);
+  }
+
+  /* Window dragging is NOT done in CSS.
+     `-webkit-app-region` is an Electron/Chromium property that WKWebView
+     ignores entirely, so it silently does nothing under Tauri on macOS. The
+     title bar is marked with the `data-tauri-drag-region` attribute instead —
+     see TopBar. These classes remain only as layout hooks. */
+  .titlebar-drag,
+  .no-drag {
+    /* intentionally empty */
+  }
+}
+
+@layer utilities {
+  .animate-in-pop {
+    animation: pop-in 160ms var(--ease-spring);
+  }
+  .animate-in-fade {
+    animation: fade-in 120ms var(--ease-out);
+  }
+
+  @keyframes pop-in {
+    from {
+      opacity: 0;
+      transform: scale(0.96) translateY(4px);
+    }
+    to {
+      opacity: 1;
+      transform: none;
+    }
+  }
+
+  @keyframes fade-in {
+    from {
+      opacity: 0;
+    }
+    to {
+      opacity: 1;
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .animate-in-pop,
+    .animate-in-fade {
+      animation: none;
+    }
+  }
+}
