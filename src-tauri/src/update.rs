@@ -169,8 +169,9 @@ async fn install(app: &AppHandle, announce: bool) -> Result<(), String> {
         .map_err(|e| e.to_string())?;
 
     // The new bundle is on disk by now, so this stamps the copy that is
-    // actually installed rather than the one still running.
-    crate::build_info::record_updater_install(app);
+    // actually installed rather than the one still running — and records the
+    // version going in, not the one on its way out.
+    crate::build_info::record_updater_install(app, &version);
 
     emit(app, Status::Ready { version, notes });
     Ok(())

@@ -39,17 +39,21 @@ fn stamp() -> Option<u64> {
 
 /// Record that the updater put this copy here. Called once it has.
 ///
-/// Best effort throughout: a marker that could not be written costs one line
-/// of the About panel and nothing else, which is not worth failing an update
-/// that has otherwise just succeeded.
-pub fn record_updater_install(app: &AppHandle) {
+/// `version` is the version just *installed*, which has to be passed in: this
+/// runs inside the old build, so its own `package_info` still reports the
+/// version being replaced — and a marker naming the outgoing version never
+/// matches on the next launch, which reads as "installed by hand" for ever.
+///
+/// Best effort otherwise: a marker that could not be written costs one line of
+/// the About panel and nothing else, which is not worth failing an update that
+/// has just succeeded.
+pub fn record_updater_install(app: &AppHandle, version: &str) {
     let (Some(path), Some(stamp)) = (marker(app), stamp()) else {
         return;
     };
     if let Some(dir) = path.parent() {
         let _ = fs::create_dir_all(dir);
     }
-    let version = app.package_info().version.to_string();
     let _ = fs::write(path, format!("{version}\n{stamp}\n"));
 }
 
