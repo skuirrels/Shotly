@@ -1,0 +1,16 @@
+<!--
+  Menu bar glyph. A template image: pure black on transparent, no background
+  plate — macOS derives both the light and dark menu bar appearance from the
+  alpha channel alone, so the app icon's orange square would come out as a
+  solid black blob. Strokes are heavier than the app icon's because this is
+  drawn at 22pt and has no square to sit against.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <g fill="none" stroke="#000000" stroke-width="112" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M150 372 V246 a96 96 0 0 1 96-96 h126"/>
+    <path d="M652 150 h126 a96 96 0 0 1 96 96 v126"/>
+    <path d="M874 652 v126 a96 96 0 0 1-96 96 h-126"/>
+    <path d="M372 874 H246 a96 96 0 0 1-96-96 V652"/>
+  </g>
+  <circle cx="512" cy="512" r="96" fill="#000000"/>
+</svg>

@@ -168,8 +168,14 @@ fn build_tray(app: &tauri::AppHandle) -> tauri::Result<()> {
     let menu =
         Menu::with_items(app, &[&region, &window, &screen, &sep, &annotate, &stop, &sep, &quit])?;
 
+    // A dedicated template glyph rather than the app icon. The menu bar renders
+    // a template from its alpha channel alone, so handing it the app icon — a
+    // filled orange square — puts a solid black block up there.
+    let tray_icon = tauri::image::Image::from_bytes(include_bytes!("../icons/tray.png"))
+        .expect("tray icon is not a readable PNG");
+
     TrayIconBuilder::with_id("shotly-tray")
-        .icon(app.default_window_icon().unwrap().clone())
+        .icon(tray_icon)
         .icon_as_template(true)
         .menu(&menu)
         .show_menu_on_left_click(true)

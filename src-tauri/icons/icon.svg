@@ -1,0 +1,39 @@
+<!--
+  Shotly app icon — "Snap".
+
+  Drawn to the macOS icon grid rather than full bleed: the rounded square is
+  824x824 centred in a 1024 canvas, which is what makes it sit at the same
+  visual size as its neighbours in the dock. The art itself is authored on a
+  1024 grid and scaled down, so the corner radius lands on the standard ~185.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0.4" y2="1">
+      <stop offset="0" stop-color="#ff8348"/>
+      <stop offset="1" stop-color="#e0521f"/>
+    </linearGradient>
+    <!-- A hint of top light, so the square doesn't read as flat vinyl. -->
+    <linearGradient id="sheen" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.16"/>
+      <stop offset="0.5" stop-color="#ffffff" stop-opacity="0"/>
+    </linearGradient>
+    <filter id="drop" x="-25%" y="-25%" width="150%" height="150%">
+      <feDropShadow dx="0" dy="12" stdDeviation="16" flood-color="#20120a" flood-opacity="0.30"/>
+    </filter>
+  </defs>
+
+  <g filter="url(#drop)">
+    <g transform="translate(100,100) scale(0.8046)">
+      <rect width="1024" height="1024" rx="232" fill="url(#bg)"/>
+      <rect width="1024" height="1024" rx="232" fill="url(#sheen)"/>
+
+      <g fill="none" stroke="#141619" stroke-width="78" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M250 404 V304 a54 54 0 0 1 54-54 h100"/>
+        <path d="M620 250 h100 a54 54 0 0 1 54 54 v100"/>
+        <path d="M774 620 v100 a54 54 0 0 1-54 54 h-100"/>
+        <path d="M404 774 H304 a54 54 0 0 1-54-54 V620"/>
+      </g>
+      <circle cx="512" cy="512" r="62" fill="#141619"/>
+    </g>
+  </g>
+</svg>
