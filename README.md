@@ -96,10 +96,19 @@ Without notarization the app still runs, but Gatekeeper shows a scary
 "cannot be opened because the developer cannot be verified" warning, and users
 have to right-click → Open. Notarization removes that.
 
-The self-signed certificate below is **development scaffolding only**. It is not
-in `tauri.conf.json` — `npm run bundle` supplies it via `APPLE_SIGNING_IDENTITY`,
-and `npm run release` supplies the Developer ID one instead. Nothing about it
-ships.
+Until that certificate exists, `npm run release` falls back to the self-signed
+one below, and the published DMG carries the Gatekeeper warning. Setting
+`APPLE_SIGNING_IDENTITY` in the environment overrides the fallback:
+
+```bash
+APPLE_SIGNING_IDENTITY="Developer ID Application: Your Name (TEAMID)" npm run release
+```
+
+Note that **switching identities breaks Screen Recording for everyone already
+running Shotly**, because the app updates itself in place and macOS ties that
+grant to the signing certificate. It is worth doing once, deliberately, with a
+note in the release notes — see [docs/RELEASING.md](docs/RELEASING.md), which
+also covers the update manifest and the minisign key that signs it.
 
 ### Recreating the development signing certificate
 
@@ -123,6 +132,19 @@ security add-trusted-cert -r trustRoot -p codeSign -k ~/Library/Keychains/login.
 
 Changing the certificate changes the designated requirement, which invalidates
 the TCC grant — you would need to re-add the app in System Settings.
+
+### Updating
+
+Shotly checks for a newer release shortly after launch and every six hours
+after that, downloads and installs it in the background, and offers a relaunch
+when it is ready. The tray's **Check for Updates…** does the same on demand and
+reports the result either way. Payloads are verified against a minisign public
+key compiled into the app, so a compromised GitHub release cannot push code to
+anyone.
+
+Cutting a release is `npm run bump -- <version>`, commit, push, then
+`npm run publish`. The full contract — including what the publish script
+refuses to do and why — is in [docs/RELEASING.md](docs/RELEASING.md).
 
 ### Where captures are saved
 

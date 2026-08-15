@@ -1,6 +1,6 @@
 [package]
 name = "shotly"
-version = "0.1.0"
+version = "0.1.1"
 description = "Capture, annotate, ship."
 authors = ["Ty Omidi"]
 edition = "2021"
@@ -23,6 +23,8 @@ tauri-plugin-opener = "2"
 tauri-plugin-dialog = "2"
 tauri-plugin-fs = "2"
 tauri-plugin-clipboard-manager = "2"
+# Relaunching into a freshly installed update.
+tauri-plugin-process = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"
@@ -49,6 +51,7 @@ objc2-foundation = "0.3"
 
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
 tauri-plugin-global-shortcut = "2"
+tauri-plugin-updater = "2"
 
 # Optimised for speed rather than size: this profile only ever builds the
 # artefact people install, and image decode/encode is the app's hot path —

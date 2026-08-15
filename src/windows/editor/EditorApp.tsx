@@ -18,6 +18,7 @@ import {
   IconLayers,
   IconPen,
   IconRedo,
+  IconRefresh,
   IconSave,
   IconTrash,
   IconUndo,
@@ -26,6 +27,7 @@ import { useKeymap } from "@/lib/keys/useKeymap";
 import type { Command } from "@/lib/keys/types";
 import { renderToPng } from "@/lib/export";
 import * as ipc from "@/lib/ipc";
+import { useUpdates } from "@/lib/updater";
 import type { CaptureMode, CaptureResult } from "@/lib/types";
 import { useEditor } from "@/state/editorStore";
 import { Canvas } from "./Canvas";
@@ -35,6 +37,7 @@ import { Library } from "./Library";
 import { ShortcutSheet } from "./ShortcutSheet";
 import { Toolbar } from "./Toolbar";
 import { TopBar } from "./TopBar";
+import { UpdateNotice } from "./UpdateNotice";
 import { SWATCHES, TOOLS } from "./tools";
 import type { View } from "./view";
 
@@ -69,6 +72,7 @@ export function EditorApp() {
    */
   const openedFrom = useRef<string | null>(null);
   const libraryDir = useRef<string | null>(null);
+  const updates = useUpdates();
 
   useEffect(() => {
     void ipc.saveLibraryPath().then((p) => (libraryDir.current = p));
@@ -797,6 +801,14 @@ export function EditorApp() {
         run: () => showView(view === "editor" ? "library" : "editor"),
       },
       {
+        id: "app.checkUpdates",
+        title: "Check for updates",
+        group: "View",
+        icon: <IconRefresh />,
+        keywords: "update upgrade version new release install",
+        run: updates.check,
+      },
+      {
         id: "export.close",
         title: "Close",
         group: "Export",
@@ -820,6 +832,7 @@ export function EditorApp() {
     copyPicked,
     deleteCaptures,
     picked,
+    updates.check,
   ]);
 
   // Modals own the keyboard while they're up.
@@ -906,6 +919,8 @@ export function EditorApp() {
           )}
         </div>
       )}
+
+      <UpdateNotice status={updates.status} onCheck={updates.check} onDismiss={updates.dismiss} />
 
       {palette && <CommandPalette commands={commands} onClose={() => setPalette(false)} />}
       {sheet && <ShortcutSheet commands={commands} onClose={() => setSheet(false)} />}

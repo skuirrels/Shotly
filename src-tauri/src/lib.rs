@@ -3,6 +3,7 @@ mod capture;
 mod commands;
 mod highlight;
 mod platform;
+mod update;
 
 use capture::cli::ScreencaptureCli;
 use commands::{AppState, CaptureMode};
@@ -57,10 +58,12 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
-        .plugin(tauri_plugin_clipboard_manager::init());
+        .plugin(tauri_plugin_clipboard_manager::init())
+        .plugin(tauri_plugin_process::init());
 
     #[cfg(desktop)]
     {
+        builder = builder.plugin(tauri_plugin_updater::Builder::new().build());
         builder = builder.plugin(
             tauri_plugin_global_shortcut::Builder::new()
                 .with_handler(|app, shortcut, event| {
@@ -110,6 +113,8 @@ pub fn run() {
             commands::copy_png_to_clipboard,
             commands::copy_files_to_clipboard,
             commands::hide_editor,
+            update::check_for_updates,
+            update::pending_update,
             annotate::annotate_toggle,
             annotate::annotate_stop,
             annotate::annotate_ready,
@@ -132,6 +137,9 @@ pub fn run() {
             }
 
             build_tray(&handle)?;
+
+            #[cfg(desktop)]
+            update::schedule(&handle);
 
             // The editor is visible on launch so a first run explains itself
             // and can walk the user through the Screen Recording prompt.
@@ -162,11 +170,14 @@ fn build_tray(app: &tauri::AppHandle) -> tauri::Result<()> {
     let annotate =
         MenuItem::with_id(app, "annotate", "Annotate Screen", true, Some("Ctrl+Shift+A"))?;
     let stop = MenuItem::with_id(app, "stop-annotate", "Exit Annotation Mode", true, None::<&str>)?;
+    let updates = MenuItem::with_id(app, "update", "Check for Updates…", true, None::<&str>)?;
     let sep = PredefinedMenuItem::separator(app)?;
     let quit = MenuItem::with_id(app, "quit", "Quit Shotly", true, Some("Cmd+Q"))?;
 
-    let menu =
-        Menu::with_items(app, &[&region, &window, &screen, &sep, &annotate, &stop, &sep, &quit])?;
+    let menu = Menu::with_items(
+        app,
+        &[&region, &window, &screen, &sep, &annotate, &stop, &sep, &updates, &quit],
+    )?;
 
     // A dedicated template glyph rather than the app icon. The menu bar renders
     // a template from its alpha channel alone, so handing it the app icon — a
@@ -189,6 +200,7 @@ fn build_tray(app: &tauri::AppHandle) -> tauri::Result<()> {
                 }
             }
             "stop-annotate" => annotate::stop(app),
+            "update" => update::check_from_tray(app),
             "quit" => app.exit(0),
             _ => {}
         })

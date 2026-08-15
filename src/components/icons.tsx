@@ -241,6 +241,20 @@ export const IconChevronDown = (p: SVGProps<SVGSVGElement>) => (
   </Icon>
 );
 
+/** An arrow curling back on itself — "check again", not "undo". */
+export const IconRefresh = (p: SVGProps<SVGSVGElement>) => (
+  <Icon {...p}>
+    <path d="M13.2 7A5.3 5.3 0 1 0 12 11.1" />
+    <path d="M13.5 3.4V7H10" />
+  </Icon>
+);
+
+export const IconSparkle = (p: SVGProps<SVGSVGElement>) => (
+  <Icon {...p}>
+    <path d="M8 1.8 9.5 6 13.7 7.5 9.5 9 8 13.2 6.5 9 2.3 7.5 6.5 6z" />
+  </Icon>
+);
+
 export const IconShadow = (p: SVGProps<SVGSVGElement>) => (
   <Icon {...p}>
     <rect x="2.5" y="2.5" width="8" height="8" rx="1.5" />
