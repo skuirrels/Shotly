@@ -43,6 +43,12 @@ export interface OverlaySession {
 export interface CaptureResult {
   frame: Frame;
   id: number;
+  /**
+   * Serialised markup, when the opened file was saved by Shotly and still
+   * carries it. `frame.path` then points at the unannotated original — see
+   * `lib/markup` and `open_image`.
+   */
+  markup?: string;
 }
 
 export interface LibraryItem {

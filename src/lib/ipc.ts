@@ -33,9 +33,42 @@ export const readCaptureBytes = (path: string) =>
 export const savePng = (path: string, bytes: Uint8Array, scale?: number) =>
   invoke<void>("save_png", { path, bytes: Array.from(bytes), scale: scale ?? null });
 
+/**
+ * Save flattened pixels that Shotly can still take apart later.
+ *
+ * `source` is the unannotated capture's path — Rust reads it directly rather
+ * than having megabytes of original marshalled through the IPC bridge as JSON
+ * numbers. `doc` is the serialised markup; see `lib/markup`.
+ */
+export const saveEditablePng = (
+  path: string,
+  bytes: Uint8Array,
+  source: string,
+  doc: string,
+  scale?: number,
+) =>
+  invoke<void>("save_editable_png", {
+    path,
+    bytes: Array.from(bytes),
+    source,
+    doc,
+    scale: scale ?? null,
+  });
+
 /** Save into ~/Documents/Shotly without a dialog. Resolves to the final path. */
-export const saveToLibrary = (bytes: Uint8Array, stem: string, scale?: number) =>
-  invoke<string>("save_to_library", { bytes: Array.from(bytes), stem, scale: scale ?? null });
+export const saveToLibrary = (
+  bytes: Uint8Array,
+  stem: string,
+  scale?: number,
+  editable?: { source: string; doc: string },
+) =>
+  invoke<string>("save_to_library", {
+    bytes: Array.from(bytes),
+    stem,
+    scale: scale ?? null,
+    source: editable?.source ?? null,
+    doc: editable?.doc ?? null,
+  });
 
 export const saveLibraryPath = () => invoke<string>("save_library_path");
 

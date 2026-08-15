@@ -20,6 +20,12 @@ const GESTURES: { action: string; gesture: string }[] = [
   { action: "Edit text again", gesture: "Double-click" },
 ];
 
+/** Things worth saying that are neither a key nor a gesture. */
+const NOTES: string[] = [
+  "Saved captures stay editable — reopen one in Shotly and the markup is still movable.",
+  "Export (⌘E) writes a plain flattened PNG, about half the size, for sharing and pasting.",
+];
+
 /**
  * The full keymap, generated from the same command list that binds the keys —
  * so it can't fall out of date with what the app actually does.
@@ -83,6 +89,16 @@ export function ShortcutSheet({ commands, onClose }: { commands: Command[]; onCl
                 </div>
               ))}
             </dl>
+          </section>
+
+          <section className="sm:col-span-2">
+            <ul className="space-y-1 border-t border-white/8 pt-3">
+              {NOTES.map((note) => (
+                <li key={note} className="text-[11.5px] text-ink-4">
+                  {note}
+                </li>
+              ))}
+            </ul>
           </section>
         </div>
       </div>

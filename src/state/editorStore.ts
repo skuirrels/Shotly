@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { parse as parseMarkup } from "@/lib/markup";
 import {
   type Annotation,
   type CaptureResult,
@@ -80,6 +81,8 @@ interface EditorState {
 
   open: (result: CaptureResult, src: string) => void;
   setLibraryPath: (path: string) => void;
+  /** Called after a successful write, so ⌘W stops claiming there's unsaved work. */
+  markSaved: () => void;
   reset: () => void;
 
   setTool: (tool: ToolId) => void;
@@ -147,7 +150,12 @@ export const useEditor = create<EditorState>((set, get) => ({
   past: [],
   future: [],
 
-  open: (result, src) =>
+  open: (result, src) => {
+    // A capture saved by Shotly comes back with its markup intact. `frame.path`
+    // is the unannotated original in that case, so these shapes land on clean
+    // pixels rather than on a flattened copy of themselves.
+    const restored = result.markup ? parseMarkup(result.markup) : null;
+
     set({
       doc: {
         id: result.id,
@@ -155,12 +163,17 @@ export const useEditor = create<EditorState>((set, get) => ({
         path: result.frame.path,
         naturalWidth: result.frame.pixelWidth,
         naturalHeight: result.frame.pixelHeight,
-        crop: { x: 0, y: 0, width: result.frame.pixelWidth, height: result.frame.pixelHeight },
+        crop: restored?.crop ?? {
+          x: 0,
+          y: 0,
+          width: result.frame.pixelWidth,
+          height: result.frame.pixelHeight,
+        },
         scale: result.frame.scale,
       },
-      annotations: [],
+      annotations: restored?.annotations ?? [],
       selectedIds: [],
-      stepCounter: 1,
+      stepCounter: restored?.stepCounter ?? 1,
       pendingCrop: null,
       past: [],
       future: [],
@@ -169,10 +182,13 @@ export const useEditor = create<EditorState>((set, get) => ({
       // A fresh capture starts in select mode; the previous session's tool
       // choice is rarely what you want for a new image.
       tool: "select",
-    }),
+    });
+  },
 
   setLibraryPath: (libraryPath) =>
     set((s) => (s.doc ? { doc: { ...s.doc, libraryPath } } : {})),
+
+  markSaved: () => set({ dirty: false }),
 
   reset: () => set({ doc: null, annotations: [], selectedIds: [], past: [], future: [] }),
 

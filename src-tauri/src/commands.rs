@@ -3,6 +3,7 @@
 use crate::capture::cli::{self, ScreencaptureCli};
 
 use crate::capture::{CaptureBackend, Frame, Rect, WindowInfo};
+use crate::markup;
 use crate::platform;
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
@@ -62,6 +63,12 @@ pub struct CaptureResult {
     pub frame: Frame,
     /// Millisecond timestamp, used as the editor document id.
     pub id: u64,
+    /// Serialised annotations, when the opened file was saved by Shotly and
+    /// still carries them. `frame.path` then points at the *unannotated*
+    /// original, so the editor draws these over clean pixels instead of over a
+    /// copy of themselves.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub markup: Option<String>,
 }
 
 type CmdResult<T> = Result<T, String>;
@@ -212,7 +219,11 @@ pub fn capture_fullscreen(app: AppHandle, display_id: Option<u32>) -> CmdResult<
 }
 
 fn deliver(app: &AppHandle, frame: Frame) -> CmdResult<CaptureResult> {
-    let result = CaptureResult { frame, id: now_ms() };
+    deliver_with(app, frame, None)
+}
+
+fn deliver_with(app: &AppHandle, frame: Frame, markup: Option<String>) -> CmdResult<CaptureResult> {
+    let result = CaptureResult { frame, id: now_ms(), markup };
 
     let editor = app.get_webview_window("editor").ok_or("editor window missing")?;
     // We're showing the editor with the result, so the hide is settled.
@@ -252,14 +263,30 @@ pub fn open_image(app: AppHandle, path: String) -> CmdResult<CaptureResult> {
         .and_then(|e| e.to_str())
         .is_some_and(|e| e.eq_ignore_ascii_case("png"));
 
+    // A capture Shotly saved carries the pixels it had *before* the markup was
+    // drawn in. Editing must start from those: opening the flattened version
+    // and replaying the annotations over it would draw every shape twice.
+    let mut markup = None;
+
     let (width, height) = if is_png {
-        // Copy the bytes verbatim.
-        //
-        // Decoding and re-encoding cost 1.7s on a Retina capture — and 1.5s of
-        // that was the PNG encoder producing the pixels we already had. A copy
-        // is a few milliseconds, and it preserves the DPI tag into the scratch
-        // file as a bonus, where re-encoding silently dropped it.
-        std::fs::copy(source, &dest).map_err(|e| format!("could not read {}: {e}", name()))?;
+        let bytes = std::fs::read(source).map_err(|e| format!("could not read {}: {e}", name()))?;
+
+        match crate::markup::extract(&bytes) {
+            Some(found) => {
+                std::fs::write(&dest, &found.original)
+                    .map_err(|e| format!("could not read {}: {e}", name()))?;
+                markup = Some(found.doc);
+            }
+            // Copy the bytes verbatim.
+            //
+            // Decoding and re-encoding cost 1.7s on a Retina capture — and 1.5s
+            // of that was the PNG encoder producing the pixels we already had. A
+            // copy is a few milliseconds, and it preserves the DPI tag into the
+            // scratch file as a bonus, where re-encoding silently dropped it.
+            None => std::fs::write(&dest, &bytes)
+                .map_err(|e| format!("could not read {}: {e}", name()))?,
+        }
+
         image::image_dimensions(&dest).map_err(|e| {
             // Don't leave an unusable copy behind in the scratch directory.
             let _ = std::fs::remove_file(&dest);
@@ -294,7 +321,7 @@ pub fn open_image(app: AppHandle, path: String) -> CmdResult<CaptureResult> {
         scale,
     };
 
-    deliver(&app, frame)
+    deliver_with(&app, frame, markup)
 }
 
 // ----------------------------------------------------------------- window list
@@ -334,6 +361,40 @@ pub fn save_png(path: String, bytes: Vec<u8>, scale: Option<f64>) -> CmdResult<(
     std::fs::write(&path, &bytes).map_err(|e| e.to_string())
 }
 
+/// Write a flattened PNG that Shotly can still take apart later.
+///
+/// `source` is the unannotated capture in the scratch directory. It is read
+/// here rather than passed in because the IPC bridge serialises byte arrays as
+/// JSON numbers — shipping a few megabytes of original through it would cost
+/// far more than reading the file Rust wrote in the first place.
+///
+/// Falls back to a plain save when the original can't be read: a capture that
+/// saves without its markup is a limitation, one that fails to save is a lost
+/// afternoon.
+#[tauri::command]
+pub fn save_editable_png(
+    path: String,
+    bytes: Vec<u8>,
+    source: String,
+    doc: String,
+    scale: Option<f64>,
+) -> CmdResult<()> {
+    let flattened = match scale {
+        Some(s) => cli::with_dpi(&bytes, s),
+        None => bytes,
+    };
+
+    let out = match std::fs::read(&source) {
+        Ok(original) => markup::embed(&flattened, &original, &doc),
+        Err(e) => {
+            eprintln!("[shotly] saving {path} without re-editable markup: {e}");
+            flattened
+        }
+    };
+
+    std::fs::write(&path, &out).map_err(|e| e.to_string())
+}
+
 /// The folder every capture lands in: `~/Documents/Shotly`.
 pub fn library_dir(app: &AppHandle) -> CmdResult<std::path::PathBuf> {
     use tauri::Manager;
@@ -350,16 +411,33 @@ pub fn save_library_path(app: AppHandle) -> CmdResult<String> {
 ///
 /// Returns the final path, which may not match `stem` — a name already in use
 /// gets a numeric suffix rather than silently overwriting an earlier capture.
+///
+/// `source` and `doc` carry the re-editing payload, exactly as in
+/// `save_editable_png`. Both are absent for the copy taken the moment a capture
+/// arrives, which has no annotations to preserve yet.
 #[tauri::command]
 pub fn save_to_library(
     app: AppHandle,
     bytes: Vec<u8>,
     stem: String,
     scale: Option<f64>,
+    source: Option<String>,
+    doc: Option<String>,
 ) -> CmdResult<String> {
     let bytes = match scale {
         Some(s) => cli::with_dpi(&bytes, s),
         None => bytes,
+    };
+
+    let bytes = match (source, doc) {
+        (Some(source), Some(doc)) => match std::fs::read(&source) {
+            Ok(original) => markup::embed(&bytes, &original, &doc),
+            Err(e) => {
+                eprintln!("[shotly] saving without re-editable markup: {e}");
+                bytes
+            }
+        },
+        _ => bytes,
     };
     let dir = library_dir(&app)?;
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
@@ -556,7 +634,11 @@ const IMAGE_BUDGET: usize = 96 * 1024 * 1024;
 fn png_bytes(path: &std::path::Path) -> CmdResult<Vec<u8>> {
     let is_png = path.extension().and_then(|e| e.to_str()).is_some_and(|e| e.eq_ignore_ascii_case("png"));
     if is_png {
-        return std::fs::read(path).map_err(|e| e.to_string());
+        // Flat pixels only. The file keeps its re-editing payload; whatever the
+        // user pastes into has no use for a second copy of the image it cannot
+        // read, and the paste is half the size without it.
+        let bytes = std::fs::read(path).map_err(|e| e.to_string())?;
+        return Ok(markup::strip(&bytes));
     }
 
     // A JPEG on the pasteboard tagged as PNG would simply fail to paste, so

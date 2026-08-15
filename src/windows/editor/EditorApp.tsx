@@ -27,6 +27,7 @@ import { useKeymap } from "@/lib/keys/useKeymap";
 import type { Command } from "@/lib/keys/types";
 import { renderToPng } from "@/lib/export";
 import * as ipc from "@/lib/ipc";
+import { serialize as serializeMarkup } from "@/lib/markup";
 import { useUpdates } from "@/lib/updater";
 import type { CaptureMode, CaptureResult } from "@/lib/types";
 import { useEditor } from "@/state/editorStore";
@@ -380,15 +381,29 @@ export function EditorApp() {
       const state = useEditor.getState();
       const existing = state.doc?.libraryPath;
       const scale = state.doc?.scale;
+
+      // Saved captures stay editable: the file holds flattened pixels for
+      // everyone else, plus the original and these shapes for Shotly. ⌘E
+      // writes the flat version when a plain PNG is what's wanted.
+      const editable = {
+        source: state.doc!.path,
+        doc: serializeMarkup({
+          crop: state.doc!.crop,
+          stepCounter: state.stepCounter,
+          annotations: state.annotations,
+        }),
+      };
+
       let path: string;
       if (existing) {
-        await ipc.savePng(existing, png, scale);
+        await ipc.saveEditablePng(existing, png, editable.source, editable.doc, scale);
         path = existing;
       } else {
-        path = await ipc.saveToLibrary(png, defaultStem(), scale);
+        path = await ipc.saveToLibrary(png, defaultStem(), scale, editable);
         state.setLibraryPath(path);
       }
 
+      state.markSaved();
       setSaved(path);
       setLibraryKey((k) => k + 1);
       // Longer than a normal toast: it carries a button worth clicking.
@@ -400,6 +415,13 @@ export function EditorApp() {
     }
   }, [busy, exportPng, notify]);
 
+  /**
+   * Save As — the same editable file, somewhere else.
+   *
+   * Deliberately not the flat one: "save" should mean the same thing wherever
+   * it lands, or a capture filed away in a project folder would quietly be the
+   * one copy you can no longer edit. Export is the verb for flattening.
+   */
   const saveAs = useCallback(async () => {
     if (busy) return;
     if (!requireDoc()) return;
@@ -414,13 +436,57 @@ export function EditorApp() {
     setBusy("save");
     try {
       const png = await exportPng();
-      if (png) {
-        await ipc.savePng(path, png, useEditor.getState().doc?.scale);
-        setSaved(path);
-        notify("Saved");
-      }
+      if (!png) return;
+      const state = useEditor.getState();
+      await ipc.saveEditablePng(
+        path,
+        png,
+        state.doc!.path,
+        serializeMarkup({
+          crop: state.doc!.crop,
+          stepCounter: state.stepCounter,
+          annotations: state.annotations,
+        }),
+        state.doc?.scale,
+      );
+      state.markSaved();
+      setSaved(path);
+      notify("Saved");
     } catch (e) {
       notify(`Save failed: ${e}`, "error");
+    } finally {
+      setBusy(null);
+    }
+  }, [busy, exportPng, notify]);
+
+  /**
+   * Export — flattened pixels and nothing else.
+   *
+   * The saved-capture format carries the original image alongside the visible
+   * one so the markup stays movable, which roughly doubles the file. That is a
+   * fine trade for your own library and a poor one for something you are about
+   * to attach to an email, so this writes the plain PNG.
+   */
+  const exportFlat = useCallback(async () => {
+    if (busy) return;
+    if (!requireDoc()) return;
+
+    const path = await saveDialog({
+      title: "Export flattened PNG",
+      defaultPath: `${defaultStem()}.png`,
+      filters: [{ name: "PNG image", extensions: ["png"] }],
+    });
+    if (!path) return;
+
+    setBusy("save");
+    try {
+      const png = await exportPng();
+      if (!png) return;
+      await ipc.savePng(path, png, useEditor.getState().doc?.scale);
+      setSaved(path);
+      notify(`Exported ${path.split("/").pop()}`, "ok", 5000);
+    } catch (e) {
+      notify(`Export failed: ${e}`, "error");
     } finally {
       setBusy(null);
     }
@@ -787,8 +853,17 @@ export function EditorApp() {
         group: "Export",
         shortcut: "Mod+Shift+S",
         icon: <IconSave />,
-        keywords: "export png elsewhere location",
+        keywords: "export png elsewhere location editable",
         run: () => void saveAs(),
+      },
+      {
+        id: "export.flatten",
+        title: "Export flattened PNG…",
+        group: "Export",
+        shortcut: "Mod+E",
+        icon: <IconImage />,
+        keywords: "flatten share paste attach plain smaller no markup",
+        run: () => void exportFlat(),
       },
       {
         id: "export.reveal",
@@ -833,6 +908,7 @@ export function EditorApp() {
     copy,
     save,
     saveAs,
+    exportFlat,
     saved,
     startCapture,
     openFile,

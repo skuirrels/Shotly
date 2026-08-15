@@ -2,6 +2,7 @@ mod annotate;
 mod capture;
 mod commands;
 mod highlight;
+mod markup;
 mod platform;
 mod update;
 
@@ -104,6 +105,7 @@ pub fn run() {
             commands::open_image,
             commands::read_capture_bytes,
             commands::save_png,
+            commands::save_editable_png,
             commands::save_to_library,
             commands::save_library_path,
             commands::list_library,

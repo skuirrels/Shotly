@@ -85,7 +85,8 @@ fn png_scale(path: &std::path::Path) -> Option<f64> {
     None
 }
 
-fn crc32(data: &[u8]) -> u32 {
+/// PNG chunk checksum. Shared with `markup`, which writes a chunk of its own.
+pub fn crc32(data: &[u8]) -> u32 {
     let mut crc = 0xFFFF_FFFFu32;
     for &byte in data {
         crc ^= byte as u32;
