@@ -46,5 +46,9 @@ edit("package.json", /("version":\s*")[^"]*(")/);
 edit("src-tauri/tauri.conf.json", /("version":\s*")[^"]*(")/);
 // Anchored on [package] so a dependency's version is never the one that moves.
 edit("src-tauri/Cargo.toml", /(\[package\][^[]*?\nversion = ")[^"]*(")/);
+// Cargo would fix this itself on the next build — but that build happens
+// inside `npm run publish`, long after the version commit, leaving the lock
+// file dirty behind the release it belongs to.
+edit("src-tauri/Cargo.lock", /(name = "shotly"\nversion = ")[^"]*(")/);
 
 console.log(`\nShotly is now ${version}. Next: npm run publish`);
