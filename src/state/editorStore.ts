@@ -9,7 +9,9 @@ import {
   boundsOf,
   isBox,
   isLine,
+  isPen,
   isStep,
+  movedBy,
 } from "@/lib/types";
 
 export interface Doc {
@@ -49,6 +51,7 @@ const DEFAULT_STYLE: Style = {
   fontSize: 24,
   fillOpacity: 0,
   blurRadius: 12,
+  dim: 0.55,
   shadow: true,
 };
 
@@ -67,6 +70,8 @@ interface EditorState {
   annotations: Annotation[];
   selectedIds: string[];
   tool: ToolId;
+  /** Where the picker hands control back to once a colour has been taken. */
+  pickReturn: ToolId;
   style: Style;
   stepCounter: number;
   /** Set while a crop gesture is pending confirmation. */
@@ -141,6 +146,7 @@ export const useEditor = create<EditorState>((set, get) => ({
   annotations: [],
   selectedIds: [],
   tool: "select",
+  pickReturn: "select",
   style: DEFAULT_STYLE,
   stepCounter: 1,
   pendingCrop: null,
@@ -195,6 +201,10 @@ export const useEditor = create<EditorState>((set, get) => ({
   setTool: (tool) =>
     set((s) => ({
       tool,
+      // The picker is a detour, not a destination: remember what was in hand so
+      // one pick puts it straight back. Picking a colour is nearly always in
+      // service of the next thing you were about to draw.
+      pickReturn: tool === "pick" && s.tool !== "pick" ? s.tool : s.pickReturn,
       // Switching to a drawing tool drops the selection, so the inspector shows
       // the new tool's defaults rather than the old shape's properties.
       selectedIds: tool === "select" ? s.selectedIds : [],
@@ -297,20 +307,10 @@ export const useEditor = create<EditorState>((set, get) => ({
 
       // Offset the copies so they're visibly distinct from the originals.
       const OFFSET = 16;
-      const copies = chosen.map((a) => {
-        const id = crypto.randomUUID();
-        if (isBox(a)) return { ...a, id, x: a.x + OFFSET, y: a.y + OFFSET };
-        if (isLine(a))
-          return {
-            ...a,
-            id,
-            x1: a.x1 + OFFSET,
-            y1: a.y1 + OFFSET,
-            x2: a.x2 + OFFSET,
-            y2: a.y2 + OFFSET,
-          };
-        return { ...a, id, x: a.x + OFFSET, y: a.y + OFFSET };
-      });
+      const copies = chosen.map((a) => ({
+        ...movedBy(a, OFFSET, OFFSET),
+        id: crypto.randomUUID(),
+      }));
 
       return {
         past: [...s.past, snapshotOf(s)].slice(-HISTORY_LIMIT),
@@ -348,12 +348,9 @@ export const useEditor = create<EditorState>((set, get) => ({
       if (s.selectedIds.length === 0) return {};
       return {
         dirty: true,
-        annotations: s.annotations.map((a) => {
-          if (!s.selectedIds.includes(a.id)) return a;
-          if (isBox(a)) return { ...a, x: a.x + dx, y: a.y + dy };
-          if (isLine(a)) return { ...a, x1: a.x1 + dx, y1: a.y1 + dy, x2: a.x2 + dx, y2: a.y2 + dy };
-          return { ...a, x: a.x + dx, y: a.y + dy };
-        }),
+        annotations: s.annotations.map((a) =>
+          s.selectedIds.includes(a.id) ? movedBy(a, dx, dy) : a,
+        ),
       };
     }),
 
@@ -409,18 +406,7 @@ export const useEditor = create<EditorState>((set, get) => ({
             b.y < rect.y + rect.height
           );
         })
-        .map((a) => {
-          if (isBox(a)) return { ...a, x: a.x - rect.x, y: a.y - rect.y };
-          if (isLine(a))
-            return {
-              ...a,
-              x1: a.x1 - rect.x,
-              y1: a.y1 - rect.y,
-              x2: a.x2 - rect.x,
-              y2: a.y2 - rect.y,
-            };
-          return { ...a, x: a.x - rect.x, y: a.y - rect.y };
-        });
+        .map((a) => movedBy(a, -rect.x, -rect.y));
 
       // `rect` arrives in document space, so compose it onto the existing crop
       // to get back to source-image coordinates.
@@ -446,4 +432,4 @@ export const useEditor = create<EditorState>((set, get) => ({
   nextStepLabel: () => get().stepCounter,
 }));
 
-export { DEFAULT_STYLE, isBox, isLine, isStep, boundsOf };
+export { DEFAULT_STYLE, isBox, isLine, isPen, isStep, boundsOf, movedBy };

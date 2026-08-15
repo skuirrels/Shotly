@@ -1,3 +1,8 @@
+export interface Point {
+  x: number;
+  y: number;
+}
+
 /** Mirrors the Rust `Rect` — global point space, top-left origin. */
 export interface Rect {
   x: number;
@@ -68,14 +73,17 @@ export type ToolId =
   | "rect"
   | "ellipse"
   | "line"
+  | "pen"
   | "text"
   | "step"
   | "blur"
   | "highlight"
+  | "spotlight"
+  | "pick"
   | "crop";
 
 /** Tools that produce a box-shaped annotation by dragging a rectangle. */
-export type BoxKind = "rect" | "ellipse" | "blur" | "highlight" | "text";
+export type BoxKind = "rect" | "ellipse" | "blur" | "highlight" | "spotlight" | "text";
 /** Tools defined by two endpoints rather than a bounding box. */
 export type LineKind = "arrow" | "line";
 
@@ -87,6 +95,8 @@ export interface Style {
   fillOpacity: number;
   /** Blur/pixelate strength, in image pixels. */
   blurRadius: number;
+  /** How far the spotlight darkens everything outside it, 0–1. */
+  dim: number;
   shadow: boolean;
 }
 
@@ -123,11 +133,23 @@ export interface StepAnnotation extends AnnotationBase {
   label: number;
 }
 
-export type Annotation = BoxAnnotation | LineAnnotation | StepAnnotation;
+/**
+ * A freehand stroke, as a list of sampled points.
+ *
+ * No smoothing or curve fitting: the samples *are* the drawing, which is what
+ * makes moving it a translation and resizing it a scale, with no control points
+ * to keep consistent.
+ */
+export interface PenAnnotation extends AnnotationBase {
+  kind: "pen";
+  points: Point[];
+}
+
+export type Annotation = BoxAnnotation | LineAnnotation | StepAnnotation | PenAnnotation;
 
 export function isBox(a: Annotation): a is BoxAnnotation {
   return a.kind === "rect" || a.kind === "ellipse" || a.kind === "blur" ||
-    a.kind === "highlight" || a.kind === "text";
+    a.kind === "highlight" || a.kind === "spotlight" || a.kind === "text";
 }
 
 export function isLine(a: Annotation): a is LineAnnotation {
@@ -136,6 +158,10 @@ export function isLine(a: Annotation): a is LineAnnotation {
 
 export function isStep(a: Annotation): a is StepAnnotation {
   return a.kind === "step";
+}
+
+export function isPen(a: Annotation): a is PenAnnotation {
+  return a.kind === "pen";
 }
 
 /** Axis-aligned bounds of any annotation, used for selection and handles. */
@@ -156,10 +182,45 @@ export function boundsOf(a: Annotation): Rect {
       height: Math.abs(a.y2 - a.y1),
     };
   }
+  if (isPen(a)) {
+    // Padded by half the stroke width: a perfectly horizontal scribble has no
+    // height as a set of points, and a selection box drawn through the middle
+    // of it would be invisible and impossible to grab.
+    const pad = a.style.strokeWidth / 2;
+    const xs = a.points.map((p) => p.x);
+    const ys = a.points.map((p) => p.y);
+    const minX = Math.min(...xs) - pad;
+    const minY = Math.min(...ys) - pad;
+    return {
+      x: minX,
+      y: minY,
+      width: Math.max(...xs) + pad - minX,
+      height: Math.max(...ys) + pad - minY,
+    };
+  }
   return {
     x: a.x - a.radius,
     y: a.y - a.radius,
     width: a.radius * 2,
     height: a.radius * 2,
   };
+}
+
+/**
+ * Translate any annotation.
+ *
+ * One place rather than four: nudging, dragging, duplicating and cropping all
+ * move shapes, and every shape family has its own idea of what a position is.
+ * A new family added without touching this function would be missed by all of
+ * them at once.
+ */
+export function movedBy(a: Annotation, dx: number, dy: number): Annotation {
+  if (isBox(a)) return { ...a, x: a.x + dx, y: a.y + dy };
+  if (isLine(a)) {
+    return { ...a, x1: a.x1 + dx, y1: a.y1 + dy, x2: a.x2 + dx, y2: a.y2 + dy };
+  }
+  if (isPen(a)) {
+    return { ...a, points: a.points.map((p) => ({ x: p.x + dx, y: p.y + dy })) };
+  }
+  return { ...a, x: a.x + dx, y: a.y + dy };
 }

@@ -93,6 +93,22 @@ export function Toolbar() {
           />
         )}
 
+        {controls.dim && (
+          <SizeControl
+            label="Dim"
+            // Stored 0–1, shown as a percentage: "55" is a far more useful
+            // thing to read off a slider than "0.55".
+            value={Math.round(style.dim * 100)}
+            presets={[35, 55, 75, 90]}
+            min={10}
+            max={95}
+            onChange={(pct) => setStyle({ dim: pct / 100 })}
+            render={() => (
+              <span className="size-3.5 rounded-[4px] border border-current bg-current/45" />
+            )}
+          />
+        )}
+
         {controls.fill && (
           <Tooltip label={style.fillOpacity > 0 ? "Remove fill" : "Fill shape"} side="top">
             <button

@@ -16,7 +16,15 @@ export interface MarkupDoc {
   annotations: Annotation[];
 }
 
-const VERSION = 1;
+/**
+ * 2 added the freehand and spotlight shapes.
+ *
+ * Bumping rather than quietly extending v1 is what keeps the promise below
+ * honest: a build that predates these shapes sees a version it doesn't know
+ * and opens the capture flat, instead of drawing a document with pieces of it
+ * silently missing.
+ */
+const VERSION = 2;
 
 export function serialize(doc: Omit<MarkupDoc, "version">): string {
   return JSON.stringify({ version: VERSION, ...doc });
@@ -42,10 +50,12 @@ export function parse(json: string): MarkupDoc | null {
   if (typeof raw !== "object" || raw === null) return null;
   const doc = raw as Partial<MarkupDoc>;
 
-  // A newer major version may mean shapes this build cannot draw. Opening flat
-  // is the honest response; silently dropping the ones it doesn't understand
-  // would look like data loss.
-  if (doc.version !== VERSION) return null;
+  // A newer version may mean shapes this build cannot draw. Opening flat is
+  // the honest response; silently dropping the ones it doesn't understand
+  // would look like data loss. Older ones are always readable — every version
+  // so far has only added shapes, so nothing in an old payload needs
+  // translating to be understood by a new build.
+  if (typeof doc.version !== "number" || doc.version > VERSION) return null;
   if (!Array.isArray(doc.annotations)) return null;
   if (!isRect(doc.crop)) return null;
 

@@ -84,6 +84,35 @@ export const IconHighlight = (p: SVGProps<SVGSVGElement>) => (
   </Icon>
 );
 
+/** A darkened field with a clear rectangle punched out of the middle. */
+export const IconSpotlight = (p: SVGProps<SVGSVGElement>) => (
+  <Icon {...p}>
+    <path
+      d="M1.5 1.5h13v13h-13z M5 5h6v6h-6z"
+      fill="currentColor"
+      fillRule="evenodd"
+      fillOpacity="0.35"
+      stroke="none"
+    />
+    <rect x="5" y="5" width="6" height="6" rx="0.8" />
+  </Icon>
+);
+
+/**
+ * A pipette: round bulb, narrow neck, pointed tip.
+ *
+ * The bulb is filled and circular on purpose. The palette already holds a pen
+ * and a highlighter, both of them slim diagonal wedges, and a third one would
+ * be indistinguishable at 16px — the round head is the whole silhouette.
+ */
+export const IconEyedropper = (p: SVGProps<SVGSVGElement>) => (
+  <Icon {...p}>
+    <circle cx="11.6" cy="4.4" r="2.6" fill="currentColor" stroke="none" />
+    <path d="M10.2 6.6 4.4 12.4l-2 .6.6-2 5.8-5.8" />
+    <path d="m8.3 6.3 1.4 1.4" />
+  </Icon>
+);
+
 export const IconCrop = (p: SVGProps<SVGSVGElement>) => (
   <Icon {...p}>
     <path d="M4.5 1.5v10h10" />

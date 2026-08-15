@@ -39,7 +39,7 @@ import { ShortcutSheet } from "./ShortcutSheet";
 import { Toolbar } from "./Toolbar";
 import { TopBar } from "./TopBar";
 import { UpdateNotice } from "./UpdateNotice";
-import { SWATCHES, TOOLS } from "./tools";
+import { SWATCHES, TOOLS, styleControlsFor } from "./tools";
 import type { View } from "./view";
 
 /** Consecutive nudges within this window collapse into one undo step. */
@@ -499,6 +499,34 @@ export function EditorApp() {
     const hasSelection = () => s().selectedIds.length > 0;
     const hasDoc = () => s().doc !== null;
 
+    /**
+     * `[` and `]` adjust whichever size the tool in hand actually has.
+     *
+     * Every size popover has always advertised these keys, but they only ever
+     * moved the stroke width — so on the text or blur tool they did nothing at
+     * all. Reading the same table the toolbar builds itself from means the
+     * keys reach whichever control is on screen.
+     */
+    const stepSize = (delta: number) => {
+      const st = s();
+      const kind =
+        st.selectedIds.length > 0
+          ? st.annotations.find((a) => a.id === st.selectedIds[0])?.kind
+          : undefined;
+      const controls = styleControlsFor(kind ?? st.tool);
+      const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
+
+      if (controls.font) {
+        st.setStyle({ fontSize: clamp(st.style.fontSize + delta * 2, 10, 120) });
+      } else if (controls.blur) {
+        st.setStyle({ blurRadius: clamp(st.style.blurRadius + delta * 2, 2, 60) });
+      } else if (controls.dim) {
+        st.setStyle({ dim: clamp(st.style.dim + delta * 0.05, 0.1, 0.95) });
+      } else {
+        st.setStyle({ strokeWidth: clamp(st.style.strokeWidth + delta, 1, 40) });
+      }
+    };
+
     const nudge = (dx: number, dy: number) => {
       const now = Date.now();
       if (now - lastNudge.current > NUDGE_COALESCE_MS) s().snapshot();
@@ -648,20 +676,22 @@ export function EditorApp() {
 
       // ------------------------------------------------------------ style
       {
-        id: "style.thinner",
-        title: "Thinner stroke",
+        id: "style.smaller",
+        title: "Smaller",
         group: "Style",
         shortcut: "[",
+        keywords: "thinner stroke font size blur dim",
         enabled: hasDoc,
-        run: () => s().setStyle({ strokeWidth: Math.max(1, s().style.strokeWidth - 1) }),
+        run: () => stepSize(-1),
       },
       {
-        id: "style.thicker",
-        title: "Thicker stroke",
+        id: "style.larger",
+        title: "Larger",
         group: "Style",
         shortcut: "]",
+        keywords: "thicker stroke font size blur dim",
         enabled: hasDoc,
-        run: () => s().setStyle({ strokeWidth: Math.min(40, s().style.strokeWidth + 1) }),
+        run: () => stepSize(1),
       },
       {
         id: "style.fill",
@@ -945,7 +975,7 @@ export function EditorApp() {
 
       <main className="relative flex flex-1 overflow-hidden">
         {activeView === "editor" ? (
-          <Canvas />
+          <Canvas onNotify={notify} />
         ) : (
           // Clicking anywhere that isn't a capture clears the selection, the
           // way it does in Finder. On the whole pane rather than the grid, so

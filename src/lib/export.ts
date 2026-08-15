@@ -7,7 +7,7 @@ import {
   stepFontSize,
   TEXT_PADDING,
 } from "./shapes";
-import { type Annotation, boundsOf, isBox, isLine, isStep } from "./types";
+import { type Annotation, boundsOf, isBox, isLine, isPen, isStep } from "./types";
 import type { Doc } from "@/state/editorStore";
 
 /**
@@ -107,6 +107,24 @@ function drawAnnotation(
     return;
   }
 
+  if (isPen(a)) {
+    if (a.points.length === 0) return;
+    withShadow(ctx, a.style.shadow, () => {
+      ctx.beginPath();
+      ctx.moveTo(a.points[0].x, a.points[0].y);
+      // A single sample still draws: with a round cap, a zero-length segment is
+      // the dot a tap should leave behind.
+      if (a.points.length === 1) ctx.lineTo(a.points[0].x, a.points[0].y);
+      for (const p of a.points.slice(1)) ctx.lineTo(p.x, p.y);
+      ctx.strokeStyle = color;
+      ctx.lineWidth = strokeWidth;
+      ctx.lineCap = "round";
+      ctx.lineJoin = "round";
+      ctx.stroke();
+    });
+    return;
+  }
+
   if (isStep(a)) {
     withShadow(ctx, a.style.shadow, () => {
       ctx.beginPath();
@@ -199,6 +217,19 @@ function drawAnnotation(
       ctx.globalAlpha = 0.34;
       ctx.fillStyle = color;
       ctx.fillRect(b.x, b.y, b.width, b.height);
+      ctx.restore();
+      break;
+
+    case "spotlight":
+      ctx.save();
+      ctx.beginPath();
+      // Outer subpath covers the capture, inner one punches out the lit
+      // region; even-odd is what makes the second a hole rather than a
+      // second layer of darkness. Mirrors the SVG in `AnnotationLayer`.
+      ctx.rect(0, 0, doc.crop.width, doc.crop.height);
+      ctx.rect(b.x, b.y, b.width, b.height);
+      ctx.fillStyle = `rgba(0,0,0,${a.style.dim ?? 0.55})`;
+      ctx.fill("evenodd");
       ctx.restore();
       break;
 

@@ -1,4 +1,4 @@
-import type { LineAnnotation, StepAnnotation, Style } from "./types";
+import type { LineAnnotation, Point, StepAnnotation, Style } from "./types";
 
 /**
  * Geometry shared by the SVG renderer (screen) and the Canvas2D renderer
@@ -9,10 +9,7 @@ import type { LineAnnotation, StepAnnotation, Style } from "./types";
 export const FONT_STACK =
   '-apple-system, BlinkMacSystemFont, "SF Pro Text", "Inter", system-ui, sans-serif';
 
-export interface Point {
-  x: number;
-  y: number;
-}
+export type { Point };
 
 /**
  * Outline of a tapered arrow, tail to head.
@@ -58,6 +55,30 @@ export function polygonToPath(points: Point[]): string {
   if (points.length === 0) return "";
   return `M ${points.map((p) => `${p.x.toFixed(2)} ${p.y.toFixed(2)}`).join(" L ")} Z`;
 }
+
+// -------------------------------------------------------------- freehand
+
+/**
+ * An open polyline through every sample, for the SVG renderer.
+ *
+ * A single point still emits a path, as a zero-length segment: with a round
+ * cap that draws the dot you'd expect from a tap, where an empty `d` would
+ * draw nothing and make the click look ignored.
+ */
+export function freehandPath(points: Point[]): string {
+  if (points.length === 0) return "";
+  const [first, ...rest] = points;
+  const head = `M ${first.x.toFixed(2)} ${first.y.toFixed(2)}`;
+  if (rest.length === 0) return `${head} L ${first.x.toFixed(2)} ${first.y.toFixed(2)}`;
+  return `${head} ${rest.map((p) => `L ${p.x.toFixed(2)} ${p.y.toFixed(2)}`).join(" ")}`;
+}
+
+/**
+ * How far apart two samples must be before the second is kept, in document
+ * pixels. Pointer events arrive far faster than the hand moves, and every
+ * duplicate point is one more coordinate pair inside the saved PNG.
+ */
+export const FREEHAND_MIN_STEP = 1.4;
 
 // ------------------------------------------------------------------- text
 

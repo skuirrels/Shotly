@@ -993,6 +993,7 @@ function StrokeShape({ stroke, hitArea = false }: { stroke: Stroke; hitArea?: bo
               fontSize: 16,
               fillOpacity: 0,
               blurRadius: 0,
+              dim: 0,
               shadow: false,
             },
           }),

@@ -1,21 +1,21 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
-import { measureText, stepRadius } from "@/lib/shapes";
+import { FREEHAND_MIN_STEP, measureText, stepRadius } from "@/lib/shapes";
+import { forgetPixels, preloadPixels, sampleColor } from "@/lib/pick";
+import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import {
   type Annotation,
   type BoxKind,
+  type Point,
   type Rect,
   boundsOf,
   isBox,
   isLine,
+  isPen,
   isStep,
+  movedBy,
 } from "@/lib/types";
 import { useEditor } from "@/state/editorStore";
 import { AnnotationLayer, type HandleId } from "./AnnotationLayer";
-
-interface Point {
-  x: number;
-  y: number;
-}
 
 type Drag =
   | { kind: "create"; id: string; origin: Point }
@@ -23,10 +23,10 @@ type Drag =
   | { kind: "resize"; id: string; handle: HandleId; snapshot: Annotation }
   | { kind: "crop"; origin: Point };
 
-const BOX_TOOLS: BoxKind[] = ["rect", "ellipse", "blur", "highlight"];
+const BOX_TOOLS: BoxKind[] = ["rect", "ellipse", "blur", "highlight", "spotlight"];
 const PAD = 48;
 
-export function Canvas() {
+export function Canvas({ onNotify }: { onNotify?: (text: string) => void }) {
   const doc = useEditor((s) => s.doc);
   const annotations = useEditor((s) => s.annotations);
   const selectedIds = useEditor((s) => s.selectedIds);
@@ -44,6 +44,10 @@ export function Canvas() {
   const [editingId, setEditingId] = useState<string | null>(null);
   /** Alt turns a press on a shape into a draw-through — see `onShapePointerDown`. */
   const [altDown, setAltDown] = useState(false);
+  /** The eyedropper's live readout: what is under the cursor right now. */
+  const [swatch, setSwatch] = useState<{ x: number; y: number; hex: string } | null>(null);
+  /** Last pointer position in document space, for sampling without a move. */
+  const pointer = useRef<Point | null>(null);
 
   const zoom = fitToWindow ? fitZoom : zoomSetting;
 
@@ -87,6 +91,72 @@ export function Canvas() {
       window.removeEventListener("blur", clear);
     };
   }, []);
+
+  // --------------------------------------------------------------- picking
+
+  // Decode up front, while the user is still moving the cursor towards what
+  // they want: the readout has to keep up with the pointer, so the first
+  // sample can't be the one that waits for the file to be read.
+  //
+  // Sampling once it lands matters as much as starting it early. Arming the
+  // picker over the thing you already wanted is the natural way to use it, and
+  // without this the readout stays blank until the pointer happens to twitch.
+  useEffect(() => {
+    if (tool !== "pick" || !doc) {
+      setSwatch(null);
+      return;
+    }
+    let live = true;
+    void preloadPixels(doc.path)
+      .then(() => {
+        const p = pointer.current;
+        if (!live || !p) return;
+        const hex = sampleColor(doc.path, doc.crop.x + p.x, doc.crop.y + p.y);
+        if (hex) setSwatch({ ...p, hex });
+      })
+      .catch(() => {});
+    return () => {
+      live = false;
+    };
+  }, [tool, doc]);
+
+  // Hand the decoded copy back when the document changes or the editor closes.
+  // Keyed on the path alone so it survives every other change to the document —
+  // a crop or a zoom must not throw away megabytes and re-read the file.
+  useEffect(() => () => forgetPixels(), [doc?.path]);
+
+  /**
+   * Take the colour under the cursor.
+   *
+   * The hex goes to the clipboard as well as to the ink: the reason to pick a
+   * colour off a screenshot is usually to paste it into a stylesheet, not only
+   * to draw with it.
+   */
+  const pickAt = useCallback(
+    async (p: Point) => {
+      if (!doc) return;
+      const at = () => sampleColor(doc.path, doc.crop.x + p.x, doc.crop.y + p.y);
+
+      // A click can beat the decode: press the shortcut and click straight
+      // through, and the pixels aren't there yet. Waiting is much better than
+      // a click that silently does nothing.
+      let hex = at();
+      if (!hex) {
+        await preloadPixels(doc.path).catch(() => {});
+        hex = at();
+      }
+      if (!hex) return;
+
+      const store = useEditor.getState();
+      store.setStyle({ color: hex });
+      store.setTool(store.pickReturn);
+      setSwatch(null);
+      void writeText(hex)
+        .then(() => onNotify?.(`Picked ${hex} — copied`))
+        .catch(() => onNotify?.(`Picked ${hex}`));
+    },
+    [doc, onNotify],
+  );
 
   // ------------------------------------------------------------- coordinates
 
@@ -147,6 +217,12 @@ export function Canvas() {
       return;
     }
 
+    if (tool === "pen") {
+      store.add({ id, kind: "pen", points: [origin], style: { ...style } });
+      drag.current = { kind: "create", id, origin };
+      return;
+    }
+
     if (tool === "crop") {
       drag.current = { kind: "crop", origin };
       store.setPendingCrop({ x: origin.x, y: origin.y, width: 0, height: 0 });
@@ -190,6 +266,11 @@ export function Canvas() {
       return;
     }
 
+    if (tool === "pick") {
+      void pickAt(clampToDoc(toDoc(e)));
+      return;
+    }
+
     if (tool === "select") {
       useEditor.getState().clearSelection();
       return;
@@ -226,6 +307,9 @@ export function Canvas() {
    */
   const onShapePointerDown = (e: React.PointerEvent, id: string) => {
     if (!doc || e.button !== 0) return;
+    // The eyedropper reads the capture underneath, so a press on a shape must
+    // fall through to the stage rather than pick the shape up.
+    if (tool === "pick") return;
     if (e.altKey && tool !== "select") return;
     e.stopPropagation();
     (e.currentTarget as Element).setPointerCapture?.(e.pointerId);
@@ -273,6 +357,15 @@ export function Canvas() {
   };
 
   const onPointerMove = (e: React.PointerEvent) => {
+    pointer.current = toDoc(e);
+
+    if (tool === "pick" && doc) {
+      const p = pointer.current;
+      const hex = sampleColor(doc.path, doc.crop.x + p.x, doc.crop.y + p.y);
+      setSwatch(hex ? { x: p.x, y: p.y, hex } : null);
+      return;
+    }
+
     const active = drag.current;
     if (!active || !doc) return;
 
@@ -294,7 +387,15 @@ export function Canvas() {
         const target = store.annotations.find((a) => a.id === active.id);
         if (!target) break;
 
-        if (isLine(target)) {
+        if (isPen(target)) {
+          const last = target.points[target.points.length - 1];
+          // Drop samples the hand didn't really make. Pointer events arrive far
+          // faster than the wrist moves, and every duplicate point is another
+          // coordinate pair carried inside the saved PNG for ever.
+          if (Math.hypot(point.x - last.x, point.y - last.y) >= FREEHAND_MIN_STEP) {
+            store.update(active.id, { points: [...target.points, point] });
+          }
+        } else if (isLine(target)) {
           let end = point;
           if (e.shiftKey) end = snapAngle(active.origin, point);
           store.update(active.id, { x2: end.x, y2: end.y });
@@ -324,18 +425,10 @@ export function Canvas() {
         store.replaceAll(
           store.annotations.map((a) => {
             const original = active.snapshot.find((s) => s.id === a.id);
-            if (!original) return a;
-            if (isBox(original)) return { ...a, x: original.x + dx, y: original.y + dy };
-            if (isLine(original))
-              return {
-                ...a,
-                x1: original.x1 + dx,
-                y1: original.y1 + dy,
-                x2: original.x2 + dx,
-                y2: original.y2 + dy,
-              };
-            return { ...a, x: original.x + dx, y: original.y + dy };
-          }) as Annotation[],
+            // Moved from where the shape stood when the drag began, not from
+            // where it is now, so the pointer can't drift away from it.
+            return original ? movedBy(original, dx, dy) : a;
+          }),
         );
         break;
       }
@@ -357,22 +450,37 @@ export function Canvas() {
           break;
         }
 
-        if (isBox(original)) {
-          const b = boundsOf(original);
-          // Anchor is the corner diagonally opposite the one being dragged.
-          const anchor = {
-            x: active.handle === "nw" || active.handle === "sw" ? b.x + b.width : b.x,
-            y: active.handle === "nw" || active.handle === "ne" ? b.y + b.height : b.y,
-          };
-          const end = e.shiftKey ? snapSquare(anchor, point) : point;
+        const b = boundsOf(original);
+        // Anchor is the corner diagonally opposite the one being dragged.
+        const anchor = {
+          x: active.handle === "nw" || active.handle === "sw" ? b.x + b.width : b.x,
+          y: active.handle === "nw" || active.handle === "ne" ? b.y + b.height : b.y,
+        };
+        const end = e.shiftKey ? snapSquare(anchor, point) : point;
+        const box = {
+          x: Math.min(anchor.x, end.x),
+          y: Math.min(anchor.y, end.y),
+          width: Math.abs(end.x - anchor.x),
+          height: Math.abs(end.y - anchor.y),
+        };
 
+        if (isPen(original)) {
+          // A scribble has no width and height of its own, so it is fitted into
+          // the new box instead: every sample keeps its position within the
+          // stroke. A flat stroke keeps its axis rather than collapsing to a
+          // point it could never be dragged back out of.
+          const sx = b.width < 0.5 ? 1 : box.width / b.width;
+          const sy = b.height < 0.5 ? 1 : box.height / b.height;
           store.update(active.id, {
-            x: Math.min(anchor.x, end.x),
-            y: Math.min(anchor.y, end.y),
-            width: Math.abs(end.x - anchor.x),
-            height: Math.abs(end.y - anchor.y),
+            points: original.points.map((p) => ({
+              x: box.x + (p.x - b.x) * sx,
+              y: box.y + (p.y - b.y) * sy,
+            })),
           });
+          break;
         }
+
+        if (isBox(original)) store.update(active.id, box);
         break;
       }
     }
@@ -432,6 +540,7 @@ export function Canvas() {
   const editing = annotations.find((a) => a.id === editingId);
   const cursor =
     tool === "select" ? "default" : tool === "text" ? "text" : "crosshair";
+  const showSwatch = tool === "pick" && swatch;
 
   return (
     <div ref={viewport} className="relative flex-1 overflow-auto bg-inset">
@@ -488,6 +597,22 @@ export function Canvas() {
           />
 
           {pendingCrop && <CropOverlay rect={pendingCrop} doc={doc} zoom={zoom} />}
+
+          {/* Follows the cursor rather than sitting in the toolbar: the whole
+              job is telling you what is under the pointer *before* you commit
+              to it, and the toolbar is nowhere near where you are looking. */}
+          {showSwatch && (
+            <div
+              className="surface-pop pointer-events-none absolute flex items-center gap-1.5 rounded-md py-1 pr-2 pl-1"
+              style={{ left: swatch.x * zoom + 16, top: swatch.y * zoom + 16 }}
+            >
+              <span
+                className="size-3.5 rounded-[4px] ring-1 ring-white/25 ring-inset"
+                style={{ background: swatch.hex }}
+              />
+              <span className="font-mono text-[11px] tabular-nums text-ink">{swatch.hex}</span>
+            </div>
+          )}
 
           {editing && editing.kind === "text" && (
             <TextEditor

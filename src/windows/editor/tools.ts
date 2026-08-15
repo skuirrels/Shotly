@@ -4,10 +4,13 @@ import {
   IconBlur,
   IconCrop,
   IconEllipse,
+  IconEyedropper,
   IconHighlight,
   IconLine,
+  IconPen,
   IconRect,
   IconSelect,
+  IconSpotlight,
   IconStep,
   IconText,
 } from "@/components/icons";
@@ -33,10 +36,13 @@ export const TOOLS: ToolDef[] = [
   { id: "rect", label: "Rectangle", shortcut: "R", icon: IconRect },
   { id: "ellipse", label: "Ellipse", shortcut: "E", icon: IconEllipse },
   { id: "line", label: "Line", shortcut: "L", icon: IconLine },
+  { id: "pen", label: "Pen", shortcut: "P", icon: IconPen },
   { id: "text", label: "Text", shortcut: "T", icon: IconText },
   { id: "step", label: "Step number", shortcut: "N", icon: IconStep },
   { id: "blur", label: "Blur", shortcut: "B", icon: IconBlur },
   { id: "highlight", label: "Highlight", shortcut: "H", icon: IconHighlight },
+  { id: "spotlight", label: "Spotlight", shortcut: "S", icon: IconSpotlight },
+  { id: "pick", label: "Pick colour", shortcut: "I", icon: IconEyedropper },
   { id: "crop", label: "Crop", shortcut: "C", icon: IconCrop },
 ];
 
@@ -62,24 +68,32 @@ export function styleControlsFor(kind: ToolId | string): {
   fill: boolean;
   font: boolean;
   blur: boolean;
+  dim: boolean;
   color: boolean;
 } {
+  const none = { stroke: false, fill: false, font: false, blur: false, dim: false, color: false };
+
   switch (kind) {
     case "text":
-      return { stroke: false, fill: false, font: true, blur: false, color: true };
+      return { ...none, font: true, color: true };
     case "blur":
-      return { stroke: false, fill: false, font: false, blur: true, color: false };
+      return { ...none, blur: true };
     case "highlight":
-      return { stroke: false, fill: false, font: false, blur: false, color: true };
+      return { ...none, color: true };
+    // No colour: the surround is darkened, not tinted, so the only thing worth
+    // adjusting is how far down it goes.
+    case "spotlight":
+      return { ...none, dim: true };
     case "step":
-      return { stroke: true, fill: false, font: false, blur: false, color: true };
+      return { ...none, stroke: true, color: true };
     case "rect":
     case "ellipse":
-      return { stroke: true, fill: true, font: false, blur: false, color: true };
+      return { ...none, stroke: true, fill: true, color: true };
     case "arrow":
     case "line":
-      return { stroke: true, fill: false, font: false, blur: false, color: true };
+    case "pen":
+      return { ...none, stroke: true, color: true };
     default:
-      return { stroke: false, fill: false, font: false, blur: false, color: false };
+      return none;
   }
 }

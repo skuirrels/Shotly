@@ -2,12 +2,13 @@ import { Fragment } from "react";
 import {
   arrowPolygon,
   fontFor,
+  freehandPath,
   measureText,
   polygonToPath,
   stepFontSize,
   TEXT_PADDING,
 } from "@/lib/shapes";
-import { type Annotation, boundsOf, isLine, isStep } from "@/lib/types";
+import { type Annotation, boundsOf, isLine, isPen, isStep } from "@/lib/types";
 import type { Doc } from "@/state/editorStore";
 
 interface Props {
@@ -147,6 +148,34 @@ function Shape({ a, doc, hidden }: { a: Annotation; doc: Doc; hidden: boolean })
     );
   }
 
+  if (isPen(a)) {
+    const d = freehandPath(a.points);
+    return (
+      <>
+        <path
+          d={d}
+          fill="none"
+          stroke={a.style.color}
+          strokeWidth={a.style.strokeWidth}
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          filter={shadow}
+        />
+        {/* Invisible fat copy, so a thin scribble is grabbable without
+            demanding pixel-perfect aim. Stroke-only and never filled: a
+            scribble that loops back on itself must not become a solid blob
+            that swallows everything drawn beneath it. */}
+        <path
+          d={d}
+          fill="none"
+          stroke="transparent"
+          strokeWidth={Math.max(14, a.style.strokeWidth * 2)}
+          strokeLinecap="round"
+        />
+      </>
+    );
+  }
+
   if (isStep(a)) {
     const fs = stepFontSize(a);
     return (
@@ -227,6 +256,38 @@ function Shape({ a, doc, hidden }: { a: Annotation; doc: Doc; hidden: boolean })
           style={{ mixBlendMode: "multiply" }}
         />
       );
+
+    case "spotlight": {
+      const { width: w, height: h } = doc.crop;
+      return (
+        <>
+          {/* Two subpaths and the even-odd rule: the outer covers the capture,
+              the inner punches the lit region out of it. */}
+          <path
+            d={`M0 0H${w}V${h}H0Z M${b.x} ${b.y}H${b.x + b.width}V${b.y + b.height}H${b.x}Z`}
+            fillRule="evenodd"
+            fill="#000"
+            fillOpacity={a.style.dim ?? 0.55}
+            // Deliberately not a click target. This shape covers the whole
+            // capture by definition, so a hit-testable one would mean every
+            // click anywhere selected the spotlight and nothing else could
+            // ever be drawn or picked up again.
+            pointerEvents="none"
+          />
+          {/* The rim is the grab handle, as a fat invisible stroke — the same
+              trick that makes hairline arrows selectable. */}
+          <rect
+            x={b.x}
+            y={b.y}
+            width={b.width}
+            height={b.height}
+            fill="none"
+            stroke="transparent"
+            strokeWidth={14}
+          />
+        </>
+      );
+    }
 
     case "text": {
       const m = measureText(a.text ?? "", a.style.fontSize);
