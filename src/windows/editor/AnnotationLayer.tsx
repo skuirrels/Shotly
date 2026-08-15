@@ -16,6 +16,8 @@ interface Props {
   selectedIds: string[];
   zoom: number;
   editingId: string | null;
+  /** What hovering a shape means right now — moving it, or drawing through it. */
+  shapeCursor: "move" | "crosshair";
   onShapePointerDown: (e: React.PointerEvent, id: string) => void;
   onHandlePointerDown: (e: React.PointerEvent, id: string, handle: HandleId) => void;
 }
@@ -35,6 +37,7 @@ export function AnnotationLayer({
   selectedIds,
   zoom,
   editingId,
+  shapeCursor,
   onShapePointerDown,
   onHandlePointerDown,
 }: Props) {
@@ -78,7 +81,7 @@ export function AnnotationLayer({
         <g
           key={a.id}
           onPointerDown={(e) => onShapePointerDown(e, a.id)}
-          style={{ cursor: "move" }}
+          style={{ cursor: shapeCursor }}
         >
           <Shape a={a} doc={doc} hidden={editingId === a.id} />
         </g>

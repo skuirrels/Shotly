@@ -6,6 +6,21 @@ import type { Command, CommandGroup } from "@/lib/keys/types";
 const ORDER: CommandGroup[] = ["Tools", "Edit", "Style", "Arrange", "View", "Capture", "Export"];
 
 /**
+ * Pointer gestures, which have no command to generate them from.
+ *
+ * Alt-drag especially earns its place here: it is the only way to draw inside
+ * a shape that already covers the area, and nothing on screen hints at it.
+ */
+const GESTURES: { action: string; gesture: string }[] = [
+  { action: "Move an annotation", gesture: "Drag it" },
+  { action: "Draw through an annotation", gesture: "Alt-drag" },
+  { action: "Add to the selection", gesture: "Shift-click" },
+  { action: "Constrain to square or 15°", gesture: "Shift-drag" },
+  { action: "Lock a move to one axis", gesture: "Shift-drag" },
+  { action: "Edit text again", gesture: "Double-click" },
+];
+
+/**
  * The full keymap, generated from the same command list that binds the keys —
  * so it can't fall out of date with what the app actually does.
  */
@@ -52,6 +67,23 @@ export function ShortcutSheet({ commands, onClose }: { commands: Command[]; onCl
               </dl>
             </section>
           ))}
+
+          <section>
+            <h3 className="mb-1.5 text-[11px] font-semibold tracking-wider text-ink-4 uppercase">
+              Mouse
+            </h3>
+            <dl className="space-y-0.5">
+              {GESTURES.map(({ action, gesture }) => (
+                <div
+                  key={action}
+                  className="flex items-center justify-between gap-4 rounded-md px-1.5 py-1 hover:bg-white/[0.04]"
+                >
+                  <dt className="truncate text-[12.5px] text-ink-2">{action}</dt>
+                  <dd className="shrink-0 text-[11.5px] text-ink-4">{gesture}</dd>
+                </div>
+              ))}
+            </dl>
+          </section>
         </div>
       </div>
     </div>

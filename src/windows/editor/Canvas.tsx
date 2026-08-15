@@ -42,6 +42,8 @@ export function Canvas() {
 
   const [fitZoom, setFitZoom] = useState(1);
   const [editingId, setEditingId] = useState<string | null>(null);
+  /** Alt turns a press on a shape into a draw-through — see `onShapePointerDown`. */
+  const [altDown, setAltDown] = useState(false);
 
   const zoom = fitToWindow ? fitZoom : zoomSetting;
 
@@ -67,6 +69,24 @@ export function Canvas() {
     observer.observe(el);
     return () => observer.disconnect();
   }, [doc]);
+
+  // The hover cursor has to say which gesture Alt is about to produce — the
+  // whole bug being fixed here was a cursor promising a move that never came.
+  // Reset on blur: switching away with Alt held would otherwise leave the
+  // canvas advertising a draw-through that is no longer armed.
+  useEffect(() => {
+    const sync = (e: KeyboardEvent) => setAltDown(e.altKey);
+    const clear = () => setAltDown(false);
+
+    window.addEventListener("keydown", sync);
+    window.addEventListener("keyup", sync);
+    window.addEventListener("blur", clear);
+    return () => {
+      window.removeEventListener("keydown", sync);
+      window.removeEventListener("keyup", sync);
+      window.removeEventListener("blur", clear);
+    };
+  }, []);
 
   // ------------------------------------------------------------- coordinates
 
@@ -192,8 +212,21 @@ export function Canvas() {
     startCreate(e);
   };
 
+  /**
+   * Press on an existing annotation to move it, whatever tool is active.
+   *
+   * Previously this only worked with the select tool, so a press on a shape
+   * while (say) the rectangle tool was up drew a new rectangle on top of it —
+   * even though the shape has always shown a move cursor on hover. The cursor
+   * was telling the truth about what should happen; the handler wasn't.
+   *
+   * Holding Alt draws straight through instead. Without that escape hatch a
+   * highlight covering most of the capture would make everything beneath it
+   * unreachable: there would be nowhere left to start a drag.
+   */
   const onShapePointerDown = (e: React.PointerEvent, id: string) => {
-    if (tool !== "select" || !doc) return;
+    if (!doc || e.button !== 0) return;
+    if (e.altKey && tool !== "select") return;
     e.stopPropagation();
     (e.currentTarget as Element).setPointerCapture?.(e.pointerId);
 
@@ -223,8 +256,11 @@ export function Canvas() {
     };
   };
 
+  // Resize handles follow the same rule as the shapes they belong to: if the
+  // chrome is on screen and showing a resize cursor, dragging it must resize,
+  // whichever tool happens to be selected.
   const onHandlePointerDown = (e: React.PointerEvent, id: string, handle: HandleId) => {
-    if (tool !== "select") return;
+    if (e.button !== 0) return;
     e.stopPropagation();
     (e.currentTarget as Element).setPointerCapture?.(e.pointerId);
 
@@ -378,9 +414,10 @@ export function Canvas() {
     setEditingId(null);
   }, [editingId]);
 
-  // Double-click a text annotation to edit it again.
+  // Double-click a text annotation to edit it again. Not gated on the select
+  // tool either: a press on a shape no longer starts a new one, so there is
+  // nothing for this to collide with.
   const onDoubleClick = (e: React.MouseEvent) => {
-    if (tool !== "select") return;
     const hit = [...annotations].reverse().find((a) => {
       if (a.kind !== "text") return false;
       const b = boundsOf(a);
@@ -445,6 +482,7 @@ export function Canvas() {
             selectedIds={selectedIds}
             zoom={zoom}
             editingId={editingId}
+            shapeCursor={altDown && tool !== "select" ? "crosshair" : "move"}
             onShapePointerDown={onShapePointerDown}
             onHandlePointerDown={onHandlePointerDown}
           />
