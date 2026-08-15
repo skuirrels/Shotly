@@ -73,11 +73,12 @@ pub enum Status {
 impl Status {
     /// Whether this is worth replaying to a newly mounted editor.
     ///
-    /// Only the terminal states are: resurfacing "checking" or a stale
-    /// download percentage from a check that finished hours ago would be a
-    /// progress bar that never moves.
+    /// Only a staged update is. Resurfacing "checking", or a download
+    /// percentage frozen at whatever it read hours ago, would be a progress
+    /// bar that never moves; and a failure is only ever emitted to a window
+    /// that was already open to see it.
     fn is_durable(&self) -> bool {
-        matches!(self, Status::Ready { .. } | Status::Failed { .. })
+        matches!(self, Status::Ready { .. })
     }
 }
 
@@ -107,7 +108,14 @@ async fn run(app: AppHandle, announce: bool) {
 
     if let Err(message) = install(&app, announce).await {
         eprintln!("[shotly] update failed: {message}");
-        emit(&app, Status::Failed { message });
+        // Only a check the user asked for reports its failure. The scheduled
+        // one runs into closed laptops, captive portals and flaky hotel wifi
+        // as a matter of course, and none of that is worth interrupting
+        // someone mid-annotation with a red box they can do nothing about —
+        // the next check in six hours will quietly succeed.
+        if announce {
+            emit(&app, Status::Failed { message });
+        }
     }
 
     RUNNING.store(false, Ordering::SeqCst);
