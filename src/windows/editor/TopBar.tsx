@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import clsx from "clsx";
 import {
   IconCamera,
@@ -267,11 +267,24 @@ function ViewSwitch({ view, canEdit, onView }: { view: View; canEdit: boolean; o
   );
 }
 
+/** Remembered so the button keeps doing whatever you last asked it to do. */
+const MODE_KEY = "shotly.captureMode";
+
+function storedMode(): CaptureMode {
+  const saved = localStorage.getItem(MODE_KEY) as CaptureMode | null;
+  return saved && MODES.some((m) => m.mode === saved) ? saved : "region";
+}
+
 /**
- * Capture as a split button: the main half fires the common case, the chevron
- * opens the rest. Region is the default because it is by far the most used,
- * and it keeps the one-click path that the toolbar had before the other modes
- * moved up here from the empty state.
+ * Capture as a split button: the main half fires one mode, the chevron offers
+ * the others.
+ *
+ * The main half is labelled with the mode it will actually run — "Region", not
+ * "Capture" — because a button called Capture sitting above a menu of three
+ * capture modes gives no clue which of the three you get by pressing it. The
+ * menu marks the same mode as current, and picking a different one both
+ * captures immediately and rebinds the button, so it settles on whichever mode
+ * you actually use.
  */
 function CaptureMenu({
   onCapture,
@@ -280,16 +293,25 @@ function CaptureMenu({
   onCapture: (mode: CaptureMode) => void;
   onOpenFile: () => void;
 }) {
+  const [mode, setMode] = useState<CaptureMode>(storedMode);
+  const active = MODES.find((m) => m.mode === mode) ?? MODES[0];
+
+  const pick = (next: CaptureMode) => {
+    setMode(next);
+    localStorage.setItem(MODE_KEY, next);
+    onCapture(next);
+  };
+
   return (
     <div className="flex items-center overflow-hidden rounded-lg bg-white/[0.07]">
-      <Tooltip label="Capture a region" shortcut="Mod+Shift+4">
+      <Tooltip label={`Capture ${active.hint.toLowerCase()}`} shortcut={active.shortcut}>
         <button
           type="button"
-          onClick={() => onCapture("region")}
+          onClick={() => onCapture(mode)}
           className="no-drag flex h-8 items-center gap-1.5 pr-2 pl-2.5 text-[12.5px] font-medium text-ink transition-colors hover:bg-white/[0.07] active:bg-white/[0.12]"
         >
           <IconCamera />
-          Capture
+          {active.label}
         </button>
       </Tooltip>
 
@@ -314,26 +336,39 @@ function CaptureMenu({
       >
         {({ close }) => (
           <div className="w-[228px]">
-            {MODES.map((m) => (
-              <button
-                key={m.mode}
-                type="button"
-                onClick={() => {
-                  close();
-                  onCapture(m.mode);
-                }}
-                className="flex w-full items-center gap-2.5 rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-hover"
-              >
-                <span className="text-ink-2">
-                  <m.icon />
-                </span>
-                <span className="min-w-0 flex-1">
-                  <span className="block text-[12.5px] font-medium text-ink">{m.label}</span>
-                  <span className="block text-[11px] text-ink-4">{m.hint}</span>
-                </span>
-                <Kbd shortcut={m.shortcut} muted />
-              </button>
-            ))}
+            {MODES.map((m) => {
+              const current = m.mode === mode;
+              return (
+                <button
+                  key={m.mode}
+                  type="button"
+                  aria-current={current}
+                  onClick={() => {
+                    close();
+                    pick(m.mode);
+                  }}
+                  className="flex w-full items-center gap-2.5 rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-hover"
+                >
+                  <span className={current ? "text-accent" : "text-ink-2"}>
+                    <m.icon />
+                  </span>
+                  <span className="min-w-0 flex-1">
+                    <span className="flex items-center gap-1.5 text-[12.5px] font-medium text-ink">
+                      {m.label}
+                      {/* Ties the menu back to the button: this is the one the
+                          button itself runs. */}
+                      {current && (
+                        <span className="rounded bg-accent/16 px-1.5 py-px text-[9.5px] font-semibold tracking-wide text-accent uppercase">
+                          Button
+                        </span>
+                      )}
+                    </span>
+                    <span className="block text-[11px] text-ink-4">{m.hint}</span>
+                  </span>
+                  <Kbd shortcut={m.shortcut} muted />
+                </button>
+              );
+            })}
 
             <div className="my-1.5 h-px bg-line" />
 
