@@ -4,6 +4,7 @@ import clsx from "clsx";
 import {
   IconArrow,
   IconClose,
+  IconDisplay,
   IconEllipse,
   IconHighlight,
   IconRect,
@@ -43,6 +44,16 @@ interface Stroke {
 }
 
 const HEARTBEAT_MS = 1000;
+/** Mirrors `AnnotateScreen` in `src-tauri/src/annotate.rs`. */
+interface Screen {
+  id: number;
+  number: number;
+  isPrimary: boolean;
+  isCurrent: boolean;
+  width: number;
+  height: number;
+}
+
 const TOOLS: { id: Tool; label: string; key: string; icon: () => React.ReactNode }[] = [
   { id: "pen", label: "Pen", key: "P", icon: () => <PenGlyph /> },
   { id: "arrow", label: "Arrow", key: "A", icon: () => <IconArrow /> },
@@ -59,21 +70,35 @@ export function AnnotateApp() {
 
   const drawing = useRef<Stroke | null>(null);
   const [, force] = useState(0);
-  /** Where the primary display sits inside this full-virtual-desktop window. */
-  const [layout, setLayout] = useState<{
-    primaryLeft: number;
-    primaryTop: number;
-    primaryWidth: number;
-    primaryHeight: number;
-  } | null>(null);
+  /** Displays this overlay can sit on. One entry means no picker is shown. */
+  const [screens, setScreens] = useState<Screen[]>([]);
 
   const exit = useCallback(() => void invoke("annotate_stop"), []);
 
   // ------------------------------------------------------------- lifecycle
 
-  useEffect(() => {
-    void invoke<typeof layout>("annotate_layout").then(setLayout).catch(() => {});
-  }, []);
+  const loadScreens = useCallback(
+    () => void invoke<Screen[]>("annotate_screens").then(setScreens).catch(() => {}),
+    [],
+  );
+
+  useEffect(loadScreens, [loadScreens]);
+
+  /**
+   * Hop to the next display, wrapping round.
+   *
+   * Cycling rather than a menu: with two monitors — which is the case that
+   * actually comes up — a menu is two clicks to do the only thing there is to
+   * do. Strokes deliberately survive the move: they belong to the drawing, not
+   * to the screen, and losing them for looking at the other monitor would be a
+   * nasty surprise mid-share.
+   */
+  const nextScreen = useCallback(() => {
+    if (screens.length < 2) return;
+    const at = screens.findIndex((s) => s.isCurrent);
+    const target = screens[(at + 1) % screens.length];
+    void invoke("annotate_move", { displayId: target.id }).then(loadScreens).catch(() => {});
+  }, [screens, loadScreens]);
 
   useEffect(() => {
     // Two frames: enough for the browser to have actually painted, so Rust is
@@ -162,6 +187,7 @@ export function AnnotateApp() {
 
       const match = TOOLS.find((t) => t.key.toLowerCase() === e.key.toLowerCase());
       if (match) setTool(match.id);
+      else if (e.code === "KeyS") nextScreen();
       else if (e.code === "KeyC") setStrokes([]);
       else if (e.code === "BracketLeft") setWidth((w) => Math.max(1, w - 1));
       else if (e.code === "BracketRight") setWidth((w) => Math.min(24, w + 1));
@@ -180,7 +206,7 @@ export function AnnotateApp() {
       window.removeEventListener("keydown", onKeyDown, { capture: true });
       window.removeEventListener("keyup", onKeyUp, { capture: true });
     };
-  }, [exit]);
+  }, [exit, nextScreen]);
 
   const live = drawing.current;
 
@@ -203,7 +229,8 @@ export function AnnotateApp() {
       </svg>
 
       <Toolbar
-        layout={layout}
+        screens={screens}
+        onNextScreen={nextScreen}
         tool={tool}
         setTool={setTool}
         color={color}
@@ -289,7 +316,8 @@ function StrokeShape({ stroke }: { stroke: Stroke }) {
 }
 
 function Toolbar({
-  layout,
+  screens,
+  onNextScreen,
   tool,
   setTool,
   color,
@@ -301,12 +329,8 @@ function Toolbar({
   onClear,
   onExit,
 }: {
-  layout: {
-    primaryLeft: number;
-    primaryTop: number;
-    primaryWidth: number;
-    primaryHeight: number;
-  } | null;
+  screens: Screen[];
+  onNextScreen: () => void;
   tool: Tool;
   setTool: (t: Tool) => void;
   color: string;
@@ -318,23 +342,13 @@ function Toolbar({
   onClear: () => void;
   onExit: () => void;
 }) {
+  const current = screens.find((s) => s.isCurrent);
+
   return (
-    // Pinned to the primary display, not to the window. On a multi-monitor
-    // setup the window spans every screen, so centring on it puts the toolbar
-    // on a secondary display — or in the gap between two.
-    <div
-      className="pointer-events-none absolute flex items-end justify-center pb-8"
-      style={
-        layout
-          ? {
-              left: layout.primaryLeft,
-              top: layout.primaryTop,
-              width: layout.primaryWidth,
-              height: layout.primaryHeight,
-            }
-          : { inset: 0 }
-      }
-    >
+    // The window covers exactly one display, so the window *is* the surface —
+    // no need to pin the toolbar to a sub-rectangle of it, as was necessary
+    // back when this spanned the whole virtual desktop.
+    <div className="pointer-events-none absolute inset-0 flex items-end justify-center pb-8">
       <div
         className="surface-float pointer-events-auto flex items-center gap-1 rounded-2xl p-1.5"
         style={{ cursor: "default" }}
@@ -411,6 +425,24 @@ function Toolbar({
         >
           <IconTrash />
         </button>
+
+        {/* Only worth the space when there is somewhere else to go. */}
+        {screens.length > 1 && current && (
+          <>
+            <span className="mx-1 h-5 w-px bg-white/10" />
+            <button
+              type="button"
+              onClick={onNextScreen}
+              title="Move to the next screen (S)"
+              aria-label="Move to the next screen"
+              className="flex h-[30px] items-center gap-1.5 rounded-lg px-2 text-[12px] font-medium text-ink-2 hover:bg-hover hover:text-ink"
+            >
+              <IconDisplay />
+              Screen {current.number}
+              {current.isPrimary && <span className="text-ink-4">· Main</span>}
+            </button>
+          </>
+        )}
 
         <button
           type="button"

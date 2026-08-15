@@ -22,7 +22,7 @@
 //! * **A global hotkey owned by Rust** toggles it, so the escape route works
 //!   even if the page is completely dead.
 
-use crate::capture::display;
+use crate::capture::{display, DisplayInfo};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindowBuilder};
@@ -38,6 +38,8 @@ const READY_GRACE: Duration = Duration::from_secs(3);
 pub struct AnnotateState {
     /// Last heartbeat from the page. `None` while it has yet to report ready.
     pub last_beat: Mutex<Option<Instant>>,
+    /// Which display the overlay is currently covering.
+    pub display: Mutex<Option<u32>>,
 }
 
 fn state_beat(app: &AppHandle) -> Option<Instant> {
@@ -51,6 +53,7 @@ pub fn stop(app: &AppHandle) {
     {
         let state = app.state::<AnnotateState>();
         *state.last_beat.lock().unwrap() = None;
+        *state.display.lock().unwrap() = None;
     }
 
     if let Some(window) = app.get_webview_window(LABEL) {
@@ -72,13 +75,56 @@ pub fn toggle(app: &AppHandle) -> Result<(), String> {
         stop(app);
         return Ok(());
     }
-    start(app)
+    start(app, None)
 }
 
-fn start(app: &AppHandle) -> Result<(), String> {
+/// Where the pointer is, in global point space.
+#[cfg(target_os = "macos")]
+fn cursor_point() -> Option<(f64, f64)> {
+    use core_graphics::event::CGEvent;
+    use core_graphics::event_source::{CGEventSource, CGEventSourceStateID};
+
+    let source = CGEventSource::new(CGEventSourceStateID::HIDSystemState).ok()?;
+    let point = CGEvent::new(source).ok()?.location();
+    Some((point.x, point.y))
+}
+
+#[cfg(not(target_os = "macos"))]
+fn cursor_point() -> Option<(f64, f64)> {
+    None
+}
+
+/// Choose the display to annotate.
+///
+/// An explicit request wins; otherwise it is whichever screen the pointer is
+/// on. Following the cursor is the whole answer to "which monitor?" on a
+/// multi-display desk: you are already looking at the screen you mean to draw
+/// on, and your hand is already there. The primary display is only the
+/// fallback for a pointer that is somewhere unaccounted for.
+fn pick_display(displays: &[DisplayInfo], preferred: Option<u32>) -> Option<&DisplayInfo> {
+    if let Some(id) = preferred {
+        if let Some(found) = displays.iter().find(|d| d.id == id) {
+            return Some(found);
+        }
+    }
+
+    if let Some((x, y)) = cursor_point() {
+        let under = displays.iter().find(|d| {
+            let b = d.bounds;
+            x >= b.x && y >= b.y && x < b.x + b.width && y < b.y + b.height
+        });
+        if under.is_some() {
+            return under;
+        }
+    }
+
+    displays.iter().find(|d| d.is_primary).or_else(|| displays.first())
+}
+
+fn start(app: &AppHandle, preferred: Option<u32>) -> Result<(), String> {
     let displays = display::displays().map_err(|e| e.to_string())?;
 
-    // Cover the primary display only, not the whole virtual desktop.
+    // Cover one display, not the whole virtual desktop.
     //
     // Spanning every screen sounds more capable but is worse in practice: a
     // secondary monitor placed above or left of the primary gives the desktop
@@ -86,13 +132,12 @@ fn start(app: &AppHandle) -> Result<(), String> {
     // silently shifts the whole surface and pushes the toolbar off-screen. You
     // also only ever share one screen at a time. One display keeps the geometry
     // trivially correct and the window smaller.
-    let target = displays
-        .iter()
-        .find(|d| d.is_primary)
-        .or_else(|| displays.first())
-        .ok_or("no displays")?;
+    let target = pick_display(&displays, preferred).ok_or("no displays")?;
     let bounds = target.bounds;
-    eprintln!("[annotate] start: covering primary display {bounds:?}");
+    let id = target.id;
+    eprintln!("[annotate] start: covering display {id} {bounds:?}");
+
+    *app.state::<AnnotateState>().display.lock().unwrap() = Some(id);
 
     let window = WebviewWindowBuilder::new(app, LABEL, WebviewUrl::App("annotate.html".into()))
         .title("Shotly Annotation")
@@ -185,37 +230,66 @@ fn watch(app: &AppHandle) {
     });
 }
 
-/// Where the primary display sits inside the annotation window.
-///
-/// The window spans the whole virtual desktop, so on a multi-monitor setup its
-/// centre can land on a secondary screen — or in the gap between two. The
-/// toolbar is positioned against this rect instead, so it always appears on the
-/// primary display rather than wherever the desktops happen to average out.
+/// One entry in the overlay's screen picker.
 #[derive(Debug, Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct AnnotateLayout {
-    pub primary_left: f64,
-    pub primary_top: f64,
-    pub primary_width: f64,
-    pub primary_height: f64,
+pub struct AnnotateScreen {
+    pub id: u32,
+    /// 1-based position in the display list, for a label a human can act on.
+    pub number: usize,
+    pub is_primary: bool,
+    /// Whether the overlay is on this one right now.
+    pub is_current: bool,
+    pub width: f64,
+    pub height: f64,
 }
 
+/// The displays the overlay can move between, current one marked.
 #[tauri::command]
-pub fn annotate_layout() -> Result<AnnotateLayout, String> {
+pub fn annotate_screens(app: AppHandle) -> Result<Vec<AnnotateScreen>, String> {
     let displays = display::displays().map_err(|e| e.to_string())?;
-    let primary = displays
-        .iter()
-        .find(|d| d.is_primary)
-        .or_else(|| displays.first())
-        .ok_or("no displays")?;
+    let current = *app.state::<AnnotateState>().display.lock().unwrap();
 
-    // The window now covers exactly this display, so it is the whole surface.
-    Ok(AnnotateLayout {
-        primary_left: 0.0,
-        primary_top: 0.0,
-        primary_width: primary.bounds.width,
-        primary_height: primary.bounds.height,
-    })
+    Ok(displays
+        .iter()
+        .enumerate()
+        .map(|(i, d)| AnnotateScreen {
+            id: d.id,
+            number: i + 1,
+            is_primary: d.is_primary,
+            is_current: Some(d.id) == current,
+            width: d.bounds.width,
+            height: d.bounds.height,
+        })
+        .collect())
+}
+
+/// Move the live overlay to another display.
+///
+/// Repositions rather than rebuilding: tearing the window down and putting a
+/// new one up would lose whatever is drawn, and closing is asynchronous, so a
+/// rebuild races the old window's label still being taken. Moving keeps the
+/// strokes and the webview exactly as they are, which also means none of the
+/// safety machinery — the heartbeat, the ready state — has to restart.
+#[tauri::command]
+pub fn annotate_move(app: AppHandle, display_id: u32) -> Result<(), String> {
+    let window = app.get_webview_window(LABEL).ok_or("annotation layer is not open")?;
+    let displays = display::displays().map_err(|e| e.to_string())?;
+    let target = displays.iter().find(|d| d.id == display_id).ok_or("no such display")?;
+    let b = target.bounds;
+
+    // Size before position: moving first can leave the window straddling two
+    // screens for a frame, and macOS may clamp the position to fit the old size.
+    window
+        .set_size(tauri::LogicalSize::new(b.width, b.height))
+        .map_err(|e| e.to_string())?;
+    window
+        .set_position(tauri::LogicalPosition::new(b.x, b.y))
+        .map_err(|e| e.to_string())?;
+
+    *app.state::<AnnotateState>().display.lock().unwrap() = Some(display_id);
+    eprintln!("[annotate] moved to display {display_id} {b:?}");
+    Ok(())
 }
 
 // ------------------------------------------------------------------ commands
