@@ -10,11 +10,12 @@ import {
   IconRect,
   IconRedo,
   IconSelect,
+  IconText,
   IconTrash,
   IconUndo,
 } from "@/components/icons";
 import { Kbd } from "@/components/ui/Kbd";
-import { arrowPolygon, polygonToPath } from "@/lib/shapes";
+import { arrowPolygon, fontFor, measureText, polygonToPath, TEXT_PADDING } from "@/lib/shapes";
 import { SWATCHES } from "@/windows/editor/tools";
 
 /**
@@ -30,7 +31,7 @@ import { SWATCHES } from "@/windows/editor/tools";
  *     A hung renderer cannot report that it hung, so silence is the signal.
  */
 
-type DrawTool = "pen" | "arrow" | "rect" | "ellipse" | "highlight";
+type DrawTool = "pen" | "arrow" | "rect" | "ellipse" | "highlight" | "text";
 /** `select` draws nothing; it is the pointer, as in the editor. */
 type Tool = DrawTool | "select";
 
@@ -43,8 +44,31 @@ interface Stroke {
   id: string;
   tool: DrawTool;
   color: string;
+  /**
+   * Stroke thickness — or, for `text`, the font size.
+   *
+   * One field rather than two because both answer the same question: how big
+   * is this mark. Keeping them together is what lets the width slider and a
+   * corner drag resize text without a parallel set of cases for it.
+   */
   width: number;
   points: Point[];
+  /** Only meaningful for `tool === "text"`. */
+  text?: string;
+}
+
+/**
+ * A text box being typed into.
+ *
+ * Deliberately held outside `strokes`: a box abandoned empty then leaves no
+ * trace and, more importantly, no undo step that appears to do nothing.
+ */
+interface Draft {
+  id: string;
+  at: Point;
+  color: string;
+  size: number;
+  text: string;
 }
 
 interface Bounds {
@@ -71,12 +95,39 @@ type Gesture =
 // ------------------------------------------------------------------ geometry
 
 /**
- * Bounding box of some strokes, padded by half their stroke width.
+ * The rectangle one stroke occupies.
  *
- * The padding matters: a horizontal line has zero height as a set of points,
- * and a selection box drawn through the middle of it would be invisible and
- * impossible to grab.
+ * Drawn strokes are padded by half their width: a horizontal line has zero
+ * height as a set of points, and a selection box through the middle of it
+ * would be invisible and impossible to grab. Text is measured instead — its
+ * single point is the top-left corner, and the glyphs supply the rest.
  */
+function strokeBounds(s: Stroke): Bounds | null {
+  const first = s.points[0];
+  if (!first) return null;
+
+  if (s.tool === "text") {
+    const m = measureText(s.text ?? "", s.width);
+    return { x: first.x, y: first.y, width: m.width, height: m.height };
+  }
+
+  const pad = s.width / 2;
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+
+  for (const p of s.points) {
+    minX = Math.min(minX, p.x - pad);
+    minY = Math.min(minY, p.y - pad);
+    maxX = Math.max(maxX, p.x + pad);
+    maxY = Math.max(maxY, p.y + pad);
+  }
+
+  return { x: minX, y: minY, width: maxX - minX, height: maxY - minY };
+}
+
+/** Bounding box of a set of strokes. */
 function boundsOf(strokes: Stroke[]): Bounds | null {
   let minX = Infinity;
   let minY = Infinity;
@@ -84,13 +135,12 @@ function boundsOf(strokes: Stroke[]): Bounds | null {
   let maxY = -Infinity;
 
   for (const s of strokes) {
-    const pad = s.width / 2;
-    for (const p of s.points) {
-      minX = Math.min(minX, p.x - pad);
-      minY = Math.min(minY, p.y - pad);
-      maxX = Math.max(maxX, p.x + pad);
-      maxY = Math.max(maxY, p.y + pad);
-    }
+    const b = strokeBounds(s);
+    if (!b) continue;
+    minX = Math.min(minX, b.x);
+    minY = Math.min(minY, b.y);
+    maxX = Math.max(maxX, b.x + b.width);
+    maxY = Math.max(maxY, b.y + b.height);
   }
 
   if (!Number.isFinite(minX)) return null;
@@ -111,6 +161,13 @@ const translate = (s: Stroke, dx: number, dy: number): Stroke => ({
  */
 const scale = (s: Stroke, anchor: Point, sx: number, sy: number): Stroke => ({
   ...s,
+  // Text is the one shape with no outline to stretch: the size of the glyphs
+  // *is* its geometry, so a corner drag has to scale the font. The geometric
+  // mean keeps a diagonal pull proportional whichever way it leans.
+  width:
+    s.tool === "text"
+      ? Math.max(MIN_FONT, s.width * Math.sqrt(Math.abs(sx * sy)))
+      : s.width,
   points: s.points.map((p) => ({
     x: anchor.x + (p.x - anchor.x) * sx,
     y: anchor.y + (p.y - anchor.y) * sy,
@@ -138,6 +195,16 @@ const HEARTBEAT_MS = 1000;
 const HISTORY_LIMIT = 60;
 /** The highlighter draws this much wider than the nominal stroke width. */
 const HIGHLIGHT_SCALE = 4;
+/**
+ * Font size per unit of the width slider.
+ *
+ * The slider tops out at 24, which as a font size would be unreadably small
+ * from the back of a room. Six pixels a notch puts the default at 24px and the
+ * top of the range at something you could label a diagram with.
+ */
+const TEXT_SCALE = 6;
+/** Below this, resizing text down would make it vanish beyond recovery. */
+const MIN_FONT = 8;
 /** Minimum grabbable thickness, so a hairline is still selectable. */
 const HIT_WIDTH = 18;
 /** Mirrors `AnnotateLayout` in `src-tauri/src/annotate.rs`. */
@@ -182,6 +249,8 @@ interface ToolButton {
   label: string;
   key: string;
   icon: () => React.ReactNode;
+  /** Appended to the tooltip, for a tool that needs a word of explaining. */
+  hint?: string;
 }
 
 /** The drawing tools, which is also the set the keyboard shortcuts match on. */
@@ -191,6 +260,16 @@ const TOOLS: ToolButton[] = [
   { id: "rect", label: "Rectangle", key: "R", icon: () => <IconRect /> },
   { id: "ellipse", label: "Ellipse", key: "E", icon: () => <IconEllipse /> },
   { id: "highlight", label: "Highlighter", key: "H", icon: () => <IconHighlight /> },
+  {
+    id: "text",
+    label: "Text",
+    key: "T",
+    icon: () => <IconText />,
+    // Worth spelling out: ⏎ makes a new line, so finishing needs its own
+    // gesture, and this is the only tool where a click alone does nothing
+    // visible until you type.
+    hint: "click to place, ⌘⏎ or click away to finish",
+  },
 ];
 
 /**
@@ -215,6 +294,8 @@ export function AnnotateApp() {
   const gesture = useRef<Gesture | null>(null);
   const [, force] = useState(0);
   const [selected, setSelected] = useState<string[]>([]);
+  /** The text box being typed into, if any. */
+  const [editing, setEditing] = useState<Draft | null>(null);
   /** Undo stack of whole stroke lists. Small enough that diffing would be fuss. */
   const [past, setPast] = useState<Stroke[][]>([]);
   const [future, setFuture] = useState<Stroke[][]>([]);
@@ -304,11 +385,14 @@ export function AnnotateApp() {
 
   // ---------------------------------------------------------------- history
 
-  /** Record the current strokes before a change, so ⌘Z can come back to them. */
-  const snapshot = useCallback(() => {
-    setPast((prev) => [...prev, strokes].slice(-HISTORY_LIMIT));
+  /** Push a state onto the undo stack, discarding anything redone past it. */
+  const remember = useCallback((state: Stroke[]) => {
+    setPast((prev) => [...prev, state].slice(-HISTORY_LIMIT));
     setFuture([]);
-  }, [strokes]);
+  }, []);
+
+  /** Record the current strokes before a change, so ⌘Z can come back to them. */
+  const snapshot = useCallback(() => remember(strokes), [remember, strokes]);
 
   const undo = useCallback(() => {
     setPast((prev) => {
@@ -335,6 +419,9 @@ export function AnnotateApp() {
 
   const selectedStrokes = strokes.filter((s) => selected.includes(s.id));
   const selectionBox = boundsOf(selectedStrokes);
+  /** Kept separate from `editing` so the keyboard effect only re-binds when a
+   *  box opens or closes, not on every keystroke inside it. */
+  const isEditing = editing !== null;
 
   /** Apply a style change to the selection, and make it the new default. */
   const restyle = useCallback(
@@ -347,10 +434,14 @@ export function AnnotateApp() {
             ? {
                 ...s,
                 ...patch,
-                // The highlighter's stroke is drawn several times wider than
-                // the nominal width, exactly as when it was first laid down.
+                // Both of these carry a multiple of the nominal width, exactly
+                // as they did when first laid down: the highlighter draws
+                // several times wider, and text reads it as a font size.
                 ...(patch.width !== undefined && s.tool === "highlight"
                   ? { width: patch.width * HIGHLIGHT_SCALE }
+                  : {}),
+                ...(patch.width !== undefined && s.tool === "text"
+                  ? { width: patch.width * TEXT_SCALE }
                   : {}),
               }
             : s,
@@ -390,11 +481,84 @@ export function AnnotateApp() {
     setSelected([]);
   }, [strokes.length, snapshot]);
 
+  // ------------------------------------------------------------------- text
+
+  /** Open a text box at a point, or on an existing stroke to retype it. */
+  const editText = useCallback(
+    (draft: Draft) => {
+      setSelected([]);
+      setEditing(draft);
+    },
+    [],
+  );
+
+  /**
+   * Finish typing.
+   *
+   * An empty box is a mis-click and leaves nothing behind — or, when it had
+   * content before, is how you delete the text by clearing it. Committing
+   * selects the result, so the swatches and the slider act on what was just
+   * written without having to go back and click it.
+   */
+  const commitText = useCallback(() => {
+    const draft = editing;
+    if (!draft) return;
+    setEditing(null);
+
+    const existed = strokes.some((s) => s.id === draft.id);
+
+    if (!draft.text.trim()) {
+      if (existed) {
+        snapshot();
+        setStrokes((prev) => prev.filter((s) => s.id !== draft.id));
+      }
+      return;
+    }
+
+    const next: Stroke = {
+      id: draft.id,
+      tool: "text",
+      color: draft.color,
+      width: draft.size,
+      points: [draft.at],
+      text: draft.text,
+    };
+
+    snapshot();
+    setStrokes((prev) =>
+      existed ? prev.map((s) => (s.id === draft.id ? next : s)) : [...prev, next],
+    );
+    setSelected([draft.id]);
+  }, [editing, strokes, snapshot]);
+
   // --------------------------------------------------------------- drawing
 
   /** Pointer down on the backdrop: draw, or clear the selection. */
   const begin = (e: React.PointerEvent) => {
     if (e.button !== 0) return;
+
+    // Clicking away from a text box commits it, and that is all this click
+    // does. Otherwise the same press that finished one box would open another.
+    // This runs before the blur that commits, so the draft is still here.
+    if (editing) return;
+
+    if (tool === "text") {
+      // `preventDefault` is what makes the text tool work at all: without it
+      // the browser moves focus to the SVG as this click finishes, blurring
+      // the box we are about to mount — and a blurred empty box is discarded,
+      // so it vanishes the instant it appears. Capturing the pointer would
+      // compound that, and placing text needs no drag anyway.
+      e.preventDefault();
+      editText({
+        id: crypto.randomUUID(),
+        at: { x: e.clientX, y: e.clientY },
+        color,
+        size: width * TEXT_SCALE,
+        text: "",
+      });
+      return;
+    }
+
     (e.currentTarget as Element).setPointerCapture(e.pointerId);
 
     if (tool === "select") {
@@ -423,6 +587,10 @@ export function AnnotateApp() {
    */
   const grab = (e: React.PointerEvent, id: string) => {
     if (e.button !== 0) return;
+    // Clicking anywhere while typing only commits the box — including onto
+    // another stroke, which would otherwise be selected and then immediately
+    // deselected by the commit that follows.
+    if (editing) return;
     if (e.altKey && tool !== "select") return;
     e.stopPropagation();
     (e.currentTarget as Element).setPointerCapture(e.pointerId);
@@ -439,7 +607,7 @@ export function AnnotateApp() {
     setSelected(ids);
     if (ids.length === 0) return;
 
-    snapshot();
+    // No snapshot yet — `finish` takes one only if the stroke actually moved.
     gesture.current = {
       kind: "move",
       ids,
@@ -453,7 +621,6 @@ export function AnnotateApp() {
     e.stopPropagation();
     (e.currentTarget as Element).setPointerCapture(e.pointerId);
 
-    snapshot();
     gesture.current = { kind: "resize", handle, box: selectionBox, before: strokes };
   };
 
@@ -510,7 +677,13 @@ export function AnnotateApp() {
     gesture.current = null;
     if (!active) return;
 
-    if (active.kind !== "draw") return;
+    if (active.kind !== "draw") {
+      // A press that only selected something is not an edit. Recording it
+      // would leave undo steps that visibly do nothing — and a double-click,
+      // which is how text is reopened, lands two of them at once.
+      if (strokes !== active.before) remember(active.before);
+      return;
+    }
 
     const stroke = drawing.current;
     drawing.current = null;
@@ -531,6 +704,11 @@ export function AnnotateApp() {
 
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
+      // While a text box has focus every key belongs to it — "R" is a letter,
+      // not the rectangle tool. This listener is on the capture phase, so the
+      // box cannot stop it from below; it has to bow out from up here.
+      if (isEditing) return;
+
       if (e.key === "Escape") {
         e.preventDefault();
         // Layered, as in the editor: drop the selection first, leave on the
@@ -573,7 +751,15 @@ export function AnnotateApp() {
     // WKWebView has its own handling for that key and can consume it before a
     // bubbled listener ever runs.
     const onKeyUp = (e: KeyboardEvent) => {
-      if (e.key === "Escape") exit();
+      if (e.key !== "Escape") return;
+      // Finishing a text box is hung here rather than inside the box for the
+      // same reason leaving is: WKWebView keeps Escape to itself, so the
+      // release is the only shot at it — and under injected input not even
+      // that arrives. Hence ⌘⏎ and click-away, which are the ones that can be
+      // relied on. Committing rather than exiting is still the right response
+      // if it does land: closing the overlay would bin what was just typed.
+      if (isEditing) commitText();
+      else exit();
     };
 
     window.addEventListener("keydown", onKeyDown, { capture: true });
@@ -584,6 +770,8 @@ export function AnnotateApp() {
     };
   }, [
     exit,
+    isEditing,
+    commitText,
     nextScreen,
     selected.length,
     undo,
@@ -596,9 +784,10 @@ export function AnnotateApp() {
   ]);
 
   const live = drawing.current;
+  const cursor = tool === "select" ? "default" : tool === "text" ? "text" : "crosshair";
 
   return (
-    <div className="fixed inset-0" style={{ cursor: tool === "select" ? "default" : "crosshair" }}>
+    <div className="fixed inset-0" style={{ cursor }}>
       <svg
         className="absolute inset-0 h-full w-full"
         onPointerDown={begin}
@@ -606,18 +795,44 @@ export function AnnotateApp() {
         onPointerUp={finish}
         onPointerCancel={finish}
       >
+        <defs>
+          {/* Text lands on live desktop content, which can be any colour at
+              all. Without a shadow behind it, white on white is invisible. */}
+          <filter id="annotate-text-shadow" x="-30%" y="-30%" width="160%" height="160%">
+            <feDropShadow dx="0" dy="1.5" stdDeviation="2.5" floodColor="#000" floodOpacity="0.55" />
+          </filter>
+        </defs>
+
         {/* A fully transparent hit area: without a painted rect, pointer events
             fall through the SVG and drawing never starts. */}
         <rect width="100%" height="100%" fill="transparent" />
 
-        {strokes.map((s) => (
-          <g key={s.id} onPointerDown={(e) => grab(e, s.id)} style={{ cursor: "move" }}>
-            {/* An invisible fat copy underneath, so a 2px line is grabbable
-                without demanding pixel-perfect aim. */}
-            <StrokeShape stroke={s} hitArea />
-            <StrokeShape stroke={s} />
-          </g>
-        ))}
+        {/* The stroke being retyped is hidden — the text box itself is
+            standing in for it, in the same place and the same font. */}
+        {strokes
+          .filter((s) => s.id !== editing?.id)
+          .map((s) => (
+            <g
+              key={s.id}
+              onPointerDown={(e) => grab(e, s.id)}
+              onDoubleClick={() => {
+                if (s.tool !== "text") return;
+                editText({
+                  id: s.id,
+                  at: s.points[0],
+                  color: s.color,
+                  size: s.width,
+                  text: s.text ?? "",
+                });
+              }}
+              style={{ cursor: "move" }}
+            >
+              {/* An invisible fat copy underneath, so a 2px line is grabbable
+                  without demanding pixel-perfect aim. */}
+              <StrokeShape stroke={s} hitArea />
+              <StrokeShape stroke={s} />
+            </g>
+          ))}
 
         {live && <StrokeShape stroke={live} />}
 
@@ -660,6 +875,15 @@ export function AnnotateApp() {
         )}
       </svg>
 
+      {editing && (
+        <TextBox
+          key={editing.id}
+          draft={editing}
+          onChange={(text) => setEditing((d) => (d ? { ...d, text } : d))}
+          onCommit={commitText}
+        />
+      )}
+
       <Toolbar
         layout={layout}
         dock={dock}
@@ -699,6 +923,39 @@ function StrokeShape({ stroke, hitArea = false }: { stroke: Stroke; hitArea?: bo
 
   const paint = hitArea ? "transparent" : color;
   const thickness = hitArea ? Math.max(width, HIT_WIDTH) : width;
+
+  if (tool === "text") {
+    const origin = points[0];
+    const m = measureText(stroke.text ?? "", width);
+
+    // The one shape whose interior is genuinely part of it, so unlike an
+    // unfilled rectangle the whole box is grabbable rather than just an edge.
+    if (hitArea) {
+      return (
+        <rect x={origin.x} y={origin.y} width={m.width} height={m.height} fill="transparent" />
+      );
+    }
+
+    return (
+      <text
+        x={origin.x + TEXT_PADDING}
+        y={origin.y + TEXT_PADDING}
+        fill={color}
+        filter="url(#annotate-text-shadow)"
+        style={{ font: fontFor(width), whiteSpace: "pre" }}
+      >
+        {m.lines.map((line, i) => (
+          <tspan
+            key={i}
+            x={origin.x + TEXT_PADDING}
+            dy={i === 0 ? m.lineHeight * 0.8 : m.lineHeight}
+          >
+            {line || " "}
+          </tspan>
+        ))}
+      </text>
+    );
+  }
 
   if (tool === "pen" || tool === "highlight") {
     const d = points.map((p, i) => `${i === 0 ? "M" : "L"} ${p.x} ${p.y}`).join(" ");
@@ -761,6 +1018,82 @@ function StrokeShape({ stroke, hitArea = false }: { stroke: Stroke; hitArea?: bo
       fill="none"
       stroke={paint}
       strokeWidth={thickness}
+    />
+  );
+}
+
+/**
+ * The text box, mounted over the spot that was clicked.
+ *
+ * A real `<textarea>` rather than anything hand-rolled, so the caret, selection
+ * and system text shortcuts all behave the way they do everywhere else. It is
+ * styled to match the `<text>` it will become, which is what makes committing
+ * look like nothing happened.
+ */
+function TextBox({
+  draft,
+  onChange,
+  onCommit,
+}: {
+  draft: Draft;
+  onChange: (text: string) => void;
+  onCommit: () => void;
+}) {
+  const ref = useRef<HTMLTextAreaElement>(null);
+  const mountedAt = useRef(Date.now());
+
+  useEffect(() => {
+    ref.current?.focus();
+    ref.current?.select();
+  }, []);
+
+  /**
+   * Ignore a blur landing in the same beat as mounting.
+   *
+   * Belt and braces alongside the `preventDefault` on the click that creates
+   * the box: a stray focus shift here would silently discard a brand-new empty
+   * one, which looks exactly like the text tool being broken.
+   */
+  const onBlur = () => {
+    if (Date.now() - mountedAt.current < 250) {
+      ref.current?.focus();
+      return;
+    }
+    onCommit();
+  };
+
+  const m = measureText(draft.text, draft.size);
+
+  return (
+    <textarea
+      ref={ref}
+      value={draft.text}
+      spellCheck={false}
+      onChange={(e) => onChange(e.target.value)}
+      onBlur={onBlur}
+      onKeyDown={(e) => {
+        // Enter inserts a newline, since a callout is often more than one
+        // line, so ⌘⏎ is the explicit "I'm done" gesture. Escape does the
+        // same but is caught upstairs — WKWebView eats the key-down.
+        if (e.key === "Enter" && e.metaKey) {
+          e.preventDefault();
+          onCommit();
+        }
+      }}
+      className="absolute resize-none overflow-hidden border-none bg-transparent p-0 outline-none"
+      style={{
+        left: draft.at.x,
+        top: draft.at.y,
+        color: draft.color,
+        font: fontFor(draft.size),
+        lineHeight: 1.3,
+        padding: TEXT_PADDING,
+        width: Math.max(m.width, draft.size * 3),
+        height: m.height,
+        caretColor: draft.color,
+        textShadow: "0 1px 3px rgba(0,0,0,0.55)",
+        outline: "1px dashed var(--color-accent)",
+      }}
     />
   );
 }
@@ -910,7 +1243,7 @@ function Toolbar({
             key={t.id}
             type="button"
             aria-label={t.label}
-            title={`${t.label} (${t.key})`}
+            title={t.hint ? `${t.label} (${t.key}) — ${t.hint}` : `${t.label} (${t.key})`}
             onClick={() => setTool(t.id)}
             className={clsx(
               "grid h-[30px] w-[30px] place-items-center rounded-lg transition-colors duration-100",
@@ -952,7 +1285,7 @@ function Toolbar({
           max={24}
           value={width}
           onChange={(e) => setWidth(Number(e.target.value))}
-          title="Stroke width ( [ and ] )"
+          title="Stroke width, or text size ( [ and ] )"
           className="w-20 accent-[var(--color-accent)]"
         />
 
