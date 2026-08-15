@@ -123,6 +123,7 @@ pub fn run() {
             annotate::annotate_beat,
             annotate::annotate_click_through,
             annotate::annotate_screens,
+            annotate::annotate_layout,
             annotate::annotate_move,
         ])
         .setup(|app| {

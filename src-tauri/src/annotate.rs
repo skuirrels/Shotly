@@ -230,6 +230,43 @@ fn watch(app: &AppHandle) {
     });
 }
 
+/// The part of the overlay the menu bar and Dock are not sitting on top of,
+/// in CSS pixels relative to the window's own top-left.
+///
+/// The window covers the whole display on purpose — you have to be able to draw
+/// over every pixel of it — but the toolbar must not be under the menu bar or
+/// behind the Dock, where it is unreachable. macOS already knows where those
+/// are; this hands that answer to the page.
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AnnotateLayout {
+    pub left: f64,
+    pub top: f64,
+    pub width: f64,
+    pub height: f64,
+}
+
+#[tauri::command]
+pub fn annotate_layout(app: AppHandle) -> Result<AnnotateLayout, String> {
+    let window = app.get_webview_window(LABEL).ok_or("annotation layer is not open")?;
+    let monitor = window
+        .current_monitor()
+        .map_err(|e| e.to_string())?
+        .ok_or("the overlay is not on any display")?;
+
+    // Everything here is physical; the page thinks in CSS pixels.
+    let scale = monitor.scale_factor();
+    let origin = monitor.position();
+    let work = monitor.work_area();
+
+    Ok(AnnotateLayout {
+        left: (work.position.x - origin.x) as f64 / scale,
+        top: (work.position.y - origin.y) as f64 / scale,
+        width: work.size.width as f64 / scale,
+        height: work.size.height as f64 / scale,
+    })
+}
+
 /// One entry in the overlay's screen picker.
 #[derive(Debug, Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]

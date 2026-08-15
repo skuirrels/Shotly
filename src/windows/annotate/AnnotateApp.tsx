@@ -44,6 +44,33 @@ interface Stroke {
 }
 
 const HEARTBEAT_MS = 1000;
+/** Mirrors `AnnotateLayout` in `src-tauri/src/annotate.rs`. */
+interface Layout {
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+}
+
+const DOCK_KEY = "shotly.annotateToolbar";
+
+/** Bottom centre of the usable area, until the user drags it elsewhere. */
+const DEFAULT_DOCK = { x: 0.5, y: 1 };
+
+function storedDock(): { x: number; y: number } {
+  try {
+    const raw = localStorage.getItem(DOCK_KEY);
+    if (!raw) return DEFAULT_DOCK;
+    const parsed = JSON.parse(raw) as { x: number; y: number };
+    if (typeof parsed?.x !== "number" || typeof parsed?.y !== "number") return DEFAULT_DOCK;
+    return { x: clamp01(parsed.x), y: clamp01(parsed.y) };
+  } catch {
+    return DEFAULT_DOCK;
+  }
+}
+
+const clamp01 = (n: number) => Math.max(0, Math.min(1, n));
+
 /** Mirrors `AnnotateScreen` in `src-tauri/src/annotate.rs`. */
 interface Screen {
   id: number;
@@ -72,6 +99,16 @@ export function AnnotateApp() {
   const [, force] = useState(0);
   /** Displays this overlay can sit on. One entry means no picker is shown. */
   const [screens, setScreens] = useState<Screen[]>([]);
+  /** The area not covered by the menu bar or the Dock. */
+  const [layout, setLayout] = useState<Layout | null>(null);
+  /**
+   * Where the user has dragged the toolbar, as a fraction of the usable area.
+   *
+   * Stored as a fraction rather than pixels so it survives moving to a screen
+   * of a different size — a position 40px from the bottom of a laptop display
+   * is not the same place on a 5K panel.
+   */
+  const [dock, setDock] = useState<{ x: number; y: number }>(storedDock);
 
   const exit = useCallback(() => void invoke("annotate_stop"), []);
 
@@ -82,7 +119,26 @@ export function AnnotateApp() {
     [],
   );
 
-  useEffect(loadScreens, [loadScreens]);
+  const loadLayout = useCallback(
+    () => void invoke<Layout>("annotate_layout").then(setLayout).catch(() => {}),
+    [],
+  );
+
+  useEffect(() => {
+    loadScreens();
+    loadLayout();
+  }, [loadScreens, loadLayout]);
+
+  const moveToolbar = useCallback((next: { x: number; y: number }) => {
+    const clamped = { x: clamp01(next.x), y: clamp01(next.y) };
+    setDock(clamped);
+    try {
+      localStorage.setItem(DOCK_KEY, JSON.stringify(clamped));
+    } catch {
+      // A full or disabled store costs the memory of where the toolbar was,
+      // and nothing else. Not worth interrupting a screen share over.
+    }
+  }, []);
 
   /**
    * Hop to the next display, wrapping round.
@@ -97,8 +153,14 @@ export function AnnotateApp() {
     if (screens.length < 2) return;
     const at = screens.findIndex((s) => s.isCurrent);
     const target = screens[(at + 1) % screens.length];
-    void invoke("annotate_move", { displayId: target.id }).then(loadScreens).catch(() => {});
-  }, [screens, loadScreens]);
+    void invoke("annotate_move", { displayId: target.id })
+      .then(() => {
+        loadScreens();
+        // The new screen has its own size, and its own menu bar and Dock.
+        loadLayout();
+      })
+      .catch(() => {});
+  }, [screens, loadScreens, loadLayout]);
 
   useEffect(() => {
     // Two frames: enough for the browser to have actually painted, so Rust is
@@ -229,6 +291,9 @@ export function AnnotateApp() {
       </svg>
 
       <Toolbar
+        layout={layout}
+        dock={dock}
+        onDock={moveToolbar}
         screens={screens}
         onNextScreen={nextScreen}
         tool={tool}
@@ -315,7 +380,18 @@ function StrokeShape({ stroke }: { stroke: Stroke }) {
   );
 }
 
+/**
+ * The toolbar, floating inside the usable area and draggable by its grip.
+ *
+ * It has to be movable: it is opaque chrome sitting on top of whatever is being
+ * demonstrated, so wherever it defaults to will sometimes be exactly the thing
+ * the viewer needs to see. Position is kept as a fraction of the usable area so
+ * it lands somewhere sensible after a move to a differently sized screen.
+ */
 function Toolbar({
+  layout,
+  dock,
+  onDock,
   screens,
   onNextScreen,
   tool,
@@ -329,6 +405,9 @@ function Toolbar({
   onClear,
   onExit,
 }: {
+  layout: Layout | null;
+  dock: { x: number; y: number };
+  onDock: (next: { x: number; y: number }) => void;
   screens: Screen[];
   onNextScreen: () => void;
   tool: Tool;
@@ -343,16 +422,95 @@ function Toolbar({
   onExit: () => void;
 }) {
   const current = screens.find((s) => s.isCurrent);
+  const bar = useRef<HTMLDivElement>(null);
+
+  /**
+   * Drag from the grip.
+   *
+   * Pointer capture rather than window listeners: the overlay sits above every
+   * other app, and a drag that ran off the edge would otherwise keep receiving
+   * moves from a surface it no longer owns.
+   */
+  const startDrag = (e: React.PointerEvent) => {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    e.stopPropagation();
+
+    // Captured up front: React nulls `currentTarget` once dispatch returns, so
+    // the handlers below would otherwise be reaching for nothing.
+    const handle = e.currentTarget as HTMLElement;
+    const area = layout ?? {
+      left: 0,
+      top: 0,
+      width: window.innerWidth,
+      height: window.innerHeight,
+    };
+    const size = bar.current?.getBoundingClientRect();
+    if (!size) return;
+
+    // Free space the toolbar's top-left can range over. `dock` is a fraction
+    // of exactly this, which is what makes 0 and 1 sit flush with the edges.
+    const spanX = Math.max(1, area.width - size.width);
+    const spanY = Math.max(1, area.height - size.height);
+    // Where in the toolbar the grab happened, so it doesn't jump under the
+    // cursor on the first move.
+    const grabX = e.clientX - size.left;
+    const grabY = e.clientY - size.top;
+
+    handle.setPointerCapture(e.pointerId);
+
+    const onMove = (move: PointerEvent) => {
+      onDock({
+        x: (move.clientX - grabX - area.left) / spanX,
+        y: (move.clientY - grabY - area.top) / spanY,
+      });
+    };
+    const onUp = () => {
+      handle.removeEventListener("pointermove", onMove);
+      handle.removeEventListener("pointerup", onUp);
+      handle.removeEventListener("pointercancel", onUp);
+    };
+
+    handle.addEventListener("pointermove", onMove);
+    handle.addEventListener("pointerup", onUp);
+    handle.addEventListener("pointercancel", onUp);
+  };
+
+  // Until the usable area is known, fall back to the window itself. Better a
+  // toolbar slightly too low for one frame than one that isn't there at all.
+  const area = layout ?? { left: 0, top: 0, width: window.innerWidth, height: window.innerHeight };
 
   return (
-    // The window covers exactly one display, so the window *is* the surface —
-    // no need to pin the toolbar to a sub-rectangle of it, as was necessary
-    // back when this spanned the whole virtual desktop.
-    <div className="pointer-events-none absolute inset-0 flex items-end justify-center pb-8">
+    <div
+      className="pointer-events-none absolute"
+      style={{ left: area.left, top: area.top, width: area.width, height: area.height }}
+    >
       <div
-        className="surface-float pointer-events-auto flex items-center gap-1 rounded-2xl p-1.5"
-        style={{ cursor: "default" }}
+        ref={bar}
+        className="surface-float pointer-events-auto absolute flex items-center gap-1 rounded-2xl p-1.5"
+        style={{
+          cursor: "default",
+          // Percentage offset paired with an equal negative self-translate:
+          // at 0 the toolbar is flush left, at 1 flush right, at 0.5 centred.
+          // That makes `dock` a fraction of the free space without needing to
+          // know the toolbar's width in CSS.
+          left: `${dock.x * 100}%`,
+          top: `${dock.y * 100}%`,
+          transform: `translate(${-dock.x * 100}%, ${-dock.y * 100}%)`,
+        }}
       >
+        {/* The drag handle. Explicit rather than "drag the background", which
+            is undiscoverable and fights the buttons for the same pointer. */}
+        <button
+          type="button"
+          onPointerDown={startDrag}
+          title="Drag to move the toolbar"
+          aria-label="Move the toolbar"
+          className="grid h-[30px] w-[18px] shrink-0 cursor-grab place-items-center rounded-lg text-ink-4 hover:bg-hover hover:text-ink-2 active:cursor-grabbing"
+        >
+          <GripGlyph />
+        </button>
+
         {TOOLS.map((t) => (
           <button
             key={t.id}
@@ -457,6 +615,16 @@ function Toolbar({
         </button>
       </div>
     </div>
+  );
+}
+
+function GripGlyph() {
+  return (
+    <svg width="10" height="16" viewBox="0 0 10 16" fill="currentColor" aria-hidden="true">
+      {[4, 8, 12].flatMap((y) =>
+        [2, 7].map((x) => <circle key={`${x}-${y}`} cx={x} cy={y} r="1.1" />),
+      )}
+    </svg>
   );
 }
 
