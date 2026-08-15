@@ -1,4 +1,5 @@
 mod annotate;
+mod build_info;
 mod capture;
 mod commands;
 mod highlight;
@@ -9,7 +10,7 @@ mod update;
 use capture::cli::ScreencaptureCli;
 use commands::{AppState, CaptureMode};
 use std::sync::Mutex;
-use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
+use tauri::menu::{AboutMetadata, Menu, MenuItem, MenuItemKind, PredefinedMenuItem};
 use tauri::tray::TrayIconBuilder;
 use tauri::{Manager, WindowEvent};
 
@@ -140,6 +141,12 @@ pub fn run() {
                 eprintln!("[shotly] could not register the annotation hotkey: {e}");
             }
 
+            if let Err(e) = build_menu(&handle) {
+                // The default menu stays in place, which costs the build line
+                // in About and nothing else. Not worth refusing to start over.
+                eprintln!("[shotly] could not install the app menu: {e}");
+            }
+
             build_tray(&handle)?;
 
             #[cfg(desktop)]
@@ -165,6 +172,43 @@ pub fn run() {
         })
         .run(tauri::generate_context!())
         .expect("error while running Shotly");
+}
+
+/// Swap the About item for one that says which build is running.
+///
+/// Surgery on the default menu rather than a menu of our own: the default
+/// carries the whole standard set — Services, Hide Others, and an Edit menu
+/// whose Cut/Copy/Paste items are what wire those shortcuts to the webview —
+/// and rebuilding it by hand to change one item would mean owning all of that
+/// for ever. `Menu::default` puts About first in the app submenu.
+fn build_menu(app: &tauri::AppHandle) -> tauri::Result<()> {
+    let menu = Menu::default(app)?;
+
+    if let Some(MenuItemKind::Submenu(app_menu)) = menu.items()?.into_iter().next() {
+        let about = PredefinedMenuItem::about(app, None, Some(about_metadata(app)))?;
+        app_menu.remove_at(0)?;
+        app_menu.insert(&about, 0)?;
+    }
+
+    app.set_menu(menu)?;
+    Ok(())
+}
+
+/// What the standard About panel shows.
+///
+/// The two version fields read backwards from their names: macOS renders
+/// `version` as the marketing version and `short_version` as the build number
+/// in parentheses. So "Version 0.1.6 (release)" — the slot where an Apple app
+/// would put a build number is exactly the right place for which build this is.
+fn about_metadata(app: &tauri::AppHandle) -> AboutMetadata<'_> {
+    AboutMetadata {
+        name: Some("Shotly".into()),
+        version: Some(app.package_info().version.to_string()),
+        short_version: Some(build_info::PROFILE.into()),
+        credits: Some(build_info::summary(app)),
+        copyright: app.config().bundle.copyright.clone(),
+        ..Default::default()
+    }
 }
 
 fn build_tray(app: &tauri::AppHandle) -> tauri::Result<()> {
