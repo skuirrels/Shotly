@@ -260,23 +260,33 @@ export function EditorApp() {
     return false;
   }, [notify]);
 
-  /** Copy the library selection — images and files both, see `ipc`. */
-  const copyPicked = useCallback(async () => {
-    if (busy) return;
-    if (picked.length === 0) {
-      notify("Select a capture first — click one, or ⌘-click several", "error", 2600);
-      return;
-    }
-    setBusy("copy");
-    try {
-      await ipc.copyFilesToClipboard(picked);
-      notify(picked.length === 1 ? "Copied to clipboard" : `Copied ${picked.length} captures`);
-    } catch (e) {
-      notify(`Copy failed: ${e}`, "error");
-    } finally {
-      setBusy(null);
-    }
-  }, [busy, picked, notify]);
+  /**
+   * Copy captures — images and files both, see `ipc`.
+   *
+   * Takes its paths explicitly rather than reading the selection, because the
+   * library's right-click menu can target a capture that was never selected.
+   */
+  const copyPaths = useCallback(
+    async (paths: string[]) => {
+      if (busy) return;
+      if (paths.length === 0) {
+        notify("Select a capture first — click one, or ⌘-click several", "error", 2600);
+        return;
+      }
+      setBusy("copy");
+      try {
+        await ipc.copyFilesToClipboard(paths);
+        notify(paths.length === 1 ? "Copied to clipboard" : `Copied ${paths.length} captures`);
+      } catch (e) {
+        notify(`Copy failed: ${e}`, "error");
+      } finally {
+        setBusy(null);
+      }
+    },
+    [busy, notify],
+  );
+
+  const copyPicked = useCallback(() => copyPaths(picked), [copyPaths, picked]);
 
   /**
    * Move captures to the Trash, after asking.
@@ -866,8 +876,15 @@ export function EditorApp() {
           // the empty space below a short library counts too.
           <div
             className="flex flex-1 flex-col items-center overflow-y-auto bg-inset px-8 pt-7 pb-7"
+            // The context menu is portalled to <body>, but React still bubbles
+            // its clicks through the React tree — so it has to be excluded
+            // here, or choosing "Copy 3 captures" would clear the selection
+            // out from under the action.
             onClick={(e) => {
-              if (!(e.target as HTMLElement).closest("[data-capture-card]")) setPicked([]);
+              const el = e.target as HTMLElement;
+              if (!el.closest("[data-capture-card]") && !el.closest("[data-context-menu]")) {
+                setPicked([]);
+              }
             }}
           >
             <div className="w-full max-w-[1100px]">
@@ -876,6 +893,8 @@ export function EditorApp() {
             <Library
               refreshKey={libraryKey}
               onOpen={openPath}
+              onCopy={(paths) => void copyPaths(paths)}
+              onDelete={(paths) => void deleteCaptures(paths)}
               onError={reportError}
               empty={<EmptyLibrary />}
               selected={picked}

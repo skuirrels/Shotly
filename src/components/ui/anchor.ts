@@ -25,6 +25,25 @@ export interface Placement {
 }
 
 /**
+ * Place a floating panel at a point — a context menu at the cursor.
+ *
+ * Unlike `placeAgainst` there is nothing to flip around: the menu simply hangs
+ * down and right from the pointer, and slides back inside the window when it
+ * would otherwise overhang. Sliding rather than flipping keeps the first item
+ * under the cursor, which is where the hand already is.
+ */
+export function placeAtPoint(
+  point: { x: number; y: number },
+  panel: { width: number; height: number },
+): Placement {
+  const margin = 8;
+  return {
+    x: Math.max(margin, Math.min(point.x, window.innerWidth - panel.width - margin)),
+    y: Math.max(margin, Math.min(point.y, window.innerHeight - panel.height - margin)),
+  };
+}
+
+/**
  * Place a floating panel against an anchor, kept inside the viewport.
  *
  * Flips above the anchor when there isn't room below — Shotly's tool palette

@@ -1,12 +1,17 @@
 import { type ReactNode, useCallback, useEffect, useRef, useState } from "react";
 import clsx from "clsx";
-import { IconFolder, IconTrash } from "@/components/icons";
+import { IconCopy, IconFolder, IconImage, IconTrash } from "@/components/icons";
+import { ContextMenu, type MenuEntry } from "@/components/ui/ContextMenu";
 import { Tooltip } from "@/components/ui/Tooltip";
 import * as ipc from "@/lib/ipc";
 import type { LibraryItem } from "@/lib/types";
 
 interface Props {
   onOpen: (path: string) => void;
+  /** Copy captures to the clipboard. Confirms nothing; see `onDelete`. */
+  onCopy: (paths: string[]) => void;
+  /** Move captures to the Trash. Asks first — this can act on a whole selection. */
+  onDelete: (paths: string[]) => void;
   /** Bumping this forces a reload — e.g. after a save. */
   refreshKey: number;
   onError: (message: string) => void;
@@ -28,6 +33,8 @@ interface Props {
  */
 export function Library({
   onOpen,
+  onCopy,
+  onDelete,
   refreshKey,
   onError,
   empty,
@@ -40,6 +47,10 @@ export function Library({
   const anchor = useRef<string | null>(null);
   /** Ticket of the newest listing, so a slow earlier one can't win. */
   const request = useRef(0);
+  /** Open right-click menu: where it is, and what it acts on. */
+  const [menu, setMenu] = useState<{ at: { x: number; y: number }; targets: string[] } | null>(
+    null,
+  );
 
   const reload = useCallback(() => {
     // Reloads overlap — a focus event and a post-delete refresh can be in
@@ -133,6 +144,49 @@ export function Library({
     onSelect([item.path]);
   };
 
+  /**
+   * Right-click, with Finder's rule: a capture already in the selection opens a
+   * menu for the whole selection, one outside it takes over the selection first.
+   *
+   * That rule is what makes "delete these three" possible — without it, the
+   * right-click needed to reach the menu would have thrown the selection away
+   * before the menu could act on it.
+   */
+  const openMenu = (item: LibraryItem, at: { x: number; y: number }) => {
+    const inSelection = selected.includes(item.path);
+    if (!inSelection) {
+      anchor.current = item.path;
+      onSelect([item.path]);
+    }
+    setMenu({ at, targets: inSelection ? selected : [item.path] });
+  };
+
+  const menuItems = (targets: string[]): (MenuEntry | false)[] => {
+    const many = targets.length > 1;
+    return [
+      // Open and Reveal are single-capture actions: there is one editor pane,
+      // and revealing several would spray Finder windows across the screen.
+      !many && { label: "Open", icon: <IconImage />, run: () => onOpen(targets[0]) },
+      {
+        label: many ? `Copy ${targets.length} captures` : "Copy",
+        icon: <IconCopy />,
+        run: () => onCopy(targets),
+      },
+      !many && {
+        label: "Show in Finder",
+        icon: <IconFolder />,
+        run: () => void ipc.revealInFinder(targets[0]),
+      },
+      "separator" as const,
+      {
+        label: many ? `Move ${targets.length} captures to Trash` : "Move to Trash",
+        icon: <IconTrash />,
+        danger: true,
+        run: () => onDelete(targets),
+      },
+    ];
+  };
+
   // `null` is "not read yet" — rendering the empty hero here would flash it on
   // every visit to a library that turns out to be full.
   if (items === null) return null;
@@ -178,9 +232,14 @@ export function Library({
             onChoose={choose}
             onOpen={onOpen}
             onTrash={trash}
+            onMenu={openMenu}
           />
         ))}
       </ul>
+
+      {menu && (
+        <ContextMenu at={menu.at} items={menuItems(menu.targets)} onClose={() => setMenu(null)} />
+      )}
     </section>
   );
 }
@@ -191,12 +250,14 @@ function LibraryCard({
   onChoose,
   onOpen,
   onTrash,
+  onMenu,
 }: {
   item: LibraryItem;
   selected: boolean;
   onChoose: (item: LibraryItem, modifiers: { meta: boolean; shift: boolean }) => void;
   onOpen: (path: string) => void;
   onTrash: (item: LibraryItem) => void;
+  onMenu: (item: LibraryItem, at: { x: number; y: number }) => void;
 }) {
   const [thumb, setThumb] = useState<string | null>(null);
   const [failed, setFailed] = useState(false);
@@ -217,7 +278,16 @@ function LibraryCard({
 
   return (
     // Tagged so a click anywhere else in the pane can clear the selection.
-    <li data-capture-card className="group relative">
+    // The context handler sits on the whole card rather than the button, so
+    // right-clicking the hover actions in the corner opens the menu too.
+    <li
+      data-capture-card
+      className="group relative"
+      onContextMenu={(e) => {
+        e.preventDefault();
+        onMenu(item, { x: e.clientX, y: e.clientY });
+      }}
+    >
       <button
         type="button"
         aria-pressed={selected}
