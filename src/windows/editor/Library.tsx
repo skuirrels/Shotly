@@ -5,6 +5,8 @@ import { ContextMenu, type MenuEntry } from "@/components/ui/ContextMenu";
 import { Tooltip } from "@/components/ui/Tooltip";
 import * as ipc from "@/lib/ipc";
 import type { LibraryItem } from "@/lib/types";
+import { formatSize, formatWhen } from "./format";
+import { useThumbnail } from "./thumbnails";
 
 interface Props {
   onOpen: (path: string) => void;
@@ -259,22 +261,7 @@ function LibraryCard({
   onTrash: (item: LibraryItem) => void;
   onMenu: (item: LibraryItem, at: { x: number; y: number }) => void;
 }) {
-  const [thumb, setThumb] = useState<string | null>(null);
-  const [failed, setFailed] = useState(false);
-
-  useEffect(() => {
-    let cancelled = false;
-    void ipc
-      .libraryThumbnail(item.path)
-      .then((p) => !cancelled && setThumb(ipc.assetUrl(p)))
-      .catch(() => !cancelled && setFailed(true));
-    return () => {
-      cancelled = true;
-    };
-    // `modified` matters as much as the path: the thumbnail cache is keyed on
-    // mtime, so re-saving a capture yields a *new* thumbnail file. Without this
-    // the card keeps showing the version from before you annotated it.
-  }, [item.path, item.modified]);
+  const { url: thumb, failed } = useThumbnail(item.path, item.modified);
 
   return (
     // Tagged so a click anywhere else in the pane can clear the selection.
@@ -360,25 +347,3 @@ function LibraryCard({
   );
 }
 
-function formatSize(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
-  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
-}
-
-function formatWhen(ms: number): string {
-  if (!ms) return "";
-  const date = new Date(ms);
-  const now = new Date();
-  const sameDay = date.toDateString() === now.toDateString();
-
-  if (sameDay) {
-    return date.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
-  }
-  const thisYear = date.getFullYear() === now.getFullYear();
-  return date.toLocaleDateString(undefined, {
-    day: "numeric",
-    month: "short",
-    ...(thisYear ? {} : { year: "numeric" }),
-  });
-}
