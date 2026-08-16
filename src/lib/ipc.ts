@@ -1,5 +1,12 @@
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
-import type { CaptureMode, CaptureResult, LibraryItem, WindowInfo } from "./types";
+import type {
+  CaptureMode,
+  CaptureResult,
+  HotkeyAction,
+  HotkeyBinding,
+  LibraryItem,
+  WindowInfo,
+} from "./types";
 
 /** Turn a Frame's absolute path into something an <img> can load. */
 export function assetUrl(path: string): string {
@@ -104,3 +111,17 @@ export const hideEditor = () => invoke<void>("hide_editor");
 
 /** Toggle the live screen-annotation layer. */
 export const annotateToggle = () => invoke<void>("annotate_toggle");
+
+/** The system-wide hotkeys, as they are registered right now. */
+export const hotkeysList = () => invoke<HotkeyBinding[]>("hotkeys_list");
+
+/**
+ * Rebind one hotkey, or pass `null` to switch it off.
+ *
+ * Takes effect immediately — no restart. Rejects if the combination cannot be
+ * parsed, is already another action's, or the system refuses it outright.
+ */
+export const hotkeysSet = (action: HotkeyAction, accelerator: string | null) =>
+  invoke<void>("hotkeys_set", { action, accelerator });
+
+export const hotkeysReset = () => invoke<void>("hotkeys_reset");

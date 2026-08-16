@@ -3,6 +3,7 @@ mod build_info;
 mod capture;
 mod commands;
 mod highlight;
+mod hotkeys;
 mod markup;
 mod platform;
 mod update;
@@ -15,44 +16,9 @@ use tauri::tray::TrayIconBuilder;
 use tauri::{Manager, WindowEvent};
 
 #[cfg(desktop)]
-use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState};
-
-/// System-wide hotkeys.
-///
-/// Deliberately on Ctrl+Shift rather than Cmd+Shift: macOS already owns
-/// Cmd+Shift+3/4/5 for its own screenshot tools, and silently stealing them
-/// would be hostile. Users who want them can rebind in Settings.
+use hotkeys::Action;
 #[cfg(desktop)]
-fn shortcuts() -> [(Shortcut, CaptureMode); 3] {
-    let mods = Modifiers::CONTROL | Modifiers::SHIFT;
-    [
-        (Shortcut::new(Some(mods), Code::Digit4), CaptureMode::Region),
-        (Shortcut::new(Some(mods), Code::Digit5), CaptureMode::Window),
-        (Shortcut::new(Some(mods), Code::Digit3), CaptureMode::Fullscreen),
-    ]
-}
-
-/// Toggles live screen annotation.
-///
-/// Owned by Rust rather than the annotation page, so it keeps working even if
-/// that page has died — this is the escape hatch of last resort for a
-/// full-screen window that accepts the mouse.
-#[cfg(desktop)]
-fn annotate_shortcut() -> Shortcut {
-    Shortcut::new(Some(Modifiers::CONTROL | Modifiers::SHIFT), Code::KeyA)
-}
-
-/// Steps in and out of drawing without packing the drawings away.
-///
-/// Also owned by Rust, and for a sharper reason than the one above: while the
-/// layer is letting clicks past, the pointer belongs to another app entirely
-/// and the annotation page may never see a key again. This is the way back.
-#[cfg(desktop)]
-fn interact_shortcut() -> Shortcut {
-    // Not Ctrl-Shift-S: Snagit claims that one, and a hotkey the machine
-    // already answers with someone else's window is no way back at all.
-    Shortcut::new(Some(Modifiers::CONTROL | Modifiers::SHIFT), Code::KeyD)
-}
+use tauri_plugin_global_shortcut::ShortcutState;
 
 fn dispatch(app: &tauri::AppHandle, mode: CaptureMode) {
     let result = match mode {
@@ -85,24 +51,33 @@ pub fn run() {
                     if event.state() != ShortcutState::Pressed {
                         return;
                     }
-                    eprintln!("[annotate] hotkey fired: {shortcut:?}");
-                    if shortcut == &annotate_shortcut() {
-                        if let Err(err) = annotate::toggle(app) {
-                            eprintln!("[shotly] annotation toggle failed: {err}");
-                        }
+                    let Some(action) = hotkeys::resolve(app, shortcut) else {
                         return;
-                    }
-                    if shortcut == &interact_shortcut() {
-                        // The page owns the decision — it knows whether it is
+                    };
+
+                    // Said out loud before it is acted on, so the settings list
+                    // can show that the key arrived even when the action it
+                    // triggers is invisible from there.
+                    hotkeys::announce(app, action);
+
+                    match action {
+                        Action::Region => dispatch(app, CaptureMode::Region),
+                        Action::Window => dispatch(app, CaptureMode::Window),
+                        Action::Fullscreen => dispatch(app, CaptureMode::Fullscreen),
+                        Action::Annotate => {
+                            if let Err(err) = annotate::toggle(app) {
+                                eprintln!("[shotly] annotation toggle failed: {err}");
+                            }
+                        }
+                        // The page owns this decision — it knows whether it is
                         // already letting clicks past, and where its toolbar
                         // has been dragged to. A layer that has stopped
-                        // answering simply doesn't toggle, and Ctrl-Shift-A
-                        // remains the way out of that.
-                        let _ = tauri::Emitter::emit_to(app, annotate::LABEL, "annotate:interact", ());
-                        return;
-                    }
-                    if let Some((_, mode)) = shortcuts().iter().find(|(s, _)| s == shortcut) {
-                        dispatch(app, *mode);
+                        // answering simply doesn't toggle, and the annotate
+                        // hotkey remains the way out of that.
+                        Action::Interact => {
+                            let _ =
+                                tauri::Emitter::emit_to(app, annotate::LABEL, "annotate:interact", ());
+                        }
                     }
                 })
                 .build(),
@@ -115,6 +90,7 @@ pub fn run() {
             hid_editor: Mutex::new(false),
         })
         .manage(annotate::AnnotateState::default())
+        .manage(hotkeys::HotkeyState::default())
         .invoke_handler(tauri::generate_handler![
             commands::capture_permission_status,
             commands::request_capture_permission,
@@ -141,6 +117,9 @@ pub fn run() {
             commands::hide_editor,
             update::check_for_updates,
             update::pending_update,
+            hotkeys::hotkeys_list,
+            hotkeys::hotkeys_set,
+            hotkeys::hotkeys_reset,
             annotate::annotate_toggle,
             annotate::annotate_stop,
             annotate::annotate_ready,
@@ -156,19 +135,7 @@ pub fn run() {
             let handle = app.handle().clone();
 
             #[cfg(desktop)]
-            for (shortcut, _) in shortcuts() {
-                if let Err(e) = app.global_shortcut().register(shortcut) {
-                    eprintln!("[shotly] could not register {shortcut:?}: {e}");
-                }
-            }
-            #[cfg(desktop)]
-            if let Err(e) = app.global_shortcut().register(annotate_shortcut()) {
-                eprintln!("[shotly] could not register the annotation hotkey: {e}");
-            }
-            #[cfg(desktop)]
-            if let Err(e) = app.global_shortcut().register(interact_shortcut()) {
-                eprintln!("[shotly] could not register the interact hotkey: {e}");
-            }
+            hotkeys::install(&handle);
 
             if let Err(e) = build_menu(&handle) {
                 // The default menu stays in place, which costs the build line
@@ -240,21 +207,57 @@ fn about_metadata(app: &tauri::AppHandle) -> AboutMetadata<'_> {
     }
 }
 
-fn build_tray(app: &tauri::AppHandle) -> tauri::Result<()> {
-    let region = MenuItem::with_id(app, "region", "Capture Region", true, Some("Ctrl+Shift+4"))?;
-    let window = MenuItem::with_id(app, "window", "Capture Window", true, Some("Ctrl+Shift+5"))?;
-    let screen = MenuItem::with_id(app, "screen", "Capture Screen", true, Some("Ctrl+Shift+3"))?;
+/// The tray menu, with whatever hotkeys are in force written beside its items.
+///
+/// Built separately from the tray itself so a rebind can replace it — a menu
+/// still advertising Ctrl-Shift-D after the user has moved that key somewhere
+/// else is worse than no hint at all.
+fn tray_menu(app: &tauri::AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
+    let accel = |action: Action| {
+        hotkeys::hotkeys_list(app.clone())
+            .into_iter()
+            .find(|b| b.action == action)
+            .and_then(|b| b.accelerator)
+    };
+
+    let region =
+        MenuItem::with_id(app, "region", "Capture Region", true, accel(Action::Region))?;
+    let window =
+        MenuItem::with_id(app, "window", "Capture Window", true, accel(Action::Window))?;
+    let screen =
+        MenuItem::with_id(app, "screen", "Capture Screen", true, accel(Action::Fullscreen))?;
     let annotate =
-        MenuItem::with_id(app, "annotate", "Annotate Screen", true, Some("Ctrl+Shift+A"))?;
+        MenuItem::with_id(app, "annotate", "Annotate Screen", true, accel(Action::Annotate))?;
     let stop = MenuItem::with_id(app, "stop-annotate", "Exit Annotation Mode", true, None::<&str>)?;
     let updates = MenuItem::with_id(app, "update", "Check for Updates…", true, None::<&str>)?;
     let sep = PredefinedMenuItem::separator(app)?;
     let quit = MenuItem::with_id(app, "quit", "Quit Shotly", true, Some("Cmd+Q"))?;
 
-    let menu = Menu::with_items(
+    Menu::with_items(
         app,
         &[&region, &window, &screen, &sep, &annotate, &stop, &sep, &updates, &quit],
-    )?;
+    )
+}
+
+/// Put the current hotkeys back into the tray menu, after a rebind.
+pub fn refresh_tray(app: &tauri::AppHandle) {
+    let Some(tray) = app.tray_by_id("shotly-tray") else {
+        return;
+    };
+    match tray_menu(app) {
+        // Costs the hint beside the menu item and nothing else, so it is not
+        // worth failing a rebind that has otherwise already worked.
+        Err(e) => eprintln!("[shotly] could not rebuild the tray menu: {e}"),
+        Ok(menu) => {
+            if let Err(e) = tray.set_menu(Some(menu)) {
+                eprintln!("[shotly] could not install the tray menu: {e}");
+            }
+        }
+    }
+}
+
+fn build_tray(app: &tauri::AppHandle) -> tauri::Result<()> {
+    let menu = tray_menu(app)?;
 
     // A dedicated template glyph rather than the app icon. The menu bar renders
     // a template from its alpha channel alone, so handing it the app icon — a

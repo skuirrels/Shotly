@@ -2,6 +2,7 @@ import { Kbd } from "@/components/ui/Kbd";
 import { IconClose } from "@/components/icons";
 import { IconButton } from "@/components/ui/IconButton";
 import type { Command, CommandGroup } from "@/lib/keys/types";
+import { GlobalHotkeys } from "./GlobalHotkeys";
 
 const ORDER: CommandGroup[] = ["Tools", "Edit", "Style", "Arrange", "View", "Capture", "Export"];
 
@@ -52,6 +53,10 @@ export function ShortcutSheet({ commands, onClose }: { commands: Command[]; onCl
         </div>
 
         <div className="grid grid-cols-1 gap-x-8 gap-y-5 overflow-y-auto p-4 sm:grid-cols-2">
+          {/* First, because these are the only ones that are the user's to
+              change — and the only ones another app can quietly steal. */}
+          <GlobalHotkeys />
+
           {groups.map(({ group, items }) => (
             <section key={group}>
               <h3 className="mb-1.5 text-[11px] font-semibold tracking-wider text-ink-4 uppercase">

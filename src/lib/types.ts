@@ -270,3 +270,18 @@ export function movedBy(a: Annotation, dx: number, dy: number): Annotation {
   }
   return { ...a, x: a.x + dx, y: a.y + dy };
 }
+
+// --------------------------------------------------------------- hotkeys
+
+/** Mirrors `Action` in `src-tauri/src/hotkeys.rs`. */
+export type HotkeyAction = "region" | "window" | "fullscreen" | "annotate" | "interact";
+
+/** Mirrors `Binding` in `src-tauri/src/hotkeys.rs`. */
+export interface HotkeyBinding {
+  action: HotkeyAction;
+  label: string;
+  hint: string;
+  /** `null` when the user has switched this hotkey off. */
+  accelerator: string | null;
+  defaultAccelerator: string;
+}
