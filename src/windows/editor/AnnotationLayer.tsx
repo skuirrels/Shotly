@@ -106,7 +106,12 @@ export function AnnotationLayer({
 }
 
 function Shape({ a, doc, hidden }: { a: Annotation; doc: Doc; hidden: boolean }) {
-  if (hidden) return null;
+  // `hidden` means "the text editor is standing in for this one". For a plain
+  // text annotation the editor *is* the whole shape, so it goes; a callout is
+  // a filled box with words on it, and dropping the box would leave you typing
+  // onto the bare screenshot until you committed. Its fill stays, its baked
+  // text does not — the editor supplies that.
+  if (hidden && a.kind !== "callout") return null;
   const shadow = a.style.shadow ? "url(#ann-shadow)" : undefined;
 
   if (isLine(a)) {
@@ -309,19 +314,21 @@ function Shape({ a, doc, hidden }: { a: Annotation; doc: Doc; hidden: boolean })
             rx={Math.min(10, b.width / 2, b.height / 2)}
             fill={a.style.color}
           />
-          <text
-            x={b.x + b.width / 2}
-            textAnchor="middle"
-            dominantBaseline="central"
-            fill={ink}
-            style={{ font: fontFor(a.style.fontSize), pointerEvents: "none" }}
-          >
-            {lines.map((line, i) => (
-              <tspan key={i} x={b.x + b.width / 2} y={first + i * lineHeight}>
-                {line || " "}
-              </tspan>
-            ))}
-          </text>
+          {!hidden && (
+            <text
+              x={b.x + b.width / 2}
+              textAnchor="middle"
+              dominantBaseline="central"
+              fill={ink}
+              style={{ font: fontFor(a.style.fontSize), pointerEvents: "none" }}
+            >
+              {lines.map((line, i) => (
+                <tspan key={i} x={b.x + b.width / 2} y={first + i * lineHeight}>
+                  {line || " "}
+                </tspan>
+              ))}
+            </text>
+          )}
         </g>
       );
     }
