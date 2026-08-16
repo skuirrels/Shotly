@@ -88,10 +88,10 @@ interface CanvasProps {
    * recognising happens in Rust and the result goes to the clipboard and into
    * a panel, none of which is the canvas's business.
    */
-  onGrabText?: (area: Rect | null) => void;
+  onScan?: (area: Rect | null) => void;
 }
 
-export function Canvas({ onNotify, actions, onGrabText }: CanvasProps) {
+export function Canvas({ onNotify, actions, onScan }: CanvasProps) {
   const doc = useEditor((s) => s.doc);
   const annotations = useEditor((s) => s.annotations);
   const selectedIds = useEditor((s) => s.selectedIds);
@@ -598,7 +598,7 @@ export function Canvas({ onNotify, actions, onGrabText }: CanvasProps) {
       // from corner to corner.
       const area = grabbing && grabbing.width > 4 && grabbing.height > 4 ? grabbing : null;
       setGrabbing(null);
-      onGrabText?.(area);
+      onScan?.(area);
       return;
     }
 

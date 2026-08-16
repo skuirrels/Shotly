@@ -125,7 +125,7 @@ pub fn run() {
             backup::backup_settings,
             backup::backup_configure,
             backup::backup_now,
-            ocr::recognize_text,
+            ocr::scan_image,
             pin::pin_open,
             pin::pin_png,
             pin::pin_close,

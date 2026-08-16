@@ -1,8 +1,13 @@
-//! Reading the text back out of a picture of text.
+//! Reading what a picture says: its text, and any code printed in it.
 //!
-//! macOS has done this natively since Monterey, and does it well — the whole
+//! macOS has done both natively since Monterey, and does them well — the whole
 //! job here is handing Vision some pixels and putting what comes back in a
 //! sensible order. No model to ship, no network, nothing leaves the machine.
+//!
+//! Both run on one pass over the same pixels. Vision takes an array of requests
+//! and decodes the image once for all of them, so asking about barcodes as well
+//! as text costs a fraction of what a second call would, and it means the user
+//! never has to decide in advance which of the two they dragged a box around.
 
 use serde::{Deserialize, Serialize};
 
@@ -24,13 +29,31 @@ pub struct TextLine {
     pub confidence: f32,
 }
 
-/// Read the text in an image file, or in one rectangle of it.
+/// A QR code, barcode or similar, and what it had written in it.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Code {
+    /// What the code says. A URL, most of the time.
+    pub payload: String,
+    /// "QR", "Aztec", "Code128" — Vision's own name, with its prefix trimmed.
+    pub symbology: String,
+}
+
+/// Everything one look at the pixels turned up.
+#[derive(Debug, Serialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct Scan {
+    pub lines: Vec<TextLine>,
+    pub codes: Vec<Code>,
+}
+
+/// Read what an image says, or what one rectangle of it says.
 ///
 /// The path rather than the bytes: a full-screen retina capture is around
 /// 8 MB, and marshalling that through the IPC bridge as a JSON array of
 /// numbers costs more than the recognition does.
 #[tauri::command]
-pub fn recognize_text(path: String, region: Option<Region>) -> Result<Vec<TextLine>, String> {
+pub fn scan_image(path: String, region: Option<Region>) -> Result<Scan, String> {
     let png = crop_to_png(&path, region)?;
     read(&png)
 }
@@ -69,12 +92,13 @@ fn crop_to_png(path: &str, region: Option<Region>) -> Result<Vec<u8>, String> {
 }
 
 #[cfg(target_os = "macos")]
-fn read(png: &[u8]) -> Result<Vec<TextLine>, String> {
+fn read(png: &[u8]) -> Result<Scan, String> {
     use objc2::rc::Retained;
     use objc2::AnyThread;
     use objc2_foundation::{NSArray, NSData, NSDictionary};
     use objc2_vision::{
-        VNImageRequestHandler, VNRecognizeTextRequest, VNRequest, VNRequestTextRecognitionLevel,
+        VNDetectBarcodesRequest, VNImageRequestHandler, VNRecognizeTextRequest, VNRequest,
+        VNRequestTextRecognitionLevel,
     };
 
     let data = NSData::with_bytes(png);
@@ -86,23 +110,32 @@ fn read(png: &[u8]) -> Result<Vec<TextLine>, String> {
         request.setRecognitionLevel(VNRequestTextRecognitionLevel::Accurate);
         request.setUsesLanguageCorrection(true);
 
+        // Left at its default set of symbologies, which is every one this
+        // version of macOS can read. Narrowing it to QR would be faster by an
+        // amount nobody could perceive, and would fail on the barcode someone
+        // eventually points it at.
+        let barcodes = VNDetectBarcodesRequest::new();
+
         let handler = VNImageRequestHandler::initWithData_options(
             VNImageRequestHandler::alloc(),
             &data,
             &NSDictionary::new(),
         );
 
-        // Two steps up the chain: a text request is an image-based request
-        // before it is a request, and `performRequests:` wants the base class.
+        // Two steps up the chain for each: these are image-based requests
+        // before they are requests, and `performRequests:` wants the base class.
         let requests: Retained<NSArray<VNRequest>> = NSArray::from_retained_slice(&[
             Retained::into_super(Retained::into_super(request.clone())),
+            Retained::into_super(Retained::into_super(barcodes.clone())),
         ]);
         handler
             .performRequests_error(&requests)
-            .map_err(|e| format!("the text recogniser failed: {e}"))?;
+            .map_err(|e| format!("the recogniser failed: {e}"))?;
+
+        let codes = collect_codes(&barcodes);
 
         let Some(results) = request.results() else {
-            return Ok(Vec::new());
+            return Ok(Scan { lines: Vec::new(), codes });
         };
 
         let mut found = Vec::new();
@@ -151,18 +184,71 @@ fn read(png: &[u8]) -> Result<Vec<TextLine>, String> {
             }
         }
 
-        Ok(rows
+        let lines = rows
             .into_iter()
             .flat_map(|mut row| {
                 row.sort_by(|a, b| a.2.partial_cmp(&b.2).unwrap_or(std::cmp::Ordering::Equal));
                 row.into_iter().map(|(line, ..)| line)
             })
-            .collect())
+            .collect();
+
+        Ok(Scan { lines, codes })
     }
 }
 
-#[cfg(not(target_os = "macos"))]
-fn read(_png: &[u8]) -> Result<Vec<TextLine>, String> {
-    Err("text recognition needs macOS".into())
+/// What the barcode half of the pass found, top to bottom.
+///
+/// Codes without a string payload are dropped rather than shown as an empty
+/// row: some symbologies carry raw bytes that are not text in any encoding,
+/// and there is nothing useful to do with those here.
+#[cfg(target_os = "macos")]
+unsafe fn collect_codes(request: &objc2_vision::VNDetectBarcodesRequest) -> Vec<Code> {
+    let Some(results) = request.results() else {
+        return Vec::new();
+    };
+
+    let mut found: Vec<(Code, f32, f32)> = Vec::new();
+    for observation in results.iter() {
+        let Some(payload) = observation.payloadStringValue() else {
+            continue;
+        };
+        let payload = payload.to_string();
+        if payload.is_empty() {
+            continue;
+        }
+
+        let box_ = observation.boundingBox();
+        found.push((
+            Code {
+                payload,
+                symbology: observation
+                    .symbology()
+                    .to_string()
+                    .trim_start_matches("VNBarcodeSymbology")
+                    .to_string(),
+            },
+            // Normalised and bottom-left origin, as everywhere in Vision, so
+            // a larger y is further up the image.
+            box_.origin.y as f32,
+            box_.origin.x as f32,
+        ));
+    }
+
+    // Reading order, without the row bucketing the text half needs: several
+    // codes in one picture are a list to work down, and two of them at exactly
+    // the same height is not a case worth a second sort key.
+    found.sort_by(|a, b| {
+        b.1.partial_cmp(&a.1)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then(a.2.partial_cmp(&b.2).unwrap_or(std::cmp::Ordering::Equal))
+    });
+
+    found.into_iter().map(|(code, ..)| code).collect()
 }
+
+#[cfg(not(target_os = "macos"))]
+fn read(_png: &[u8]) -> Result<Scan, String> {
+    Err("reading text and codes needs macOS".into())
+}
+
 

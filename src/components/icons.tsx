@@ -171,6 +171,14 @@ export const IconTextGrab = (p: SVGProps<SVGSVGElement>) => (
   </Icon>
 );
 
+/** Two links of a chain, for following a scanned code somewhere. */
+export const IconLink = (p: SVGProps<SVGSVGElement>) => (
+  <Icon {...p}>
+    <path d="M6.8 9.2a2.6 2.6 0 0 0 3.9.3l2-2a2.6 2.6 0 0 0-3.7-3.7l-1.1 1.1" />
+    <path d="M9.2 6.8a2.6 2.6 0 0 0-3.9-.3l-2 2a2.6 2.6 0 0 0 3.7 3.7l1.1-1.1" />
+  </Icon>
+);
+
 /**
  * One picture laid over another: a back frame, and a front one carrying the
  * usual hill-and-sun shorthand so it reads as an image rather than a rectangle.

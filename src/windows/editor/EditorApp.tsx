@@ -35,7 +35,7 @@ import { serialize as serializeMarkup } from "@/lib/markup";
 import { captureStem } from "@/lib/naming";
 import { overlayFromClipboard } from "@/lib/overlay";
 import { useUpdates } from "@/lib/updater";
-import type { CaptureMode, CaptureResult, Rect, TextLine } from "@/lib/types";
+import type { CaptureMode, CaptureResult, Rect, Scan } from "@/lib/types";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { useEditor } from "@/state/editorStore";
 import { Canvas } from "./Canvas";
@@ -45,7 +45,7 @@ import { Library } from "./Library";
 import { RecentStrip } from "./RecentStrip";
 import { Settings } from "./Settings";
 import { ShortcutSheet } from "./ShortcutSheet";
-import { TextResult } from "./TextResult";
+import { ScanResult } from "./ScanResult";
 import { Toolbar } from "./Toolbar";
 import { TopBar } from "./TopBar";
 import { UpdateNotice } from "./UpdateNotice";
@@ -76,7 +76,7 @@ export function EditorApp() {
   const [sheet, setSheet] = useState(false);
   const [settings, setSettings] = useState(false);
   /** Lines the recogniser found, shown until dismissed. */
-  const [scan, setScan] = useState<TextLine[] | null>(null);
+  const [scan, setScan] = useState<Scan | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [toast, setToast] = useState<{ text: string; tone: "ok" | "error" } | null>(null);
   /** Path of the most recent save, so the toast can offer to reveal it. */
@@ -197,6 +197,31 @@ export function EditorApp() {
     const state = useEditor.getState();
     if (!state.doc) return null;
     return renderToPng(state.doc, state.annotations, state.backdrop);
+  }, []);
+
+  /**
+   * What a save needs alongside the pixels: the markup, and the DPI to stamp.
+   *
+   * The two save paths had drifted apart once already, so they share this
+   * rather than each assembling their own. Only call it with a document open.
+   */
+  const savePayload = useCallback(() => {
+    const state = useEditor.getState();
+    const doc = state.doc!;
+    return {
+      source: doc.path,
+      doc: serializeMarkup({
+        crop: doc.crop,
+        stepCounter: state.stepCounter,
+        annotations: state.annotations,
+        backdrop: state.backdrop,
+        outputScale: doc.outputScale,
+      }),
+      // A halved @2x capture is a @1x image. Stamping it @2x anyway would make
+      // every app that reads the tag display it at half size all over again —
+      // so the resize has to come off the claimed density too.
+      scale: doc.scale * doc.outputScale,
+    };
   }, []);
 
   /**
@@ -443,27 +468,18 @@ export function EditorApp() {
       // an un-annotated duplicate behind next to the annotated one.
       const state = useEditor.getState();
       const existing = state.doc?.libraryPath;
-      const scale = state.doc?.scale;
 
       // Saved captures stay editable: the file holds flattened pixels for
       // everyone else, plus the original and these shapes for Shotly. ⌘E
       // writes the flat version when a plain PNG is what's wanted.
-      const editable = {
-        source: state.doc!.path,
-        doc: serializeMarkup({
-          crop: state.doc!.crop,
-          stepCounter: state.stepCounter,
-          annotations: state.annotations,
-          backdrop: state.backdrop,
-        }),
-      };
+      const { source, doc: markup, scale } = savePayload();
 
       let path: string;
       if (existing) {
-        await ipc.saveEditablePng(existing, png, editable.source, editable.doc, scale);
+        await ipc.saveEditablePng(existing, png, source, markup, scale);
         path = existing;
       } else {
-        path = await ipc.saveToLibrary(png, captureStem(), scale, editable);
+        path = await ipc.saveToLibrary(png, captureStem(), scale, { source, doc: markup });
         state.setLibraryPath(path);
       }
 
@@ -477,7 +493,7 @@ export function EditorApp() {
     } finally {
       setBusy(null);
     }
-  }, [busy, exportPng, notify]);
+  }, [busy, exportPng, notify, savePayload]);
 
   /**
    * Save As — the same editable file, somewhere else.
@@ -502,18 +518,8 @@ export function EditorApp() {
       const png = await exportPng();
       if (!png) return;
       const state = useEditor.getState();
-      await ipc.saveEditablePng(
-        path,
-        png,
-        state.doc!.path,
-        serializeMarkup({
-          crop: state.doc!.crop,
-          stepCounter: state.stepCounter,
-          annotations: state.annotations,
-          backdrop: state.backdrop,
-        }),
-        state.doc?.scale,
-      );
+      const { source, doc: markup, scale } = savePayload();
+      await ipc.saveEditablePng(path, png, source, markup, scale);
       state.markSaved();
       setSaved(path);
       notify("Saved");
@@ -522,7 +528,7 @@ export function EditorApp() {
     } finally {
       setBusy(null);
     }
-  }, [busy, exportPng, notify]);
+  }, [busy, exportPng, notify, savePayload]);
 
   /**
    * Export — flattened pixels and nothing else.
@@ -607,13 +613,17 @@ export function EditorApp() {
    * keystroke of a text annotation.
    */
   /**
-   * Read the text in the capture, or in the box just dragged over it.
+   * Read what the capture says — its text and any code in it — or one box of it.
    *
    * Straight to the clipboard as well as onto the screen: the reason to lift
    * text out of a screenshot is almost always to paste it somewhere, and
    * making that a second gesture would be one too many.
+   *
+   * A code found in the box wins the clipboard over any text found beside it.
+   * Dragging a box around a QR code is an unambiguous request for the link in
+   * it, and the caption printed underneath is not what anyone wanted to paste.
    */
-  const grabText = useCallback(
+  const scanArea = useCallback(
     (area: Rect | null) => {
       const current = useEditor.getState().doc;
       if (!current) return;
@@ -636,12 +646,16 @@ export function EditorApp() {
 
       setBusy("text");
       ipc
-        .recognizeText(current.path, region)
-        .then(async (lines) => {
-          if (lines.length > 0) await writeText(lines.map((l) => l.text).join("\n"));
-          setScan(lines);
+        .scanImage(current.path, region)
+        .then(async (result) => {
+          const copyable =
+            result.codes.length > 0
+              ? result.codes.map((c) => c.payload).join("\n")
+              : result.lines.map((l) => l.text).join("\n");
+          if (copyable.length > 0) await writeText(copyable);
+          setScan(result);
         })
-        .catch((err) => notify(`Text recognition failed: ${err}`, "error"))
+        .catch((err) => notify(`Could not read that area: ${err}`, "error"))
         .finally(() => setBusy(null));
     },
     [notify],
@@ -1185,7 +1199,7 @@ export function EditorApp() {
               onOpen={openRecent}
               onError={reportError}
             />
-            <Canvas onNotify={notify} actions={canvasActions} onGrabText={grabText} />
+            <Canvas onNotify={notify} actions={canvasActions} onScan={scanArea} />
           </>
         ) : (
           // Clicking anywhere that isn't a capture clears the selection, the
@@ -1267,8 +1281,8 @@ export function EditorApp() {
       {settings && <Settings onClose={() => setSettings(false)} />}
 
       {scan && (
-        <TextResult
-          lines={scan}
+        <ScanResult
+          scan={scan}
           onCopy={(text) => {
             void writeText(text);
             notify(text.includes("\n") ? "Text copied" : `Copied “${text}”`);

@@ -296,6 +296,19 @@ export interface TextLine {
   confidence: number;
 }
 
+/** A QR code or barcode found in the same pass. Mirrors `Code` in `ocr.rs`. */
+export interface CodePayload {
+  payload: string;
+  /** "QR", "Code128", "Aztec" — Vision's name for the symbology. */
+  symbology: string;
+}
+
+/** Everything one look at the pixels turned up. Mirrors `Scan` in `ocr.rs`. */
+export interface Scan {
+  lines: TextLine[];
+  codes: CodePayload[];
+}
+
 // ---------------------------------------------------------------- backup
 
 /** Mirrors `Settings` in `src-tauri/src/backup.rs`. */

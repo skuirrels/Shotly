@@ -46,7 +46,10 @@ export const TOOLS: ToolDef[] = [
   { id: "highlight", label: "Highlight", shortcut: "H", icon: IconHighlight },
   { id: "spotlight", label: "Spotlight", shortcut: "S", icon: IconSpotlight },
   { id: "pick", label: "Pick colour", shortcut: "I", icon: IconEyedropper },
-  { id: "grab", label: "Grab text", shortcut: "G", icon: IconTextGrab },
+  // Named for both halves because one gesture does both: the same drag reads
+  // the prose and decodes any QR or barcode inside it. Called "Grab text", the
+  // QR half would only ever be found by accident.
+  { id: "grab", label: "Grab text & codes", shortcut: "G", icon: IconTextGrab },
   { id: "crop", label: "Crop", shortcut: "C", icon: IconCrop },
 ];
 

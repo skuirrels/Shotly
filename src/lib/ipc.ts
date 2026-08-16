@@ -8,7 +8,7 @@ import type {
   HotkeyAction,
   HotkeyBinding,
   LibraryItem,
-  TextLine,
+  Scan,
   WindowInfo,
 } from "./types";
 
@@ -131,15 +131,16 @@ export const hotkeysSet = (action: HotkeyAction, accelerator: string | null) =>
 export const hotkeysReset = () => invoke<void>("hotkeys_reset");
 
 /**
- * Read the text in a capture, or in one rectangle of it.
+ * Read what a capture says — its text and any code in it — or one rectangle of it.
  *
  * `region` is in source-image pixels, so a cropped document has to add its
- * own crop offset back on before calling.
+ * own crop offset back on before calling. Both kinds of recognition run on one
+ * pass, so this never has to be asked twice for the same pixels.
  */
-export const recognizeText = (
+export const scanImage = (
   path: string,
   region: { x: number; y: number; width: number; height: number } | null,
-) => invoke<TextLine[]>("recognize_text", { path, region });
+) => invoke<Scan>("scan_image", { path, region });
 
 /**
  * Stick an image to the front of the screen.
