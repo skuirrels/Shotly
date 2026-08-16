@@ -22,6 +22,20 @@ pub struct AppState {
 /// Without this, the frozen backdrop — and any full-screen capture — contains
 /// the Shotly window the user is capturing *from*.
 fn conceal_editor(app: &AppHandle) -> bool {
+    conceal_editor_inner(app)
+}
+
+/// The same hide, for capture flows that live outside this module.
+pub fn conceal_for_capture(app: &AppHandle) {
+    *app.state::<AppState>().hid_editor.lock().unwrap() = conceal_editor_inner(app);
+}
+
+/// Undo `conceal_for_capture` after a cancelled or failed capture.
+pub fn reveal_after_capture(app: &AppHandle) {
+    reveal_editor(app);
+}
+
+fn conceal_editor_inner(app: &AppHandle) -> bool {
     let Some(editor) = app.get_webview_window("editor") else {
         return false;
     };
@@ -218,7 +232,7 @@ pub fn capture_fullscreen(app: AppHandle, display_id: Option<u32>) -> CmdResult<
     deliver(&app, frame)
 }
 
-fn deliver(app: &AppHandle, frame: Frame) -> CmdResult<CaptureResult> {
+pub(crate) fn deliver(app: &AppHandle, frame: Frame) -> CmdResult<CaptureResult> {
     deliver_with(app, frame, None)
 }
 

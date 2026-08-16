@@ -23,15 +23,17 @@ pub enum Action {
     Region,
     Window,
     Fullscreen,
+    Scroll,
     Annotate,
     Interact,
 }
 
 /// In the order they are shown, which is the order they are reached for.
-pub const ACTIONS: [Action; 5] = [
+pub const ACTIONS: [Action; 6] = [
     Action::Region,
     Action::Window,
     Action::Fullscreen,
+    Action::Scroll,
     Action::Annotate,
     Action::Interact,
 ];
@@ -45,6 +47,7 @@ impl Action {
             Action::Region => "Ctrl+Shift+4",
             Action::Window => "Ctrl+Shift+5",
             Action::Fullscreen => "Ctrl+Shift+3",
+            Action::Scroll => "Ctrl+Shift+6",
             Action::Annotate => "Ctrl+Shift+A",
             // Not Ctrl+Shift+S: Snagit answers that one on at least one
             // machine, and a hotkey the system answers with someone else's
@@ -58,6 +61,7 @@ impl Action {
             Action::Region => "Capture region",
             Action::Window => "Capture window",
             Action::Fullscreen => "Capture full screen",
+            Action::Scroll => "Scrolling capture",
             Action::Annotate => "Annotate the screen",
             Action::Interact => "Click through / back to drawing",
         }
@@ -69,6 +73,7 @@ impl Action {
             Action::Region => "Drag out the part of the screen to keep.",
             Action::Window => "Pick a window; Shotly takes it whole.",
             Action::Fullscreen => "The whole display, straight to the library.",
+            Action::Scroll => "Pick a region, scroll the page yourself; Shotly stitches it.",
             Action::Annotate => "Draw over the live screen. Also the way out.",
             Action::Interact => "Hand the mouse back to the desktop, drawings and all.",
         }
@@ -79,6 +84,7 @@ impl Action {
             Action::Region => "region",
             Action::Window => "window",
             Action::Fullscreen => "fullscreen",
+            Action::Scroll => "scroll",
             Action::Annotate => "annotate",
             Action::Interact => "interact",
         }

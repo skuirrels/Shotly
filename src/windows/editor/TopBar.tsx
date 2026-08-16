@@ -12,6 +12,7 @@ import {
   IconRedo,
   IconRegion,
   IconSave,
+  IconScroll,
   IconTrash,
   IconUndo,
   IconWindow,
@@ -23,6 +24,7 @@ import { Kbd } from "@/components/ui/Kbd";
 import { Popover } from "@/components/ui/Popover";
 import { BackdropPicker } from "./BackdropPicker";
 import { ResizePicker } from "./ResizePicker";
+import * as ipc from "@/lib/ipc";
 import { Tooltip } from "@/components/ui/Tooltip";
 import type { CaptureMode } from "@/lib/types";
 import { useEditor } from "@/state/editorStore";
@@ -478,6 +480,28 @@ function CaptureMenu({
             })}
 
             <div className="my-1.5 h-px bg-line" />
+
+            {/* Not one of the MODES: it can't be the button's default because
+                it isn't a one-shot capture — it opens a session. */}
+            <button
+              type="button"
+              onClick={() => {
+                close();
+                void ipc.scrollBegin();
+              }}
+              className="flex w-full items-center gap-2.5 rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-hover"
+            >
+              <span className="text-ink-2">
+                <IconScroll />
+              </span>
+              <span className="min-w-0 flex-1">
+                <span className="block text-[12.5px] font-medium text-ink">Scrolling capture</span>
+                <span className="block text-[11px] text-ink-4">
+                  A page taller than the screen, stitched as you scroll
+                </span>
+              </span>
+              <Kbd shortcut="Ctrl+Shift+6" muted />
+            </button>
 
             {/* Works with no permission at all — the editor doesn't need the OS. */}
             <button

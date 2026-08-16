@@ -123,6 +123,10 @@ fn cursor_point() -> Option<(f64, f64)> {
 /// multi-display desk: you are already looking at the screen you mean to draw
 /// on, and your hand is already there. The primary display is only the
 /// fallback for a pointer that is somewhere unaccounted for.
+pub fn display_under_cursor(displays: &[DisplayInfo]) -> Option<&DisplayInfo> {
+    pick_display(displays, None)
+}
+
 fn pick_display(displays: &[DisplayInfo], preferred: Option<u32>) -> Option<&DisplayInfo> {
     if let Some(id) = preferred {
         if let Some(found) = displays.iter().find(|d| d.id == id) {

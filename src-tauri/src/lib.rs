@@ -8,6 +8,7 @@ mod hotkeys;
 mod markup;
 mod ocr;
 mod pin;
+mod scroll;
 mod platform;
 mod update;
 
@@ -67,6 +68,12 @@ pub fn run() {
                         Action::Region => dispatch(app, CaptureMode::Region),
                         Action::Window => dispatch(app, CaptureMode::Window),
                         Action::Fullscreen => dispatch(app, CaptureMode::Fullscreen),
+                        Action::Scroll => {
+                            if let Err(err) = scroll::scroll_begin(app.clone()) {
+                                eprintln!("[shotly] scrolling capture failed: {err}");
+                                let _ = tauri::Emitter::emit(app, "capture:error", err);
+                            }
+                        }
                         Action::Annotate => {
                             if let Err(err) = annotate::toggle(app) {
                                 eprintln!("[shotly] annotation toggle failed: {err}");
@@ -94,6 +101,7 @@ pub fn run() {
         })
         .manage(annotate::AnnotateState::default())
         .manage(hotkeys::HotkeyState::default())
+        .manage(scroll::ScrollState::default())
         .invoke_handler(tauri::generate_handler![
             commands::capture_permission_status,
             commands::request_capture_permission,
@@ -126,6 +134,11 @@ pub fn run() {
             backup::backup_configure,
             backup::backup_now,
             ocr::scan_image,
+            scroll::scroll_begin,
+            scroll::scroll_layout,
+            scroll::scroll_start,
+            scroll::scroll_finish,
+            scroll::scroll_cancel,
             pin::pin_open,
             pin::pin_png,
             pin::pin_close,
@@ -239,6 +252,8 @@ fn tray_menu(app: &tauri::AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
         MenuItem::with_id(app, "window", "Capture Window", true, accel(Action::Window))?;
     let screen =
         MenuItem::with_id(app, "screen", "Capture Screen", true, accel(Action::Fullscreen))?;
+    let scroll =
+        MenuItem::with_id(app, "scroll", "Scrolling Capture", true, accel(Action::Scroll))?;
     let annotate =
         MenuItem::with_id(app, "annotate", "Annotate Screen", true, accel(Action::Annotate))?;
     let stop = MenuItem::with_id(app, "stop-annotate", "Exit Annotation Mode", true, None::<&str>)?;
@@ -251,7 +266,7 @@ fn tray_menu(app: &tauri::AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
 
     Menu::with_items(
         app,
-        &[&region, &window, &screen, &sep, &annotate, &stop, &unpin, &sep, &updates, &quit],
+        &[&region, &window, &screen, &scroll, &sep, &annotate, &stop, &unpin, &sep, &updates, &quit],
     )
 }
 
@@ -290,6 +305,12 @@ fn build_tray(app: &tauri::AppHandle) -> tauri::Result<()> {
             "region" => dispatch(app, CaptureMode::Region),
             "window" => dispatch(app, CaptureMode::Window),
             "screen" => dispatch(app, CaptureMode::Fullscreen),
+            "scroll" => {
+                if let Err(err) = scroll::scroll_begin(app.clone()) {
+                    eprintln!("[shotly] scrolling capture failed: {err}");
+                    let _ = tauri::Emitter::emit(app, "capture:error", err);
+                }
+            }
             "annotate" => {
                 if let Err(err) = annotate::toggle(app) {
                     eprintln!("[shotly] annotation toggle failed: {err}");

@@ -342,6 +342,15 @@ export const IconDisplay = (p: SVGProps<SVGSVGElement>) => (
   </Icon>
 );
 
+/** A tall page sliding through a viewport: the scrolling capture. */
+export const IconScroll = (p: SVGProps<SVGSVGElement>) => (
+  <Icon {...p}>
+    <rect x="3" y="4.5" width="10" height="7" rx="1.4" />
+    <path d="M6 2l2-2 2 2" transform="translate(0,2)" />
+    <path d="M6 14l2 2 2-2" transform="translate(0,-2)" />
+  </Icon>
+);
+
 export const IconImage = (p: SVGProps<SVGSVGElement>) => (
   <Icon {...p}>
     <rect x="2" y="3" width="12" height="10" rx="1.6" />

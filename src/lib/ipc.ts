@@ -116,6 +116,12 @@ export const hideEditor = () => invoke<void>("hide_editor");
 /** Toggle the live screen-annotation layer. */
 export const annotateToggle = () => invoke<void>("annotate_toggle");
 
+/**
+ * Start a scrolling capture: pick a region, scroll the page yourself, and the
+ * stitched whole opens in the editor when you say you're done.
+ */
+export const scrollBegin = () => invoke<void>("scroll_begin");
+
 /** The system-wide hotkeys, as they are registered right now. */
 export const hotkeysList = () => invoke<HotkeyBinding[]>("hotkeys_list");
 
