@@ -907,3 +907,24 @@ pub fn hide_editor(app: AppHandle, window: WebviewWindow) -> CmdResult<()> {
     platform::set_accessory_mode(&app, true);
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::data_url;
+
+    /// Guards the base64 dependency across upgrades.
+    ///
+    /// Both places that hand a picture to the front end — the window picker's
+    /// thumbnails and `image_data_url` — go through here, and a data URL that
+    /// is subtly wrong shows up as an image that silently fails to decode
+    /// rather than as anything that looks like an error. The vector is from
+    /// RFC 4648, so this checks the encoding itself and not merely that some
+    /// string came back.
+    #[test]
+    fn a_data_url_carries_standard_base64() {
+        assert_eq!(data_url(b"foobar"), "data:image/png;base64,Zm9vYmFy");
+        // Padding is the half that changes between encoders.
+        assert_eq!(data_url(b"foob"), "data:image/png;base64,Zm9vYg==");
+        assert_eq!(data_url(b""), "data:image/png;base64,");
+    }
+}
