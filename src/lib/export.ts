@@ -42,15 +42,29 @@ export async function renderToPng(
     const frame = backdrop && hasBackdrop(backdrop) ? backdrop : null;
     const metrics = frame ? backdropMetrics(frame, width, height) : null;
 
+    // Everything below draws at the document's own size, as it always has.
+    // The resize is one transform applied before any of it: an output scale
+    // that reached the draw loop would mean every shape, stroke width, font
+    // and shadow having to remember to multiply by it, and one that forgot
+    // would be a bug nobody sees until they resize something.
+    const out = doc.outputScale ?? 1;
+    const boxWidth = metrics ? metrics.width : width;
+    const boxHeight = metrics ? metrics.height : height;
+
     const canvas = document.createElement("canvas");
-    canvas.width = Math.round(metrics ? metrics.width : width);
-    canvas.height = Math.round(metrics ? metrics.height : height);
+    canvas.width = Math.max(1, Math.round(boxWidth * out));
+    canvas.height = Math.max(1, Math.round(boxHeight * out));
 
     const ctx = canvas.getContext("2d");
     if (!ctx) throw new Error("could not acquire a 2D context");
 
+    // Rounding above means the scale that actually lands is a hair off `out`
+    // on odd sizes. Deriving it back from the canvas keeps the drawing filling
+    // the bitmap exactly, rather than leaving a sub-pixel transparent seam.
+    if (out !== 1) ctx.scale(canvas.width / boxWidth, canvas.height / boxHeight);
+
     if (frame && metrics) {
-      drawBackdrop(ctx, frame, metrics, canvas.width, canvas.height);
+      drawBackdrop(ctx, frame, metrics, boxWidth, boxHeight);
       // Everything after this is drawn in the capture's own coordinates, as
       // it always was — the frame is the only thing that knows about the
       // margin, and shifting the origin once is what keeps it that way.
@@ -104,10 +118,12 @@ function drawBackdrop(
 
   if (!backdrop.shadow) return;
 
+  const shadow = shadowScale(ctx);
+
   ctx.save();
   ctx.shadowColor = "rgba(0,0,0,0.45)";
-  ctx.shadowBlur = metrics.shadowBlur;
-  ctx.shadowOffsetY = metrics.shadowOffset;
+  ctx.shadowBlur = metrics.shadowBlur * shadow;
+  ctx.shadowOffsetY = metrics.shadowOffset * shadow;
   ctx.fillStyle = "#000";
   roundedPath(
     ctx,
@@ -172,12 +188,28 @@ function canvasToPng(canvas: HTMLCanvasElement): Promise<Uint8Array> {
 
 // ------------------------------------------------------------------ drawing
 
+/**
+ * How much to multiply a shadow's blur and offset by, given the transform.
+ *
+ * Canvas shadows are the one thing the current transformation matrix does not
+ * touch: scale the context to half size and every shape halves while its
+ * shadow stays exactly as wide as before, which at 50% reads as a shape
+ * floating twice as high off the page. Reading the scale back out of the
+ * matrix keeps shadows proportional without every caller having to be told
+ * what the output scale is.
+ */
+function shadowScale(ctx: CanvasRenderingContext2D): number {
+  const { a, b } = ctx.getTransform();
+  return Math.hypot(a, b) || 1;
+}
+
 function withShadow(ctx: CanvasRenderingContext2D, on: boolean, draw: () => void) {
   ctx.save();
   if (on) {
+    const shadow = shadowScale(ctx);
     ctx.shadowColor = SHADOW.color;
-    ctx.shadowBlur = SHADOW.blur;
-    ctx.shadowOffsetY = SHADOW.offsetY;
+    ctx.shadowBlur = SHADOW.blur * shadow;
+    ctx.shadowOffsetY = SHADOW.offsetY * shadow;
   }
   draw();
   ctx.restore();

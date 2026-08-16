@@ -17,21 +17,28 @@ export interface MarkupDoc {
   annotations: Annotation[];
   /** The frame drawn around the capture. Absent in payloads written before 5. */
   backdrop?: Backdrop;
+  /**
+   * How much of its natural size the export is drawn at. Absent before 6,
+   * where it reads as 1 — which is what every older capture in fact was.
+   */
+  outputScale?: number;
 }
 
 /**
  * 2 added the freehand and spotlight shapes; 3 added callouts; 4 added
  * overlaid images, which is also the first version whose payload can be large;
- * 5 added the backdrop.
+ * 5 added the backdrop; 6 added the output scale.
  *
  * Bumping rather than quietly extending the last one is what keeps the promise
  * below honest: a build that predates these shapes sees a version it doesn't
  * know and opens the capture flat, instead of drawing a document with pieces
  * of it silently missing. The backdrop earns a bump on exactly those grounds —
  * an older build would draw the annotations correctly and lose the frame, and
- * a frame silently missing is a different picture.
+ * a frame silently missing is a different picture. So does the output scale:
+ * an older build reopening a halved capture would export it at full size, and
+ * quietly hand back a file twice the dimensions that were asked for.
  */
-const VERSION = 5;
+const VERSION = 6;
 
 export function serialize(doc: Omit<MarkupDoc, "version">): string {
   return JSON.stringify({ version: VERSION, ...doc });
@@ -72,6 +79,12 @@ export function parse(json: string): MarkupDoc | null {
     stepCounter: typeof doc.stepCounter === "number" ? doc.stepCounter : 1,
     annotations: doc.annotations as Annotation[],
     backdrop: isBackdrop(doc.backdrop) ? doc.backdrop : undefined,
+    // Range-checked as well as type-checked: a zero or a negative here would
+    // reach the exporter as a canvas of no size at all.
+    outputScale:
+      typeof doc.outputScale === "number" && doc.outputScale > 0 && doc.outputScale <= 1
+        ? doc.outputScale
+        : undefined,
   };
 }
 

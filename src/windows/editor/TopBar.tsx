@@ -22,6 +22,7 @@ import { IconButton } from "@/components/ui/IconButton";
 import { Kbd } from "@/components/ui/Kbd";
 import { Popover } from "@/components/ui/Popover";
 import { BackdropPicker } from "./BackdropPicker";
+import { ResizePicker } from "./ResizePicker";
 import { Tooltip } from "@/components/ui/Tooltip";
 import type { CaptureMode } from "@/lib/types";
 import { useEditor } from "@/state/editorStore";
@@ -126,13 +127,7 @@ export function TopBar({
           which is what the Export button did to "@2x". A few pixels of drift
           while a button says "Saving…" is the cheaper of the two. */}
       <div className="pointer-events-none flex min-w-0 flex-1 justify-center px-2">
-        {editing && doc && (
-          <span className="truncate font-mono text-[11.5px] tabular-nums text-ink-3">
-            {Math.round(doc.crop.width)} × {Math.round(doc.crop.height)}
-            <span className="mx-1.5 text-ink-4">·</span>
-            {doc.scale >= 2 ? "@2x" : "@1x"}
-          </span>
-        )}
+        {editing && doc && <ResizePicker />}
       </div>
 
       <div className="flex shrink-0 items-center gap-1">

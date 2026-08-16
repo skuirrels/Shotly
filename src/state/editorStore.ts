@@ -40,11 +40,33 @@ export interface Doc {
    */
   crop: Rect;
   scale: number;
+  /**
+   * How much of its natural size the exported image is drawn at. 1 is native.
+   *
+   * Non-destructive, exactly like the crop above: it changes what comes out of
+   * the exporter, never the pixels on disk or the coordinates of a single
+   * annotation. So it is undoable, it survives a save-and-reopen, and halving
+   * a capture and putting it back leaves a file identical to the one you would
+   * have had without touching it.
+   *
+   * The editor deliberately keeps working at full size while this is set.
+   * Shrinking the canvas the user is drawing on would make every annotation
+   * harder to place in exchange for showing them something they already know.
+   */
+  outputScale: number;
 }
 
 /** Document-space size, i.e. what the canvas and exporter actually work in. */
 export function docSize(doc: Doc): { width: number; height: number } {
   return { width: doc.crop.width, height: doc.crop.height };
+}
+
+/** What the exporter will actually write, once the output scale is applied. */
+export function outputSize(doc: Doc): { width: number; height: number } {
+  return {
+    width: Math.max(1, Math.round(doc.crop.width * doc.outputScale)),
+    height: Math.max(1, Math.round(doc.crop.height * doc.outputScale)),
+  };
 }
 
 /**
@@ -87,6 +109,8 @@ interface HistoryEntry {
   stepCounter: number;
   /** Crop is undoable alongside annotations, so it rides in the same entry. */
   crop: Rect | null;
+  /** As is the output scale — both live on the doc, both change the export. */
+  outputScale: number | null;
   /** As is the frame: choosing one is an edit like any other. */
   backdrop: Backdrop;
 }
@@ -124,6 +148,8 @@ interface EditorState {
   setStyle: (patch: Partial<Style>) => void;
   setCalloutFontSize: (fontSize: number) => void;
   setBackdrop: (patch: Partial<Backdrop>) => void;
+  /** Resize the exported image. 1 is native; see `Doc.outputScale`. */
+  setOutputScale: (scale: number) => void;
   setZoom: (zoom: number) => void;
   setFitToWindow: (fit: boolean) => void;
 
@@ -163,14 +189,15 @@ function snapshotOf(s: EditorState): HistoryEntry {
     annotations: s.annotations,
     stepCounter: s.stepCounter,
     crop: s.doc ? s.doc.crop : null,
+    outputScale: s.doc ? s.doc.outputScale : null,
     backdrop: s.backdrop,
   };
 }
 
-/** Reapply a history entry's crop to the document, if there is one. */
+/** Reapply a history entry's document-level fields, if there are any. */
 function restoreDoc(doc: Doc | null, entry: HistoryEntry): Doc | null {
   if (!doc || !entry.crop) return doc;
-  return { ...doc, crop: entry.crop };
+  return { ...doc, crop: entry.crop, outputScale: entry.outputScale ?? doc.outputScale };
 }
 
 /** Cap the undo stack so a long session can't grow without bound. */
@@ -233,6 +260,7 @@ export const useEditor = create<EditorState>((set, get) => ({
           height: result.frame.pixelHeight,
         },
         scale: result.frame.scale,
+        outputScale: restored?.outputScale ?? 1,
       },
       annotations: restored?.annotations ?? [],
       selectedIds: [],
@@ -291,6 +319,29 @@ export const useEditor = create<EditorState>((set, get) => ({
       const backdrop = { ...s.backdrop, ...(arriving ? DEFAULT_BACKDROP : {}), ...patch };
       return {
         backdrop,
+        dirty: true,
+        past: [...s.past, snapshotOf(s)].slice(-HISTORY_LIMIT),
+        future: [],
+      };
+    }),
+
+  /**
+   * Resize what gets exported.
+   *
+   * Clamped rather than validated: the only ways in are a preset and a width
+   * field, and a width field will at some point contain a 0 or a number bigger
+   * than the screen. The floor keeps the result at least one pixel across; the
+   * ceiling is 1 because scaling a screenshot *up* adds no detail and only
+   * makes a blurrier, larger file.
+   */
+  setOutputScale: (scale) =>
+    set((s) => {
+      if (!s.doc) return {};
+      const shorter = Math.min(s.doc.crop.width, s.doc.crop.height);
+      const outputScale = Math.min(1, Math.max(1 / Math.max(1, shorter), scale));
+      if (outputScale === s.doc.outputScale) return {};
+      return {
+        doc: { ...s.doc, outputScale },
         dirty: true,
         past: [...s.past, snapshotOf(s)].slice(-HISTORY_LIMIT),
         future: [],
