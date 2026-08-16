@@ -17,6 +17,7 @@ import {
   IconGrid,
   IconImage,
   IconLayers,
+  IconMeasure,
   IconOverlay,
   IconPen,
   IconGear,
@@ -32,6 +33,7 @@ import type { Command } from "@/lib/keys/types";
 import { renderToPng } from "@/lib/export";
 import * as ipc from "@/lib/ipc";
 import { serialize as serializeMarkup } from "@/lib/markup";
+import { measureText } from "@/lib/shapes";
 import { captureStem } from "@/lib/naming";
 import { overlayFromClipboard } from "@/lib/overlay";
 import { useUpdates } from "@/lib/updater";
@@ -661,6 +663,24 @@ export function EditorApp() {
     [notify],
   );
 
+  /**
+   * Lay several library captures out on one canvas.
+   *
+   * The result arrives back through the usual `editor:open` path, so it is a
+   * capture like any other from that point on — annotate it, expand the canvas
+   * further, save it into the library.
+   */
+  const combineFiles = useCallback(
+    (paths: string[], layout: "row" | "column" | "grid") => {
+      setBusy("combine");
+      ipc
+        .combineCaptures(paths, layout, "#FFFFFF")
+        .catch((e) => notify(`Could not combine those: ${e}`, "error"))
+        .finally(() => setBusy(null));
+    },
+    [notify],
+  );
+
   const canvasActions = useMemo(
     () => ({
       pasteImage: () => void pasteOverlay(),
@@ -939,6 +959,49 @@ export function EditorApp() {
         run: () => {
           const crop = s().pendingCrop;
           if (crop && crop.width > 1 && crop.height > 1) s().applyCrop(crop);
+        },
+      },
+
+      /**
+       * Write the capture's own size onto it.
+       *
+       * A plain text annotation rather than a fixed stamp, so it can be
+       * dragged, recoloured, resized or deleted like anything else — and so
+       * the number is baked at the moment you asked, which is what makes it
+       * meaningful after a later crop.
+       */
+      {
+        id: "arrange.imprintSize",
+        title: "Imprint dimensions",
+        group: "Arrange",
+        icon: <IconMeasure />,
+        enabled: hasDoc,
+        run: () => {
+          const st = s();
+          const doc = st.doc;
+          if (!doc) return;
+
+          const retina = doc.scale > 1;
+          const points = retina && st.style.measureUnits === "pt";
+          const w = points ? doc.crop.width / doc.scale : doc.crop.width;
+          const h = points ? doc.crop.height / doc.scale : doc.crop.height;
+          const label = `${Math.round(w)} × ${Math.round(h)}${points ? "pt" : "px"}`;
+
+          const fontSize = st.style.fontSize;
+          const m = measureText(label, fontSize);
+          const inset = Math.round(Math.min(doc.crop.width, doc.crop.height) * 0.02);
+
+          st.add({
+            id: crypto.randomUUID(),
+            kind: "text",
+            // Bottom-right, out of the way of whatever the capture is of.
+            x: Math.max(0, doc.crop.width - m.width - inset),
+            y: Math.max(0, doc.crop.height - m.height - inset),
+            width: m.width,
+            height: m.height,
+            text: label,
+            style: { ...st.style },
+          });
         },
       },
 
@@ -1232,6 +1295,7 @@ export function EditorApp() {
               onSelect={setPicked}
               onItems={onLibraryItems}
               onPin={pinFile}
+              onCombine={combineFiles}
             />
           </div>
         )}

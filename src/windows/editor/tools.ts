@@ -8,6 +8,7 @@ import {
   IconEyedropper,
   IconTextGrab,
   IconHighlight,
+  IconMeasure,
   IconLine,
   IconPen,
   IconRect,
@@ -46,6 +47,7 @@ export const TOOLS: ToolDef[] = [
   { id: "highlight", label: "Highlight", shortcut: "H", icon: IconHighlight },
   { id: "spotlight", label: "Spotlight", shortcut: "S", icon: IconSpotlight },
   { id: "pick", label: "Pick colour", shortcut: "I", icon: IconEyedropper },
+  { id: "measure", label: "Measure", shortcut: "M", icon: IconMeasure },
   // Named for both halves because one gesture does both: the same drag reads
   // the prose and decodes any QR or barcode inside it. Called "Grab text", the
   // QR half would only ever be found by accident.
@@ -77,8 +79,18 @@ export function styleControlsFor(kind: ToolId | string): {
   blur: boolean;
   dim: boolean;
   color: boolean;
+  /** The px/pt switch, which only a measurement has any use for. */
+  units: boolean;
 } {
-  const none = { stroke: false, fill: false, font: false, blur: false, dim: false, color: false };
+  const none = {
+    stroke: false,
+    fill: false,
+    font: false,
+    blur: false,
+    dim: false,
+    color: false,
+    units: false,
+  };
 
   switch (kind) {
     case "text":
@@ -104,6 +116,10 @@ export function styleControlsFor(kind: ToolId | string): {
     case "line":
     case "pen":
       return { ...none, stroke: true, color: true };
+    // The stroke width also sets the size of the number, so there is no
+    // separate font control to offer.
+    case "measure":
+      return { ...none, stroke: true, color: true, units: true };
     default:
       return none;
   }

@@ -79,6 +79,76 @@ export function sampleColor(path: string, x: number, y: number): string | null {
 }
 
 /**
+ * Pull a point onto the nearest strong edge along one axis.
+ *
+ * This is what turns "measure this gap" from a steady-hand exercise into a
+ * rough drag: you pull a line across the space between two elements and the
+ * ends click onto where those elements actually stop. Only along the direction
+ * being measured — snapping across it would move the line off the row the user
+ * aimed at.
+ *
+ * The edge is the biggest jump in brightness within `radius`, and ties go to
+ * the one nearest where the pointer already was, so an even gradient leaves
+ * the point exactly where it was put. `null` when the pixels aren't loaded or
+ * nothing in reach looks like an edge.
+ */
+export function snapToEdge(
+  path: string,
+  x: number,
+  y: number,
+  /** Unit vector along the measurement. */
+  dir: { x: number; y: number },
+  radius = 12,
+): { x: number; y: number } | null {
+  if (sheet?.path !== path) return null;
+  const { canvas } = sheet.ctx;
+
+  // The whole neighbourhood in one read. This runs on every pointer move of a
+  // measuring drag, and a `getImageData` per sampled pixel was fifty calls a
+  // frame for a strip that fits in a single small rectangle.
+  const span = Math.round(radius);
+  const x0 = Math.round(x) - span;
+  const y0 = Math.round(y) - span;
+  const side = span * 2 + 1;
+  if (x0 + side <= 0 || y0 + side <= 0 || x0 >= canvas.width || y0 >= canvas.height) return null;
+  const patch = sheet.ctx.getImageData(x0, y0, side, side);
+
+  const lumaAt = (px: number, py: number): number => {
+    const ix = px - x0;
+    const iy = py - y0;
+    if (ix < 0 || iy < 0 || ix >= side || iy >= side) return Number.NaN;
+    if (px < 0 || py < 0 || px >= canvas.width || py >= canvas.height) return Number.NaN;
+    const i = (iy * side + ix) * 4;
+    const d = patch.data;
+    return 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2];
+  };
+
+  // One strip of pixels along the axis, centred on the point.
+  const luma: number[] = [];
+  for (let t = -span; t <= span; t++) {
+    luma.push(lumaAt(Math.round(x + dir.x * t), Math.round(y + dir.y * t)));
+  }
+
+  /** Below this a "jump" is just noise or a gradient, not an edge. */
+  const MIN_JUMP = 24;
+
+  let best: { t: number; jump: number } | null = null;
+  for (let i = 1; i < luma.length; i++) {
+    const jump = Math.abs(luma[i] - luma[i - 1]);
+    if (!Number.isFinite(jump) || jump < MIN_JUMP) continue;
+    // The boundary sits between the two samples; take the later one, which is
+    // the first pixel of the new thing.
+    const t = i - span;
+    if (best === null || jump > best.jump || (jump === best.jump && Math.abs(t) < Math.abs(best.t))) {
+      best = { t, jump };
+    }
+  }
+
+  if (best === null) return null;
+  return { x: x + dir.x * best.t, y: y + dir.y * best.t };
+}
+
+/**
  * Release the decoded copy.
  *
  * Worth doing rather than leaving to chance: this is a full-resolution RGBA

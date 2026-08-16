@@ -82,6 +82,7 @@ export type ToolId =
   | "spotlight"
   | "pick"
   | "grab"
+  | "measure"
   | "crop";
 
 /** Tools that produce a box-shaped annotation by dragging a rectangle. */
@@ -93,8 +94,14 @@ export type BoxKind =
   | "spotlight"
   | "text"
   | "callout";
-/** Tools defined by two endpoints rather than a bounding box. */
-export type LineKind = "arrow" | "line";
+/**
+ * Tools defined by two endpoints rather than a bounding box.
+ *
+ * `measure` is one of these rather than a family of its own: it is a line with
+ * an opinion about what to draw at the ends, and being a line means dragging,
+ * nudging, selecting and Shift-constraining all work on it already.
+ */
+export type LineKind = "arrow" | "line" | "measure";
 
 export interface Style {
   color: string;
@@ -107,6 +114,15 @@ export interface Style {
   /** How far the spotlight darkens everything outside it, 0–1. */
   dim: number;
   shadow: boolean;
+  /**
+   * What a measurement counts in.
+   *
+   * A Retina capture holds two pixels for every point that was on screen, so
+   * the same gap is honestly both "48px" and "24pt" — and which one is wanted
+   * depends on whether you are writing CSS or checking an asset. On a 1x
+   * capture the two are the same number and only `px` is ever shown.
+   */
+  measureUnits: "px" | "pt";
 }
 
 interface AnnotationBase {
@@ -191,7 +207,7 @@ export function isBox(a: Annotation): a is BoxAnnotation {
 }
 
 export function isLine(a: Annotation): a is LineAnnotation {
-  return a.kind === "arrow" || a.kind === "line";
+  return a.kind === "arrow" || a.kind === "line" || a.kind === "measure";
 }
 
 export function isStep(a: Annotation): a is StepAnnotation {
@@ -275,7 +291,13 @@ export function movedBy(a: Annotation, dx: number, dy: number): Annotation {
 // --------------------------------------------------------------- hotkeys
 
 /** Mirrors `Action` in `src-tauri/src/hotkeys.rs`. */
-export type HotkeyAction = "region" | "window" | "fullscreen" | "annotate" | "interact";
+export type HotkeyAction =
+  | "region"
+  | "window"
+  | "fullscreen"
+  | "scroll"
+  | "annotate"
+  | "interact";
 
 /** Mirrors `Binding` in `src-tauri/src/hotkeys.rs`. */
 export interface HotkeyBinding {

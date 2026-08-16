@@ -30,6 +30,7 @@ export function Toolbar({ currentPath, onNotify }: Props) {
   const setCalloutFontSize = useEditor((s) => s.setCalloutFontSize);
   const annotations = useEditor((s) => s.annotations);
   const selectedIds = useEditor((s) => s.selectedIds);
+  const retina = useEditor((s) => (s.doc?.scale ?? 1) > 1);
 
   // With a selection, the controls follow the selected shape rather than the
   // active tool — that's what the user is actually about to change.
@@ -130,6 +131,32 @@ export function Toolbar({ currentPath, onNotify }: Props) {
               <span className="size-3.5 rounded-[4px] border border-current bg-current/45" />
             )}
           />
+        )}
+
+        {/* Only ever offered on a Retina capture: at 1x the two units are the
+            same number, and a switch between two identical readings is a
+            control that does nothing. */}
+        {controls.units && retina && (
+          <Tooltip label="What the measurement counts in" side="top">
+            <div className="flex items-center gap-0.5 rounded-lg bg-black/25 p-0.5">
+              {(["pt", "px"] as const).map((unit) => (
+                <button
+                  key={unit}
+                  type="button"
+                  aria-pressed={style.measureUnits === unit}
+                  onClick={() => setStyle({ measureUnits: unit })}
+                  className={clsx(
+                    "h-[26px] rounded-md px-2 font-mono text-[11px] transition-colors",
+                    style.measureUnits === unit
+                      ? "bg-white/[0.12] text-ink"
+                      : "text-ink-3 hover:text-ink",
+                  )}
+                >
+                  {unit}
+                </button>
+              ))}
+            </div>
+          </Tooltip>
         )}
 
         {controls.fill && (

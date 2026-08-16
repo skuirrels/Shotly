@@ -171,6 +171,33 @@ export const IconTextGrab = (p: SVGProps<SVGSVGElement>) => (
   </Icon>
 );
 
+/**
+ * A dimension line: end ticks and a shaft, the way a drawing marks a span.
+ *
+ * Not a ruler with graduations — at 16px those collapse into a grey smear,
+ * and the ticks are what actually says "this measures the gap".
+ */
+export const IconMeasure = (p: SVGProps<SVGSVGElement>) => (
+  <Icon {...p}>
+    <path d="M2.5 4v8" />
+    <path d="M13.5 4v8" />
+    <path d="M2.5 8h11" />
+  </Icon>
+);
+
+/**
+ * A picture with room made beside it: the frame, and the space it grew into.
+ *
+ * The dashed half is the bare canvas, which is the thing this control adds.
+ */
+export const IconCanvas = (p: SVGProps<SVGSVGElement>) => (
+  <Icon {...p}>
+    <rect x="2" y="3.5" width="7" height="9" rx="1.2" />
+    <path d="M12 3.5h1.2a0.8 0.8 0 0 1 0.8 0.8V5" strokeDasharray="2 1.6" />
+    <path d="M14 8v3.7a0.8 0.8 0 0 1-0.8 0.8H12" strokeDasharray="2 1.6" />
+  </Icon>
+);
+
 /** Two links of a chain, for following a scanned code somewhere. */
 export const IconLink = (p: SVGProps<SVGSVGElement>) => (
   <Icon {...p}>

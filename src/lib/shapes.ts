@@ -230,3 +230,83 @@ export const SHADOW = {
   blur: 6,
   offsetY: 1.5,
 };
+
+// -------------------------------------------------------------- measuring
+
+/**
+ * Everything needed to draw a measurement, in document pixels.
+ *
+ * Shared rather than written twice: the SVG preview and the Canvas2D exporter
+ * both consume this, so a dimension line that reads 240pt on screen cannot
+ * come out of the exporter reading something else.
+ */
+export interface MeasureGeometry {
+  /** The measuring line itself. */
+  shaft: { x1: number; y1: number; x2: number; y2: number };
+  /** The two end ticks, drawn across the line like a dimension drawing. */
+  ticks: [Point, Point][];
+  label: string;
+  /** Centre of the label chip. */
+  at: Point;
+  /** The chip behind the label, so the number survives a busy screenshot. */
+  box: { width: number; height: number; radius: number };
+  fontSize: number;
+}
+
+/**
+ * How far a measurement reaches, and what to call it.
+ *
+ * `scale` is the capture's backing scale — 2 on a Retina screenshot. Points
+ * are what the eye saw and what CSS would call it; pixels are what is actually
+ * in the file. When they are the same number there is only one honest label,
+ * so a 1x capture always says px whatever the annotation asks for.
+ */
+export function measureLabel(
+  lengthPx: number,
+  scale: number,
+  units: Style["measureUnits"],
+): string {
+  const points = units === "pt" && scale > 1;
+  const value = points ? lengthPx / scale : lengthPx;
+  // No decimals: these are pixel counts off a screenshot, and a tenth of a
+  // pixel is precision the measurement does not have.
+  return `${Math.round(value)}${points ? "pt" : "px"}`;
+}
+
+export function measureGeometry(a: LineAnnotation, scale: number): MeasureGeometry {
+  const sw = a.style.strokeWidth;
+  const dx = a.x2 - a.x1;
+  const dy = a.y2 - a.y1;
+  const len = Math.hypot(dx, dy);
+
+  const ux = len > 0 ? dx / len : 1;
+  const uy = len > 0 ? dy / len : 0;
+  // Perpendicular, for the end ticks.
+  const px = -uy;
+  const py = ux;
+
+  const tickHalf = sw * 1.6;
+  const tick = (x: number, y: number): [Point, Point] => [
+    { x: x + px * tickHalf, y: y + py * tickHalf },
+    { x: x - px * tickHalf, y: y - py * tickHalf },
+  ];
+
+  // Sized off the stroke so the number grows with the line rather than
+  // needing a second control of its own.
+  const fontSize = Math.max(11, sw * 2.2);
+  const label = measureLabel(len, scale, a.style.measureUnits);
+  const m = measureText(label, fontSize);
+
+  return {
+    shaft: { x1: a.x1, y1: a.y1, x2: a.x2, y2: a.y2 },
+    ticks: [tick(a.x1, a.y1), tick(a.x2, a.y2)],
+    label,
+    at: { x: (a.x1 + a.x2) / 2, y: (a.y1 + a.y2) / 2 },
+    box: {
+      width: m.width,
+      height: fontSize * LINE_HEIGHT + TEXT_PADDING,
+      radius: Math.min(6, sw),
+    },
+    fontSize,
+  };
+}

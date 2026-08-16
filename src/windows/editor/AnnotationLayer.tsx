@@ -3,8 +3,10 @@ import {
   arrowPolygon,
   calloutLayout,
   contrastInk,
+  FONT_STACK,
   fontFor,
   freehandPath,
+  measureGeometry,
   measureText,
   polygonToPath,
   stepFontSize,
@@ -119,6 +121,64 @@ function Shape({ a, doc, hidden }: { a: Annotation; doc: Doc; hidden: boolean })
   const shadow = a.style.shadow ? "url(#ann-shadow)" : undefined;
 
   if (isLine(a)) {
+    if (a.kind === "measure") {
+      const g = measureGeometry(a, doc.scale);
+      return (
+        <g filter={shadow}>
+          <line
+            x1={g.shaft.x1}
+            y1={g.shaft.y1}
+            x2={g.shaft.x2}
+            y2={g.shaft.y2}
+            stroke={a.style.color}
+            strokeWidth={a.style.strokeWidth}
+          />
+          {g.ticks.map(([p, q], i) => (
+            <line
+              key={i}
+              x1={p.x}
+              y1={p.y}
+              x2={q.x}
+              y2={q.y}
+              stroke={a.style.color}
+              strokeWidth={a.style.strokeWidth}
+              strokeLinecap="round"
+            />
+          ))}
+          {/* The number rides a chip of its own colour: over a screenshot the
+              line may cross anything, and a bare figure would be unreadable
+              exactly where it matters most. */}
+          <rect
+            x={g.at.x - g.box.width / 2}
+            y={g.at.y - g.box.height / 2}
+            width={g.box.width}
+            height={g.box.height}
+            rx={g.box.radius}
+            fill={a.style.color}
+          />
+          <text
+            x={g.at.x}
+            y={g.at.y}
+            textAnchor="middle"
+            dominantBaseline="central"
+            fill={contrastInk(a.style.color)}
+            fontFamily={FONT_STACK}
+            fontSize={g.fontSize}
+            fontWeight={600}
+          >
+            {g.label}
+          </text>
+          <line
+            x1={a.x1}
+            y1={a.y1}
+            x2={a.x2}
+            y2={a.y2}
+            stroke="transparent"
+            strokeWidth={Math.max(14, a.style.strokeWidth * 2)}
+          />
+        </g>
+      );
+    }
     if (a.kind === "arrow") {
       return (
         <>

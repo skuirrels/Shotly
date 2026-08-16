@@ -18,7 +18,7 @@ import {
   IconTrash,
 } from "@/components/icons";
 import { ContextMenu, type MenuEntry } from "@/components/ui/ContextMenu";
-import { forgetPixels, preloadPixels, sampleColor } from "@/lib/pick";
+import { forgetPixels, preloadPixels, sampleColor, snapToEdge } from "@/lib/pick";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import {
   type Annotation,
@@ -35,7 +35,7 @@ import {
 } from "@/lib/types";
 import { fitToBox } from "@/lib/overlay";
 import { backdropMetrics, fillById, fillToCss, hasBackdrop } from "@/lib/backdrop";
-import { useEditor } from "@/state/editorStore";
+import { hasBareCanvas, useEditor } from "@/state/editorStore";
 import { AnnotationLayer, type HandleId } from "./AnnotationLayer";
 
 type Drag =
@@ -174,15 +174,16 @@ export function Canvas({ onNotify, actions, onScan }: CanvasProps) {
   // picker over the thing you already wanted is the natural way to use it, and
   // without this the readout stays blank until the pointer happens to twitch.
   useEffect(() => {
-    if (tool !== "pick" || !doc) {
-      setSwatch(null);
-      return;
-    }
+    if (tool !== "pick") setSwatch(null);
+    // Measuring reads the same decoded copy, to find the edges a dimension
+    // line should snap to — so it wants the pixels ready just as early.
+    if ((tool !== "pick" && tool !== "measure") || !doc) return;
+
     let live = true;
     void preloadPixels(doc.path)
       .then(() => {
         const p = pointer.current;
-        if (!live || !p) return;
+        if (!live || !p || tool !== "pick") return;
         const hex = sampleColor(doc.path, doc.crop.x + p.x, doc.crop.y + p.y);
         if (hex) setSwatch({ ...p, hex });
       })
@@ -307,7 +308,7 @@ export function Canvas({ onNotify, actions, onScan }: CanvasProps) {
       return;
     }
 
-    if (tool === "arrow" || tool === "line") {
+    if (tool === "arrow" || tool === "line" || tool === "measure") {
       store.add({
         id,
         kind: tool,
@@ -488,7 +489,21 @@ export function Canvas({ onNotify, actions, onScan }: CanvasProps) {
         } else if (isLine(target)) {
           let end = point;
           if (e.shiftKey) end = snapAngle(active.origin, point);
-          store.update(active.id, { x2: end.x, y2: end.y });
+          if (target.kind === "measure" && doc) {
+            // Both ends are pulled onto real edges, live, so the number
+            // settles on the gap that is actually there rather than on where
+            // the hand happened to stop. Alt holds the raw drag, for measuring
+            // something the image gives no edge for.
+            const snapped = e.altKey ? null : snapEnds(doc, active.origin, end);
+            store.update(active.id, {
+              x1: snapped?.from.x ?? active.origin.x,
+              y1: snapped?.from.y ?? active.origin.y,
+              x2: snapped?.to.x ?? end.x,
+              y2: snapped?.to.y ?? end.y,
+            });
+          } else {
+            store.update(active.id, { x2: end.x, y2: end.y });
+          }
         } else if (isBox(target)) {
           let end = point;
           if (e.shiftKey) end = snapSquare(active.origin, point);
@@ -764,6 +779,7 @@ export function Canvas({ onNotify, actions, onScan }: CanvasProps) {
     ? backdropMetrics(backdrop, doc.crop.width, doc.crop.height)
     : null;
   const frameFill = frame ? fillById(backdrop.fill) : null;
+  const bareCanvas = hasBareCanvas(doc);
 
   return (
     <div ref={viewport} className="relative flex-1 overflow-auto bg-inset">
@@ -813,12 +829,16 @@ export function Canvas({ onNotify, actions, onScan }: CanvasProps) {
           onDoubleClick={onDoubleClick}
           onContextMenu={onContextMenu}
         >
-          {/* The capture itself, windowed by the current crop. */}
+          {/* The capture itself, windowed by the current crop — which may be
+              larger than the capture, in which case the fill behind it is what
+              shows in the part with no picture. */}
           <div
             className="absolute inset-0 overflow-hidden"
             style={{
               imageRendering: zoom > 1.5 ? "pixelated" : "auto",
               borderRadius: frame ? frame.radius * zoom : undefined,
+              background:
+                bareCanvas && doc.canvasFill !== "transparent" ? doc.canvasFill : undefined,
             }}
           >
             <img
@@ -935,6 +955,40 @@ function snapAngle(from: Point, to: Point): Point {
   const step = Math.PI / 12;
   const angle = Math.round(Math.atan2(dy, dx) / step) * step;
   return { x: from.x + Math.cos(angle) * len, y: from.y + Math.sin(angle) * len };
+}
+
+/**
+ * Pull both ends of a measurement onto the edges they were aimed at.
+ *
+ * Each end is drawn *outwards* along the line, so the two searches look in
+ * opposite directions: the start reaches back past itself and the end reaches
+ * on past itself, which is how a rough drag across a gap lands on the two
+ * facing edges rather than both snapping to the same one.
+ *
+ * Document coordinates in, document coordinates out — the sampler works in
+ * source-image pixels, so the crop offset goes on and comes back off here.
+ */
+function snapEnds(
+  doc: { path: string; crop: Rect },
+  from: Point,
+  to: Point,
+): { from: Point; to: Point } | null {
+  const dx = to.x - from.x;
+  const dy = to.y - from.y;
+  const len = Math.hypot(dx, dy);
+  // Too short to have a direction worth trusting.
+  if (len < 6) return null;
+
+  const dir = { x: dx / len, y: dy / len };
+  const back = { x: -dir.x, y: -dir.y };
+  const { x: ox, y: oy } = doc.crop;
+
+  const snap = (p: Point, d: { x: number; y: number }): Point => {
+    const hit = snapToEdge(doc.path, ox + p.x, oy + p.y, d);
+    return hit ? { x: hit.x - ox, y: hit.y - oy } : p;
+  };
+
+  return { from: snap(from, back), to: snap(to, dir) };
 }
 
 /** Force a box to a square, sized by the larger axis. */

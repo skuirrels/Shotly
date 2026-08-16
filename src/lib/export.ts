@@ -3,14 +3,16 @@ import {
   arrowPolygon,
   calloutLayout,
   contrastInk,
+  FONT_STACK,
   fontFor,
+  measureGeometry,
   measureText,
   SHADOW,
   stepFontSize,
   TEXT_PADDING,
 } from "./shapes";
 import { type Annotation, boundsOf, isBox, isImage, isLine, isPen, isStep } from "./types";
-import type { Doc } from "@/state/editorStore";
+import { type Doc, hasBareCanvas } from "@/state/editorStore";
 import {
   type Backdrop,
   backdropMetrics,
@@ -75,7 +77,20 @@ export async function renderToPng(
       ctx.clip();
     }
 
-    ctx.drawImage(img, doc.crop.x, doc.crop.y, width, height, 0, 0, width, height);
+    // Bare canvas first, where the crop reaches past the capture. Only then —
+    // a fill under an opaque screenshot is invisible work, and a capture that
+    // does carry alpha should keep showing it.
+    if (hasBareCanvas(doc) && doc.canvasFill !== "transparent") {
+      ctx.fillStyle = doc.canvasFill;
+      ctx.fillRect(0, 0, width, height);
+    }
+
+    // Positioned rather than source-cropped: `drawImage` with a source
+    // rectangle needs that rectangle to be inside the image, and the crop is
+    // allowed to be larger than the capture — that is how the canvas expands.
+    // Offsetting the whole image says the same thing for an ordinary crop and
+    // keeps working when the window hangs off the edge.
+    ctx.drawImage(img, -doc.crop.x, -doc.crop.y);
 
     // Overlays carry their own pixels and have to be decoded before a
     // synchronous draw loop can put them down. Data URLs don't taint the
@@ -225,6 +240,43 @@ function drawAnnotation(
   const { color, strokeWidth, fillOpacity } = a.style;
 
   if (isLine(a)) {
+    if (a.kind === "measure") {
+      const g = measureGeometry(a, doc.scale);
+      withShadow(ctx, a.style.shadow, () => {
+        ctx.strokeStyle = color;
+        ctx.lineWidth = strokeWidth;
+        ctx.lineCap = "round";
+
+        ctx.beginPath();
+        ctx.moveTo(g.shaft.x1, g.shaft.y1);
+        ctx.lineTo(g.shaft.x2, g.shaft.y2);
+        for (const [p, q] of g.ticks) {
+          ctx.moveTo(p.x, p.y);
+          ctx.lineTo(q.x, q.y);
+        }
+        ctx.stroke();
+
+        // Chip then number, matching the preview exactly — see `measureGeometry`.
+        ctx.fillStyle = color;
+        roundedPath(
+          ctx,
+          g.at.x - g.box.width / 2,
+          g.at.y - g.box.height / 2,
+          g.box.width,
+          g.box.height,
+          g.box.radius,
+        );
+        ctx.fill();
+
+        ctx.fillStyle = contrastInk(color);
+        ctx.font = `600 ${g.fontSize}px ${FONT_STACK}`;
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        ctx.fillText(g.label, g.at.x, g.at.y);
+      });
+      return;
+    }
+
     withShadow(ctx, a.style.shadow, () => {
       if (a.kind === "arrow") {
         const points = arrowPolygon(a);
@@ -348,17 +400,10 @@ function drawAnnotation(
       // full image (not just the region) means the blur samples real
       // neighbouring pixels instead of fading out at the edges.
       ctx.filter = `blur(${a.style.blurRadius}px)`;
-      ctx.drawImage(
-        img,
-        doc.crop.x,
-        doc.crop.y,
-        doc.crop.width,
-        doc.crop.height,
-        0,
-        0,
-        doc.crop.width,
-        doc.crop.height,
-      );
+      // Positioned, not source-cropped, for the same reason as the main draw:
+      // the crop may reach past the capture, and a source rectangle that does
+      // is not a legal argument.
+      ctx.drawImage(img, -doc.crop.x, -doc.crop.y);
       ctx.restore();
       break;
 
