@@ -220,16 +220,88 @@ interface Layout {
 
 const DOCK_KEY = "shotly.annotateToolbar";
 
-/** Bottom centre of the usable area, until the user drags it elsewhere. */
-const DEFAULT_DOCK = { x: 0.5, y: 1 };
+/**
+ * Which side of the screen the toolbar is attached to.
+ *
+ * Always one of the four, never floating in the middle: the toolbar sits on
+ * top of the thing being annotated, so anywhere but an edge is in the way. In
+ * cycling order, clockwise from the top.
+ */
+type Edge = "top" | "right" | "bottom" | "left";
 
-function storedDock(): { x: number; y: number } {
+const EDGES: Edge[] = ["top", "right", "bottom", "left"];
+
+/** An edge, and how far along it the toolbar sits. */
+interface Dock {
+  edge: Edge;
+  /** 0 is the left or top end of that edge, 1 the right or bottom. */
+  pos: number;
+}
+
+/** Bottom centre of the usable area, until the user drags it elsewhere. */
+const DEFAULT_DOCK: Dock = { edge: "bottom", pos: 0.5 };
+
+/** A bar down the side runs the other way; everything inside it follows. */
+const isVertical = (edge: Edge) => edge === "left" || edge === "right";
+
+/**
+ * Where the toolbar's anchor sits, as fractions of the free space.
+ *
+ * The pair feeds a percentage offset and an equal negative self-translate, so
+ * 0 is flush with one edge and 1 flush with the opposite one without the CSS
+ * needing to know how big the toolbar is.
+ */
+function dockAnchor(d: Dock): { x: number; y: number } {
+  switch (d.edge) {
+    case "top":
+      return { x: d.pos, y: 0 };
+    case "bottom":
+      return { x: d.pos, y: 1 };
+    case "left":
+      return { x: 0, y: d.pos };
+    case "right":
+      return { x: 1, y: d.pos };
+  }
+}
+
+/**
+ * The edge a point is nearest.
+ *
+ * Compared as fractions of the area rather than in pixels, so the side edges
+ * stay reachable on a wide display: a tenth of the way in from the left is
+ * "the left" whether that is 130px or 500px.
+ */
+function nearestEdge(x: number, y: number): Edge {
+  const gaps: [Edge, number][] = [
+    ["left", x],
+    ["right", 1 - x],
+    ["top", y],
+    ["bottom", 1 - y],
+  ];
+  return gaps.reduce((a, b) => (b[1] < a[1] ? b : a))[0];
+}
+
+function storedDock(): Dock {
   try {
     const raw = localStorage.getItem(DOCK_KEY);
     if (!raw) return DEFAULT_DOCK;
-    const parsed = JSON.parse(raw) as { x: number; y: number };
-    if (typeof parsed?.x !== "number" || typeof parsed?.y !== "number") return DEFAULT_DOCK;
-    return { x: clamp01(parsed.x), y: clamp01(parsed.y) };
+    const parsed = JSON.parse(raw) as Partial<Dock> & { x?: number; y?: number };
+
+    if (typeof parsed?.pos === "number" && EDGES.includes(parsed.edge as Edge)) {
+      return { edge: parsed.edge as Edge, pos: clamp01(parsed.pos) };
+    }
+
+    // A free-floating position from before the toolbar docked. Put it on
+    // whichever edge it had drifted closest to rather than throwing away where
+    // the user had put it.
+    if (typeof parsed?.x === "number" && typeof parsed?.y === "number") {
+      const x = clamp01(parsed.x);
+      const y = clamp01(parsed.y);
+      const edge = nearestEdge(x, y);
+      return { edge, pos: isVertical(edge) ? y : x };
+    }
+
+    return DEFAULT_DOCK;
   } catch {
     return DEFAULT_DOCK;
   }
@@ -316,13 +388,13 @@ export function AnnotateApp() {
   /** The area not covered by the menu bar or the Dock. */
   const [layout, setLayout] = useState<Layout | null>(null);
   /**
-   * Where the user has dragged the toolbar, as a fraction of the usable area.
+   * Which edge the toolbar is docked to, and where along it.
    *
-   * Stored as a fraction rather than pixels so it survives moving to a screen
-   * of a different size — a position 40px from the bottom of a laptop display
-   * is not the same place on a 5K panel.
+   * The position is a fraction rather than pixels so it survives moving to a
+   * screen of a different size — 40px in from the left of a laptop display is
+   * not the same place on a 5K panel.
    */
-  const [dock, setDock] = useState<{ x: number; y: number }>(storedDock);
+  const [dock, setDock] = useState<Dock>(storedDock);
 
   /**
    * True while the desktop has the mouse back and the drawings are just
@@ -415,16 +487,36 @@ export function AnnotateApp() {
     loadLayout();
   }, [loadScreens, loadLayout]);
 
-  const moveToolbar = useCallback((next: { x: number; y: number }) => {
-    const clamped = { x: clamp01(next.x), y: clamp01(next.y) };
-    setDock(clamped);
+  const moveToolbar = useCallback((next: Dock) => {
+    const docked: Dock = { edge: next.edge, pos: clamp01(next.pos) };
+    setDock(docked);
     try {
-      localStorage.setItem(DOCK_KEY, JSON.stringify(clamped));
+      localStorage.setItem(DOCK_KEY, JSON.stringify(docked));
     } catch {
       // A full or disabled store costs the memory of where the toolbar was,
       // and nothing else. Not worth interrupting a screen share over.
     }
   }, []);
+
+  /**
+   * Send the toolbar round to the next edge, clockwise.
+   *
+   * A keyboard route as well as the drag, because the reason to move the
+   * toolbar is almost always that it is sitting on top of the thing you were
+   * about to annotate — and dragging it there means dragging it *across* that
+   * thing, with the pointer, while it is the pointer you need.
+   */
+  const dockRef = useRef(dock);
+  dockRef.current = dock;
+
+  const cycleDock = useCallback(() => {
+    const at = dockRef.current;
+    const next: Dock = { edge: EDGES[(EDGES.indexOf(at.edge) + 1) % EDGES.length], pos: at.pos };
+    // Moved on before the render that would have done it, so a key held down
+    // walks round the edges instead of pressing the same one repeatedly.
+    dockRef.current = next;
+    moveToolbar(next);
+  }, [moveToolbar]);
 
   /**
    * Hop to the next display, wrapping round.
@@ -826,6 +918,7 @@ export function AnnotateApp() {
       const match = TOOLS.find((t) => t.key.toLowerCase() === e.key.toLowerCase());
       if (match) setTool(match.id);
       else if (e.code === "KeyS") nextScreen();
+      else if (e.code === "KeyD") cycleDock();
       else if (e.code === "KeyC") clearAll();
       else if (e.code === "BracketLeft") applyWidth(Math.max(1, width - 1));
       else if (e.code === "BracketRight") applyWidth(Math.min(24, width + 1));
@@ -857,6 +950,7 @@ export function AnnotateApp() {
     isEditing,
     commitText,
     nextScreen,
+    cycleDock,
     selected.length,
     undo,
     redo,
@@ -1237,8 +1331,8 @@ function Toolbar({
   onRect,
 }: {
   layout: Layout | null;
-  dock: { x: number; y: number };
-  onDock: (next: { x: number; y: number }) => void;
+  dock: Dock;
+  onDock: (next: Dock) => void;
   screens: Screen[];
   onNextScreen: () => void;
   tool: Tool;
@@ -1271,6 +1365,44 @@ function Toolbar({
   const current = screens.find((s) => s.isCurrent);
   const bar = useRef<HTMLDivElement>(null);
 
+  // Until the usable area is known, fall back to the window itself. Better a
+  // toolbar slightly too low for one frame than one that isn't there at all.
+  const area = layout ?? { left: 0, top: 0, width: window.innerWidth, height: window.innerHeight };
+
+  // Down the side, the bar runs the other way and drops its labels — a column
+  // wide enough to read "Click through" would be a column covering the screen.
+  const vertical = isVertical(dock.edge);
+  const anchor = dockAnchor(dock);
+
+  /**
+   * How much to shrink the bar, if it is longer than the edge it sits on.
+   *
+   * A column of every tool runs to about 760px, which is taller than the
+   * usable area of a 1440×900 display once the menu bar and the Dock are out
+   * of it. Wrapping to a second column is what a document would do, but an
+   * absolutely positioned flex box is sized before it wraps, so that column
+   * would land outside both the painted background and the rectangle Rust
+   * keeps clickable. Scaling keeps every button on screen, in one piece, and
+   * honestly measured — `getBoundingClientRect` reports the transformed box.
+   */
+  const [fit, setFit] = useState(1);
+
+  useEffect(() => {
+    const el = bar.current;
+    if (!el) return;
+    const measure = () => {
+      // `offset*` is the untransformed layout size, so this cannot feed back
+      // on itself: shrinking the bar does not change what is being measured.
+      const need = vertical ? el.offsetHeight : el.offsetWidth;
+      const have = vertical ? area.height : area.width;
+      setFit(need > 0 ? Math.min(1, have / need) : 1);
+    };
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [vertical, area.width, area.height, screens.length, selectedCount]);
+
   // Re-measured on every move and every change of size — a wider toolbar is a
   // wider hole, and a stale rectangle is a button that cannot be clicked.
   useEffect(() => {
@@ -1281,7 +1413,7 @@ function Toolbar({
     const observer = new ResizeObserver(report);
     observer.observe(el);
     return () => observer.disconnect();
-  }, [onRect, dock, layout, screens.length, selectedCount]);
+  }, [onRect, dock, layout, fit, screens.length, selectedCount]);
 
   /**
    * Drag from the grip.
@@ -1298,30 +1430,44 @@ function Toolbar({
     // Captured up front: React nulls `currentTarget` once dispatch returns, so
     // the handlers below would otherwise be reaching for nothing.
     const handle = e.currentTarget as HTMLElement;
-    const area = layout ?? {
-      left: 0,
-      top: 0,
-      width: window.innerWidth,
-      height: window.innerHeight,
-    };
     const size = bar.current?.getBoundingClientRect();
     if (!size) return;
 
-    // Free space the toolbar's top-left can range over. `dock` is a fraction
-    // of exactly this, which is what makes 0 and 1 sit flush with the edges.
-    const spanX = Math.max(1, area.width - size.width);
-    const spanY = Math.max(1, area.height - size.height);
     // Where in the toolbar the grab happened, so it doesn't jump under the
     // cursor on the first move.
     const grabX = e.clientX - size.left;
     const grabY = e.clientY - size.top;
+    const startedVertical = isVertical(dock.edge);
 
     handle.setPointerCapture(e.pointerId);
 
     const onMove = (move: PointerEvent) => {
+      // Which edge to dock to follows the pointer rather than the toolbar's
+      // own corner: the bar changes shape the moment it lands on a side, and
+      // aiming a rectangle whose size is about to change is guesswork.
+      const fx = clamp01((move.clientX - area.left) / Math.max(1, area.width));
+      const fy = clamp01((move.clientY - area.top) / Math.max(1, area.height));
+      const edge = nearestEdge(fx, fy);
+      const vertical = isVertical(edge);
+
+      // Re-measured every move, because the bar that is being positioned is
+      // the one on screen now — a tall column, if it has just flipped.
+      const live = bar.current?.getBoundingClientRect() ?? size;
+      const extent = vertical ? live.height : live.width;
+      // The grab offset holds the toolbar still under the cursor, but only
+      // while the bar is still the shape it was grabbed by. Across a flip it
+      // describes a bar that no longer exists, so it centres on the pointer.
+      const offset =
+        vertical === startedVertical ? (vertical ? grabY : grabX) : extent / 2;
+      // Free space the toolbar's leading corner can range over. `pos` is a
+      // fraction of exactly this, which is what makes 0 and 1 sit flush.
+      const span = Math.max(1, (vertical ? area.height : area.width) - extent);
+
       onDock({
-        x: (move.clientX - grabX - area.left) / spanX,
-        y: (move.clientY - grabY - area.top) / spanY,
+        edge,
+        pos: vertical
+          ? (move.clientY - offset - area.top) / span
+          : (move.clientX - offset - area.left) / span,
       });
     };
     const onUp = () => {
@@ -1335,9 +1481,23 @@ function Toolbar({
     handle.addEventListener("pointercancel", onUp);
   };
 
-  // Until the usable area is known, fall back to the window itself. Better a
-  // toolbar slightly too low for one frame than one that isn't there at all.
-  const area = layout ?? { left: 0, top: 0, width: window.innerWidth, height: window.innerHeight };
+  const widthSlider = (
+    <input
+      type="range"
+      min={1}
+      max={24}
+      value={width}
+      onChange={(e) => setWidth(Number(e.target.value))}
+      title="Stroke width, or text size ( [ and ] )"
+      className={clsx(
+        "w-20 accent-[var(--color-accent)]",
+        // Rotated rather than turned vertical by writing-mode, which WebKit
+        // only learned recently. Absolute, so the sideways box it still
+        // occupies in layout doesn't widen the whole bar.
+        vertical && "absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 -rotate-90",
+      )}
+    />
+  );
 
   return (
     <div
@@ -1346,16 +1506,28 @@ function Toolbar({
     >
       <div
         ref={bar}
-        className="surface-float pointer-events-auto absolute flex items-center gap-1 rounded-2xl p-1.5"
+        className={clsx(
+          "surface-float pointer-events-auto absolute flex content-start items-center gap-1 rounded-2xl p-1.5",
+          vertical ? "flex-col" : "flex-row",
+        )}
         style={{
           cursor: "default",
           // Percentage offset paired with an equal negative self-translate:
-          // at 0 the toolbar is flush left, at 1 flush right, at 0.5 centred.
-          // That makes `dock` a fraction of the free space without needing to
-          // know the toolbar's width in CSS.
-          left: `${dock.x * 100}%`,
-          top: `${dock.y * 100}%`,
-          transform: `translate(${-dock.x * 100}%, ${-dock.y * 100}%)`,
+          // at 0 the toolbar is flush against one edge, at 1 the opposite one,
+          // at 0.5 centred. That makes `pos` a fraction of the free space
+          // without the CSS needing to know the toolbar's size.
+          left: `${anchor.x * 100}%`,
+          top: `${anchor.y * 100}%`,
+          transform: `translate(${-anchor.x * 100}%, ${-anchor.y * 100}%) scale(${fit})`,
+          // Scaled about the point that is pinned to the edge, so shrinking to
+          // fit never lifts the bar off the side it is docked to.
+          transformOrigin: `${anchor.x * 100}% ${anchor.y * 100}%`,
+          // Sized to its contents along the axis it runs. Without this it is
+          // shrink-to-fit against the space left over beyond its own offset —
+          // half the screen, for a centred bar — and the labels wrap to two
+          // lines to make it so. Overflowing the screen is `fit`'s job.
+          width: vertical ? undefined : "max-content",
+          height: vertical ? "max-content" : undefined,
         }}
       >
         {/* The drag handle. Explicit rather than "drag the background", which
@@ -1363,11 +1535,14 @@ function Toolbar({
         <button
           type="button"
           onPointerDown={startDrag}
-          title="Drag to move the toolbar"
+          title="Drag to dock the toolbar to any edge (D cycles)"
           aria-label="Move the toolbar"
-          className="grid h-[30px] w-[18px] shrink-0 cursor-grab place-items-center rounded-lg text-ink-4 hover:bg-hover hover:text-ink-2 active:cursor-grabbing"
+          className={clsx(
+            "grid shrink-0 cursor-grab place-items-center rounded-lg text-ink-4 hover:bg-hover hover:text-ink-2 active:cursor-grabbing",
+            vertical ? "h-[18px] w-[30px]" : "h-[30px] w-[18px]",
+          )}
         >
-          <GripGlyph />
+          <GripGlyph turned={vertical} />
         </button>
 
         {TOOLBAR_TOOLS.map((t) => (
@@ -1388,7 +1563,7 @@ function Toolbar({
           </button>
           ))}
 
-        <span className="mx-1 h-5 w-px bg-white/10" />
+        <Divider barVertical={vertical} />
 
         {SWATCHES.slice(0, 6).map((s, i) => (
           <button
@@ -1397,7 +1572,12 @@ function Toolbar({
             aria-label={s.name}
             title={`${s.name} (${i + 1})`}
             onClick={() => setColor(s.value)}
-            className="grid h-[30px] w-[26px] place-items-center rounded-lg hover:bg-hover"
+            className={clsx(
+              "grid place-items-center rounded-lg hover:bg-hover",
+              // Squat the other way when stacked, so six of them don't add
+              // 180px to a column that has to fit on the screen.
+              vertical ? "h-[26px] w-[30px]" : "h-[30px] w-[26px]",
+            )}
           >
             <span
               className={clsx(
@@ -1409,19 +1589,15 @@ function Toolbar({
           </button>
         ))}
 
-        <span className="mx-1 h-5 w-px bg-white/10" />
+        <Divider barVertical={vertical} />
 
-        <input
-          type="range"
-          min={1}
-          max={24}
-          value={width}
-          onChange={(e) => setWidth(Number(e.target.value))}
-          title="Stroke width, or text size ( [ and ] )"
-          className="w-20 accent-[var(--color-accent)]"
-        />
+        {vertical ? (
+          <div className="relative h-20 w-[30px] shrink-0">{widthSlider}</div>
+        ) : (
+          widthSlider
+        )}
 
-        <span className="mx-1 h-5 w-px bg-white/10" />
+        <Divider barVertical={vertical} />
 
         <button
           type="button"
@@ -1458,22 +1634,29 @@ function Toolbar({
         {/* Only worth the space when there is somewhere else to go. */}
         {screens.length > 1 && current && (
           <>
-            <span className="mx-1 h-5 w-px bg-white/10" />
+            <Divider barVertical={vertical} />
             <button
               type="button"
               onClick={onNextScreen}
-              title="Move to the next screen (S)"
+              title={`Move to the next screen (S) — on screen ${current.number}${current.isPrimary ? ", the main one" : ""}`}
               aria-label="Move to the next screen"
-              className="flex h-[30px] items-center gap-1.5 rounded-lg px-2 text-[12px] font-medium text-ink-2 hover:bg-hover hover:text-ink"
+              className={clsx(
+                "flex h-[30px] items-center rounded-lg text-[12px] font-medium text-ink-2 hover:bg-hover hover:text-ink",
+                vertical ? "w-[30px] justify-center" : "gap-1.5 px-2",
+              )}
             >
               <IconDisplay />
-              Screen {current.number}
-              {current.isPrimary && <span className="text-ink-4">· Main</span>}
+              {!vertical && (
+                <>
+                  Screen {current.number}
+                  {current.isPrimary && <span className="text-ink-4">· Main</span>}
+                </>
+              )}
             </button>
           </>
         )}
 
-        <span className="mx-1 h-5 w-px bg-white/10" />
+        <Divider barVertical={vertical} />
 
         {/* The way out of being trapped over your own desktop. Drawing and
             using the machine underneath are both things you do constantly
@@ -1489,36 +1672,65 @@ function Toolbar({
           }
           aria-pressed={interacting}
           className={clsx(
-            "flex h-[30px] items-center gap-1.5 rounded-lg px-2 text-[12px] font-medium transition-colors",
+            "flex h-[30px] items-center rounded-lg text-[12px] font-medium transition-colors",
+            vertical ? "w-[30px] justify-center" : "gap-1.5 px-2",
             interacting
               ? "bg-accent/18 text-accent shadow-[inset_0_0_0_1px_var(--color-accent)]"
               : "text-ink-2 hover:bg-hover hover:text-ink",
           )}
         >
           <IconRegion />
-          {interacting ? "Drawing off" : "Click through"}
+          {!vertical && (interacting ? "Drawing off" : "Click through")}
         </button>
 
         <button
           type="button"
           onClick={onExit}
-          title="Save the screen with these annotations, and close the layer"
-          className="ml-1 flex h-8 items-center gap-1.5 rounded-lg bg-white/[0.07] px-2.5 text-[12.5px] font-medium text-ink hover:bg-white/[0.12]"
+          title="Save the screen with these annotations, and close the layer (⌃⇧A)"
+          className={clsx(
+            "flex h-8 items-center rounded-lg bg-white/[0.07] font-medium text-ink text-[12.5px] hover:bg-white/[0.12]",
+            vertical ? "mt-1 w-[30px] justify-center" : "ml-1 gap-1.5 px-2.5",
+          )}
         >
           <IconClose />
-          Exit
-          {/* The Rust-owned hotkey, not Escape: it is the one guaranteed to
-              work even if this page has stopped responding. */}
-          <Kbd shortcut="Ctrl+Shift+A" muted />
+          {!vertical && (
+            <>
+              Exit
+              {/* The Rust-owned hotkey, not Escape: it is the one guaranteed
+                  to work even if this page has stopped responding. */}
+              <Kbd shortcut="Ctrl+Shift+A" muted />
+            </>
+          )}
         </button>
       </div>
     </div>
   );
 }
 
-function GripGlyph() {
+/**
+ * A rule between groups of buttons.
+ *
+ * `barVertical` describes the toolbar, not the line: a bar running down the
+ * side of the screen is divided by rules running across it.
+ */
+function Divider({ barVertical }: { barVertical: boolean }) {
   return (
-    <svg width="10" height="16" viewBox="0 0 10 16" fill="currentColor" aria-hidden="true">
+    <span
+      className={clsx("shrink-0 bg-white/10", barVertical ? "my-1 h-px w-5" : "mx-1 h-5 w-px")}
+    />
+  );
+}
+
+function GripGlyph({ turned = false }: { turned?: boolean }) {
+  return (
+    <svg
+      width="10"
+      height="16"
+      viewBox="0 0 10 16"
+      fill="currentColor"
+      aria-hidden="true"
+      className={clsx(turned && "rotate-90")}
+    >
       {[4, 8, 12].flatMap((y) =>
         [2, 7].map((x) => <circle key={`${x}-${y}`} cx={x} cy={y} r="1.1" />),
       )}
