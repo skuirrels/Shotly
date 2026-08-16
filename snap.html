@@ -5,7 +5,10 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Shotly Window Capture</title>
   </head>
-  <body>
+  <!-- Transparent, like the annotation layer: this window covers every display,
+       and the default body background is opaque. Without this the outline is
+       drawn on a black screen instead of on the desktop. -->
+  <body class="overlay-body">
     <div id="root"></div>
     <script type="module" src="/src/windows/snap/main.tsx"></script>
   </body>
