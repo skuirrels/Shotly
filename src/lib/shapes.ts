@@ -205,9 +205,17 @@ export function contrastInk(fill: string): string {
 
 // ------------------------------------------------------------------- step
 
-/** Radius of a step badge, derived from stroke width so it scales with style. */
+/**
+ * Radius of a step badge, derived from stroke width so it scales with style.
+ *
+ * The multiplier is calibrated against the *default* stroke, which is the part
+ * that made this wrong: when that default went from 6 to 10 to give arrows some
+ * weight, 3.4 quietly turned a step number into a badge twice the size of the
+ * interface it was numbering. At 2 a default badge is the size it always was,
+ * and the slider still moves it at either end.
+ */
 export function stepRadius(style: Style): number {
-  return Math.max(12, style.strokeWidth * 3.4);
+  return Math.max(12, style.strokeWidth * 2);
 }
 
 export function stepFontSize(a: StepAnnotation): number {

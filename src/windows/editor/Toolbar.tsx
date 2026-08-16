@@ -19,6 +19,8 @@ export function Toolbar() {
   const setTool = useEditor((s) => s.setTool);
   const style = useEditor((s) => s.style);
   const setStyle = useEditor((s) => s.setStyle);
+  const calloutFontSize = useEditor((s) => s.calloutFontSize);
+  const setCalloutFontSize = useEditor((s) => s.setCalloutFontSize);
   const annotations = useEditor((s) => s.annotations);
   const selectedIds = useEditor((s) => s.selectedIds);
 
@@ -28,8 +30,18 @@ export function Toolbar() {
     selectedIds.length > 0
       ? annotations.find((a) => a.id === selectedIds[0])?.kind
       : undefined;
-  const controls = styleControlsFor(selectedKind ?? tool);
+  const kind = selectedKind ?? tool;
+  const controls = styleControlsFor(kind);
   const anyControls = Object.values(controls).some(Boolean);
+
+  // The font control drives two different remembered sizes. Reading the one it
+  // is about to write keeps the number in the popover honest — it always shows
+  // the size the next shape of this kind will actually be.
+  const isCallout = kind === "callout";
+  const fontSize = isCallout ? calloutFontSize : style.fontSize;
+  const setFontSize = isCallout
+    ? setCalloutFontSize
+    : (next: number) => setStyle({ fontSize: next });
 
   return (
     <div className="pointer-events-none absolute inset-x-0 bottom-5 z-40 flex justify-center">
@@ -70,11 +82,11 @@ export function Toolbar() {
         {controls.font && (
           <SizeControl
             label="Font size"
-            value={style.fontSize}
+            value={fontSize}
             presets={FONT_PRESETS}
             min={10}
             max={120}
-            onChange={(fontSize) => setStyle({ fontSize })}
+            onChange={setFontSize}
             render={() => <span className="text-[13px] font-semibold">Aa</span>}
           />
         )}

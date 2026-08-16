@@ -543,7 +543,13 @@ export function EditorApp() {
       const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
 
       if (controls.font) {
-        st.setStyle({ fontSize: clamp(st.style.fontSize + delta * 2, 10, 120) });
+        // Callouts remember their text size separately; the keys have to write
+        // whichever slot the popover beside them is reading.
+        if ((kind ?? st.tool) === "callout") {
+          st.setCalloutFontSize(clamp(st.calloutFontSize + delta * 2, 10, 120));
+        } else {
+          st.setStyle({ fontSize: clamp(st.style.fontSize + delta * 2, 10, 120) });
+        }
       } else if (controls.blur) {
         st.setStyle({ blurRadius: clamp(st.style.blurRadius + delta * 2, 2, 60) });
       } else if (controls.dim) {

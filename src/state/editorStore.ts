@@ -66,6 +66,17 @@ const DEFAULT_STYLE: Style = {
   shadow: true,
 };
 
+/**
+ * Where a fresh callout's text starts, kept apart from the size above.
+ *
+ * Bare text has to compete with the screenshot underneath it, which is why the
+ * default there is heading-sized. A callout arrives with its own solid block of
+ * colour and has won that fight before a word is read, so the same 48px landed
+ * as a banner rather than a label. Remembered separately, so choosing a size
+ * for one doesn't resize the other.
+ */
+const DEFAULT_CALLOUT_FONT_SIZE = 32;
+
 /** Tools that don't create geometry and so shouldn't be sticky after a drag. */
 const TRANSIENT_TOOLS: ToolId[] = ["crop"];
 
@@ -84,6 +95,8 @@ interface EditorState {
   /** Where the picker hands control back to once a colour has been taken. */
   pickReturn: ToolId;
   style: Style;
+  /** A callout's remembered text size. See `DEFAULT_CALLOUT_FONT_SIZE`. */
+  calloutFontSize: number;
   stepCounter: number;
   /** Set while a crop gesture is pending confirmation. */
   pendingCrop: Rect | null;
@@ -103,6 +116,7 @@ interface EditorState {
 
   setTool: (tool: ToolId) => void;
   setStyle: (patch: Partial<Style>) => void;
+  setCalloutFontSize: (fontSize: number) => void;
   setZoom: (zoom: number) => void;
   setFitToWindow: (fit: boolean) => void;
 
@@ -152,6 +166,26 @@ function restoreDoc(doc: Doc | null, entry: HistoryEntry): Doc | null {
 /** Cap the undo stack so a long session can't grow without bound. */
 const HISTORY_LIMIT = 100;
 
+/**
+ * Push a style patch onto the selected shapes, undoably.
+ *
+ * With a selection, a style change edits those shapes *and* becomes the new
+ * default — matching how Figma and Sketch behave. Which slot the default is
+ * remembered in is the caller's business; this only touches the canvas, and
+ * returns nothing to merge when there's nothing selected.
+ */
+function restyleSelection(s: EditorState, patch: Partial<Style>): Partial<EditorState> {
+  if (s.selectedIds.length === 0) return {};
+  return {
+    dirty: true,
+    past: [...s.past, snapshotOf(s)].slice(-HISTORY_LIMIT),
+    future: [],
+    annotations: s.annotations.map((a) =>
+      s.selectedIds.includes(a.id) ? ({ ...a, style: { ...a.style, ...patch } } as Annotation) : a,
+    ),
+  };
+}
+
 export const useEditor = create<EditorState>((set, get) => ({
   doc: null,
   annotations: [],
@@ -159,6 +193,7 @@ export const useEditor = create<EditorState>((set, get) => ({
   tool: "select",
   pickReturn: "select",
   style: DEFAULT_STYLE,
+  calloutFontSize: DEFAULT_CALLOUT_FONT_SIZE,
   stepCounter: 1,
   pendingCrop: null,
   zoom: 1,
@@ -222,23 +257,13 @@ export const useEditor = create<EditorState>((set, get) => ({
       pendingCrop: tool === "crop" ? s.pendingCrop : null,
     })),
 
-  setStyle: (patch) =>
-    set((s) => {
-      const style = { ...s.style, ...patch };
-      if (s.selectedIds.length === 0) return { style };
+  setStyle: (patch) => set((s) => ({ style: { ...s.style, ...patch }, ...restyleSelection(s, patch) })),
 
-      // With a selection, a style change edits those shapes and becomes the
-      // new default — matching how Figma and Sketch behave.
-      return {
-        style,
-        dirty: true,
-        past: [...s.past, snapshotOf(s)].slice(-HISTORY_LIMIT),
-        future: [],
-        annotations: s.annotations.map((a) =>
-          s.selectedIds.includes(a.id) ? ({ ...a, style: { ...a.style, ...patch } } as Annotation) : a,
-        ),
-      };
-    }),
+  // Same gesture, different memory: the size lands on any selected callout, but
+  // is remembered where the next callout will look for it rather than in the
+  // shared style.
+  setCalloutFontSize: (fontSize) =>
+    set((s) => ({ calloutFontSize: fontSize, ...restyleSelection(s, { fontSize }) })),
 
   setZoom: (zoom) => set({ zoom: Math.min(8, Math.max(0.05, zoom)), fitToWindow: false }),
   setFitToWindow: (fitToWindow) => set({ fitToWindow }),

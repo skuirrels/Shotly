@@ -273,7 +273,9 @@ export function Canvas({ onNotify }: { onNotify?: (text: string) => void }) {
         y: origin.y,
         width: 0,
         height: 0,
-        style: { ...style },
+        // A callout keeps its own text size, so it doesn't inherit the one
+        // chosen for text that has to hold its own against the screenshot.
+        style: { ...style, ...(tool === "callout" && { fontSize: store.calloutFontSize }) },
       });
     } else {
       return;
