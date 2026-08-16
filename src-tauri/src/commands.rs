@@ -158,21 +158,32 @@ pub fn start_capture(app: &AppHandle, mode: CaptureMode) -> CmdResult<()> {
     let window_mode = mode == CaptureMode::Window;
 
     std::thread::spawn(move || {
-        // Window mode gets a red outline tracking the pointer, so it's obvious
-        // which window the click will take. Purely decorative — see `highlight`
-        // for why it can't interfere with the picker or the desktop.
-        if window_mode {
-            crate::highlight::start(&handle);
-        }
-
+        // Window mode used to get a red outline of its own, tracking the
+        // pointer to show which window the click would take. It has been
+        // removed, because it could not be made to tell the truth.
+        //
+        // The outline read `CGWindowListCopyWindowInfo` and framed the topmost
+        // layer-0 window under the cursor. That list contains windows which
+        // report themselves frontmost and on-screen while not being drawn at
+        // all — measured here on a real desktop, where a full-screen window
+        // ranked second from front had pixels bearing no relation to what was
+        // actually on the display beneath it. Nothing in the window's metadata
+        // separates it from a genuine one: same layer, same alpha, same
+        // `kCGWindowIsOnscreen`, owning app not hidden.
+        //
+        // Nor can it be settled by looking: the in-process image API for one
+        // window was obsoleted in macOS 15, and the screen cannot be sampled
+        // during a picker session anyway, because `screencapture -i -w` puts a
+        // full-screen sheet of its own in front of everything for the duration.
+        //
+        // So the outline was a confident red rectangle around a window that
+        // might not be there — worse than no rectangle, since macOS's picker
+        // draws its own highlight and ours could contradict it. See
+        // `docs/DEVELOPING.md`.
         let outcome = {
             let state = handle.state::<AppState>();
             state.backend.capture_interactive(window_mode)
         };
-
-        // Unconditional, and before anything that can fail: the outline must
-        // not outlive the capture it belongs to.
-        crate::highlight::stop(&handle);
 
         match outcome {
             Ok(Some(frame)) => {

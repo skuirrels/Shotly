@@ -157,7 +157,6 @@ src-tauri/src/
     display.rs   CoreGraphics display & window enumeration
   annotate.rs    the live screen-drawing layer, and its safety machinery
   commands.rs    the bulk of the IPC surface
-  highlight.rs   window-picker highlighting
   hotkeys.rs     the system-wide keys: storage, live rebinding, dispatch
   markup.rs      the shTL PNG chunk that keeps a saved capture editable
   ocr.rs         text and QR/barcode recognition, via macOS Vision
@@ -279,6 +278,37 @@ Invariants that keep an unusable desktop impossible. Don't remove any of them:
   system-wide way out that doesn't depend on the overlay's own key handler. It
   keys off the `overlay_live` flag, never window visibility — otherwise a
   stuck-visible window turns the hotkey into a permanent no-op.
+
+### Why the window-picker outline was removed (kept as a warning)
+
+Window capture used to draw a red outline around whatever `screencapture -i -w`
+was about to take, read from `CGWindowListCopyWindowInfo`: topmost layer-0
+window whose bounds contain the cursor.
+
+That list is not a list of what is on the screen. Measured on a real desktop, a
+full-screen window ranked *second from front* — opaque, `kCGWindowIsOnscreen`
+true, owning application not hidden — was not being composited at all: its own
+pixels differed from the screen at its bounds by a mean of 45/255. So the
+outline confidently framed a window the user could not see, which is exactly
+what it was reported as doing.
+
+Nothing separates the two cases:
+
+- Every key in the window dictionary matches a genuine window — layer, alpha,
+  `kCGWindowIsOnscreen`, `kCGWindowStoreType`, `kCGWindowSharingState`.
+- `NSRunningApplication.isHidden` is false for both.
+- Comparing the window's image against the screen would settle it, but
+  `CGWindowListCreateImage` was obsoleted in macOS 15, and — decisively — the
+  screen cannot be sampled during a picker session at all, because
+  `screencapture -i -w` puts a full-screen sheet of its own in front of
+  everything for the duration.
+
+An outline that can point at a window that is not there is worse than no
+outline: macOS draws its own highlight, and ours could contradict it. If a
+truthful one is ever wanted, it needs Shotly to own window selection too — a
+list or grid of windows with live thumbnails, captured by id through the
+existing `list_windows` and `capture_window`, where a phantom shows itself for
+what it is because its thumbnail does not match anything on screen.
 
 ## Not built yet
 

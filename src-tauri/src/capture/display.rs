@@ -106,11 +106,11 @@ mod imp {
         let bounds_dict = dict_dict(dict, "kCGWindowBounds")?;
         let app_name = dict_string(dict, "kCGWindowOwnerName").unwrap_or_default();
 
-        // Shotly's own windows — including the capture outline — must never be
-        // offered as, or highlighted as, a capture target. Neither must the
-        // system picker's own full-screen sheet, which is an ordinary layer-0
-        // window named "windowselection" owned by `screencapture`: leave it in
-        // and every hover highlights the entire display.
+        // Shotly's own windows must never be offered as a capture target.
+        // Neither must the system picker's own full-screen sheet, which is an
+        // ordinary layer-0 window named "windowselection" owned by
+        // `screencapture` — and which, incidentally, is why the truth about
+        // what is really on screen cannot be checked while the picker is up.
         if app_name == "Shotly" || app_name == "screencapture" {
             return None;
         }
@@ -165,31 +165,6 @@ mod imp {
 
         Ok(out)
     }
-
-    /// The window `screencapture -i -w` would capture if the user clicked at
-    /// this point.
-    ///
-    /// `CGWindowListCopyWindowInfo` returns the list front-to-back, so the
-    /// first hit is the topmost window.
-    pub fn window_at(x: f64, y: f64) -> Result<Option<WindowInfo>> {
-        let list = window_list()?;
-
-        for item in list.iter() {
-            // SAFETY: as in `windows` — the array owns each dictionary.
-            let dict = unsafe { CFDictionary::wrap_under_get_rule(*item as CFDictionaryRef) };
-            let Some(info) = parse_window(&dict) else { continue };
-            if !is_target(&info) {
-                continue;
-            }
-
-            let b = info.bounds;
-            if x >= b.x && y >= b.y && x < b.x + b.width && y < b.y + b.height {
-                return Ok(Some(info));
-            }
-        }
-
-        Ok(None)
-    }
 }
 
 #[cfg(not(target_os = "macos"))]
@@ -203,13 +178,9 @@ mod imp {
     pub fn windows() -> Result<Vec<WindowInfo>> {
         Err(CaptureError::Process("only macOS is supported".into()))
     }
-
-    pub fn window_at(_x: f64, _y: f64) -> Result<Option<WindowInfo>> {
-        Ok(None)
-    }
 }
 
-pub use imp::{displays, window_at, windows};
+pub use imp::{displays, windows};
 
 /// The union of every display: the rect the selection overlay must cover.
 pub fn virtual_bounds(displays: &[DisplayInfo]) -> Option<Rect> {
