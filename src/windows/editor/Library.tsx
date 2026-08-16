@@ -5,6 +5,7 @@ import {
   IconCopy,
   IconFolder,
   IconImage,
+  IconCanvas,
   IconPin,
   IconSearch,
   IconTrash,
@@ -35,6 +36,8 @@ interface Props {
   onSelect: (paths: string[]) => void;
   /** Reports the visible order, so ⌘A upstairs can select everything. */
   onItems: (paths: string[]) => void;
+  /** Lay several captures out on one canvas and open the result. */
+  onCombine: (paths: string[], layout: "row" | "column" | "grid") => void;
   /** Stick one capture to the front of the screen. */
   onPin: (path: string) => void;
 }
@@ -57,6 +60,7 @@ export function Library({
   onSelect,
   onItems,
   onPin,
+  onCombine,
 }: Props) {
   const [items, setItems] = useState<LibraryItem[] | null>(null);
   const [scope, setScope] = useState<Scope>(null);
@@ -232,6 +236,26 @@ export function Library({
         icon: <IconCopy />,
         run: () => onCopy(targets),
       },
+      // Only with something to combine *with*. The submenu is the layout,
+      // because "side by side" and "stacked" are different enough answers
+      // that guessing one would be wrong half the time.
+      many && "separator" as const,
+      many && {
+        label: `Combine ${targets.length} side by side`,
+        icon: <IconCanvas />,
+        run: () => onCombine(targets, "row"),
+      },
+      many && {
+        label: `Combine ${targets.length} stacked`,
+        icon: <IconCanvas />,
+        run: () => onCombine(targets, "column"),
+      },
+      many && targets.length > 2 && {
+        label: `Combine ${targets.length} as a grid`,
+        icon: <IconCanvas />,
+        run: () => onCombine(targets, "grid"),
+      },
+      many && "separator" as const,
       // One at a time: pinning a selection of twelve would bury the screen
       // under the very thing the pins are meant to sit beside.
       !many && {

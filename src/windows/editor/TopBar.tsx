@@ -23,6 +23,7 @@ import { IconButton } from "@/components/ui/IconButton";
 import { Kbd } from "@/components/ui/Kbd";
 import { Popover } from "@/components/ui/Popover";
 import { BackdropPicker } from "./BackdropPicker";
+import { CanvasPicker } from "./CanvasPicker";
 import { ResizePicker } from "./ResizePicker";
 import * as ipc from "@/lib/ipc";
 import { Tooltip } from "@/components/ui/Tooltip";
@@ -214,6 +215,7 @@ export function TopBar({
 
             {/* Before Copy and Export, because framing is something you do
                 *to* the capture, and those two are what you do with it. */}
+            <CanvasPicker disabled={!doc || busy !== null} />
             <BackdropPicker disabled={!doc || busy !== null} />
 
             <button

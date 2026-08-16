@@ -162,6 +162,18 @@ export const pinPng = (bytes: Uint8Array) =>
 
 export const pinCloseAll = () => invoke<void>("pin_close_all");
 
+/**
+ * Lay several captures out on one canvas and open the result in the editor.
+ *
+ * Composed in Rust: the pieces are already files there, and doing it in the
+ * webview would mean carrying every source image across the IPC bridge first.
+ */
+export const combineCaptures = (
+  paths: string[],
+  layout: "row" | "column" | "grid",
+  background: string,
+) => invoke<void>("combine_captures", { paths, layout, background });
+
 /** Cloud sync folders this Mac has, to offer as one-click backup choices. */
 export const backupTargets = () => invoke<BackupTarget[]>("backup_targets");
 

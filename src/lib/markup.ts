@@ -22,12 +22,18 @@ export interface MarkupDoc {
    * where it reads as 1 — which is what every older capture in fact was.
    */
   outputScale?: number;
+  /**
+   * What shows through where the capture doesn't reach. Absent before 7,
+   * where the crop was always inside the image and none ever showed.
+   */
+  canvasFill?: string;
 }
 
 /**
  * 2 added the freehand and spotlight shapes; 3 added callouts; 4 added
  * overlaid images, which is also the first version whose payload can be large;
- * 5 added the backdrop; 6 added the output scale.
+ * 5 added the backdrop; 6 added the output scale; 7 let the crop grow past the
+ * capture, which is how the canvas expands, and gave the bare part a colour.
  *
  * Bumping rather than quietly extending the last one is what keeps the promise
  * below honest: a build that predates these shapes sees a version it doesn't
@@ -36,9 +42,12 @@ export interface MarkupDoc {
  * an older build would draw the annotations correctly and lose the frame, and
  * a frame silently missing is a different picture. So does the output scale:
  * an older build reopening a halved capture would export it at full size, and
- * quietly hand back a file twice the dimensions that were asked for.
+ * quietly hand back a file twice the dimensions that were asked for. And so
+ * does the expanded canvas, most of all: an older build would read the wider
+ * crop, fail to draw anything in the part with no capture behind it, and hand
+ * back a picture with a hole in it.
  */
-const VERSION = 6;
+const VERSION = 7;
 
 export function serialize(doc: Omit<MarkupDoc, "version">): string {
   return JSON.stringify({ version: VERSION, ...doc });
@@ -85,6 +94,7 @@ export function parse(json: string): MarkupDoc | null {
       typeof doc.outputScale === "number" && doc.outputScale > 0 && doc.outputScale <= 1
         ? doc.outputScale
         : undefined,
+    canvasFill: typeof doc.canvasFill === "string" ? doc.canvasFill : undefined,
   };
 }
 

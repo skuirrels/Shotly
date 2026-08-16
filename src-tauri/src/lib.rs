@@ -2,6 +2,7 @@ mod annotate;
 mod backup;
 mod build_info;
 mod capture;
+mod combine;
 mod commands;
 mod highlight;
 mod hotkeys;
@@ -134,6 +135,7 @@ pub fn run() {
             backup::backup_configure,
             backup::backup_now,
             ocr::scan_image,
+            combine::combine_captures,
             scroll::scroll_begin,
             scroll::scroll_layout,
             scroll::scroll_start,

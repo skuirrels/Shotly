@@ -54,6 +54,22 @@ export interface Doc {
    * harder to place in exchange for showing them something they already know.
    */
   outputScale: number;
+  /**
+   * What shows through where the capture doesn't reach.
+   *
+   * The crop is a window onto the source image, and nothing ever said the
+   * window had to be *inside* it. Pull an edge outward and the document grows
+   * past the capture, leaving bare canvas to arrange other things on — which
+   * is the whole of "combine several captures", with no second coordinate
+   * system and no new field on any annotation.
+   */
+  canvasFill: string;
+}
+
+/** Does this document show any canvas the capture doesn't cover? */
+export function hasBareCanvas(doc: Doc): boolean {
+  const { x, y, width, height } = doc.crop;
+  return x < 0 || y < 0 || x + width > doc.naturalWidth || y + height > doc.naturalHeight;
 }
 
 /** Document-space size, i.e. what the canvas and exporter actually work in. */
@@ -88,6 +104,7 @@ const DEFAULT_STYLE: Style = {
   blurRadius: 12,
   dim: 0.55,
   shadow: true,
+  measureUnits: "pt",
 };
 
 /**
@@ -100,6 +117,16 @@ const DEFAULT_STYLE: Style = {
  * for one doesn't resize the other.
  */
 const DEFAULT_CALLOUT_FONT_SIZE = 32;
+
+/**
+ * What bare canvas is, until someone says otherwise.
+ *
+ * White rather than transparent: the reason to grow a canvas is to put two
+ * screenshots side by side and send the result, and a transparent gap between
+ * them renders as a checkerboard here and as black in half the apps it might
+ * be pasted into.
+ */
+const DEFAULT_CANVAS_FILL = "#FFFFFF";
 
 /** Tools that don't create geometry and so shouldn't be sticky after a drag. */
 const TRANSIENT_TOOLS: ToolId[] = ["crop"];
@@ -150,6 +177,11 @@ interface EditorState {
   setBackdrop: (patch: Partial<Backdrop>) => void;
   /** Resize the exported image. 1 is native; see `Doc.outputScale`. */
   setOutputScale: (scale: number) => void;
+  setCanvasFill: (fill: string) => void;
+  /** Add bare canvas on one side, in document pixels. */
+  expandCanvas: (edge: "top" | "right" | "bottom" | "left", amount: number) => void;
+  /** Grow (or shrink) the canvas to exactly hold everything on it. */
+  fitCanvasToContent: () => void;
   setZoom: (zoom: number) => void;
   setFitToWindow: (fit: boolean) => void;
 
@@ -261,6 +293,7 @@ export const useEditor = create<EditorState>((set, get) => ({
         },
         scale: result.frame.scale,
         outputScale: restored?.outputScale ?? 1,
+        canvasFill: restored?.canvasFill ?? DEFAULT_CANVAS_FILL,
       },
       annotations: restored?.annotations ?? [],
       selectedIds: [],
@@ -347,6 +380,67 @@ export const useEditor = create<EditorState>((set, get) => ({
         future: [],
       };
     }),
+
+  setCanvasFill: (canvasFill) =>
+    set((s) =>
+      s.doc
+        ? {
+            doc: { ...s.doc, canvasFill },
+            dirty: true,
+            past: [...s.past, snapshotOf(s)].slice(-HISTORY_LIMIT),
+            future: [],
+          }
+        : {},
+    ),
+
+  /**
+   * Make room on one side.
+   *
+   * Expressed as a crop, because that is exactly what it is: `applyCrop`
+   * already composes a document-space rect onto the existing window and slides
+   * every annotation to match, and a rect that starts at a negative coordinate
+   * is a window bigger than what it looks through.
+   */
+  expandCanvas: (edge, amount) => {
+    const s = get();
+    if (!s.doc || amount <= 0) return;
+    const { width, height } = s.doc.crop;
+    get().applyCrop({
+      x: edge === "left" ? -amount : 0,
+      y: edge === "top" ? -amount : 0,
+      width: width + (edge === "left" || edge === "right" ? amount : 0),
+      height: height + (edge === "top" || edge === "bottom" ? amount : 0),
+    });
+  },
+
+  /**
+   * Shrink-wrap the canvas around everything on it.
+   *
+   * The counterpart to dragging a pasted screenshot off the edge: put things
+   * where you want them, then have the canvas take the shape they make. The
+   * capture itself always counts as content, so this can never crop away the
+   * picture the document is of.
+   */
+  fitCanvasToContent: () => {
+    const s = get();
+    if (!s.doc) return;
+    const { width, height } = s.doc.crop;
+
+    let x0 = 0;
+    let y0 = 0;
+    let x1 = width;
+    let y1 = height;
+    for (const a of s.annotations) {
+      const b = boundsOf(a);
+      x0 = Math.min(x0, b.x);
+      y0 = Math.min(y0, b.y);
+      x1 = Math.max(x1, b.x + b.width);
+      y1 = Math.max(y1, b.y + b.height);
+    }
+
+    if (x0 === 0 && y0 === 0 && x1 === width && y1 === height) return;
+    get().applyCrop({ x: x0, y: y0, width: x1 - x0, height: y1 - y0 });
+  },
 
   setZoom: (zoom) => set({ zoom: Math.min(8, Math.max(0.05, zoom)), fitToWindow: false }),
   setFitToWindow: (fitToWindow) => set({ fitToWindow }),
