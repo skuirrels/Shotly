@@ -22,6 +22,7 @@ export default defineConfig({
       "@": resolve(__dirname, "src"),
       "@tauri-apps/api/core": resolve(__dirname, "harness/tauri-stub.ts"),
       "@tauri-apps/plugin-opener": resolve(__dirname, "harness/opener-stub.ts"),
+      "@tauri-apps/api/event": resolve(__dirname, "harness/event-stub.ts"),
     },
   },
   server: { port: 1421, strictPort: true },

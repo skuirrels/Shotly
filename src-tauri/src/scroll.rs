@@ -521,9 +521,11 @@ pub fn scroll_finish(app: AppHandle) -> Result<(), String> {
         s.stop.store(true, Ordering::Relaxed);
         Ok(())
     } else {
-        // Cancelled before any region was chosen: just take the overlay down.
+        // Finished before any region was chosen: take the overlay down and
+        // put the editor back where it was.
         drop(session);
         close(&app);
+        crate::commands::reveal_after_capture(&app);
         Err("nothing was captured".into())
     }
 }
