@@ -119,10 +119,14 @@ export function TopBar({
         </>
       )}
 
-      {/* Centred absolutely so it stays put as the button groups change width. */}
-      <div className="pointer-events-none absolute inset-x-0 flex justify-center">
+      {/* Centred in the space between the two button groups rather than across
+          the whole bar. Absolute centring kept it perfectly still as buttons
+          changed width, but it also let a wider group run straight over it —
+          which is what the Export button did to "@2x". A few pixels of drift
+          while a button says "Saving…" is the cheaper of the two. */}
+      <div className="pointer-events-none flex min-w-0 flex-1 justify-center px-2">
         {editing && doc && (
-          <span className="font-mono text-[11.5px] tabular-nums text-ink-3">
+          <span className="truncate font-mono text-[11.5px] tabular-nums text-ink-3">
             {Math.round(doc.crop.width)} × {Math.round(doc.crop.height)}
             <span className="mx-1.5 text-ink-4">·</span>
             {doc.scale >= 2 ? "@2x" : "@1x"}
@@ -130,7 +134,7 @@ export function TopBar({
         )}
       </div>
 
-      <div className="ml-auto flex items-center gap-1">
+      <div className="flex shrink-0 items-center gap-1">
         {/* Copying straight from the library skips a round trip through the
             editor when all you wanted was to paste a shot somewhere. */}
         {!editing && (
@@ -221,11 +225,25 @@ export function TopBar({
               <span className="ml-0.5 font-sans text-[11px] text-ink-3">⌘C</span>
             </button>
 
+            {/* Export earns its own button rather than a row in the menu.
+                Sending someone a flattened PNG is an ending — the thing you do
+                once the annotating is finished — and an ending should not be
+                two clicks behind a chevron. It stays in the menu as well,
+                where there is room to say what it costs you. */}
+            <button
+              type="button"
+              onClick={onExportFlat}
+              disabled={!doc || busy !== null}
+              title="Flattened PNG — annotations burned in, no longer editable"
+              className="no-drag ml-1 flex h-8 items-center gap-1.5 rounded-lg bg-white/[0.07] px-2.5 text-[12.5px] font-medium text-ink transition-colors hover:bg-white/[0.11] active:bg-white/[0.14] disabled:opacity-40"
+            >
+              <IconImage />
+              {busy === "export" ? "Exporting…" : "Export"}
+              <span className="ml-0.5 font-sans text-[11px] text-ink-3">⌘E</span>
+            </button>
+
             {/* A split button: Save is one click, and the ways of saving that
-                are not "again, over the same file" live behind the chevron.
-                Exporting flat was previously reachable only from the command
-                palette, which is no place to keep the option you want when
-                you are about to send someone a screenshot. */}
+                are not "again, over the same file" live behind the chevron. */}
             <div className="no-drag flex items-stretch overflow-hidden rounded-lg bg-accent text-accent-fg">
               <button
                 type="button"

@@ -6,6 +6,7 @@ import {
   save as saveDialog,
 } from "@tauri-apps/plugin-dialog";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
+import { downloadDir, join } from "@tauri-apps/api/path";
 import {
   IconCamera,
   IconCheck,
@@ -47,6 +48,21 @@ import type { View } from "./view";
 
 /** Consecutive nudges within this window collapse into one undo step. */
 const NUDGE_COALESCE_MS = 600;
+
+/**
+ * `name` inside the user's Downloads folder.
+ *
+ * Falls back to the bare name if the folder can't be resolved, which puts the
+ * dialog wherever it would have opened anyway — a worse default, but never a
+ * failed export.
+ */
+async function downloadsPath(name: string): Promise<string> {
+  try {
+    return await join(await downloadDir(), name);
+  } catch {
+    return name;
+  }
+}
 
 export function EditorApp() {
   const doc = useEditor((s) => s.doc);
@@ -520,12 +536,20 @@ export function EditorApp() {
 
     const path = await saveDialog({
       title: "Export flattened PNG",
-      defaultPath: `${defaultStem()}.png`,
+      // Downloads, not the capture library. An export is a copy on its way out
+      // of Shotly — into an email, a ticket, a chat — and Downloads is where
+      // the rest of the machine already looks for things like that. A bare
+      // filename would have reopened wherever the sheet was left last, which
+      // for most people is ~/Documents/Shotly: the one folder this file
+      // deliberately does not belong in.
+      defaultPath: await downloadsPath(`${defaultStem()}.png`),
       filters: [{ name: "PNG image", extensions: ["png"] }],
     });
     if (!path) return;
 
-    setBusy("save");
+    // Its own busy id, so the Export button is the one that says what it is
+    // doing rather than Save silently claiming to be mid-save.
+    setBusy("export");
     try {
       const png = await exportPng();
       if (!png) return;
