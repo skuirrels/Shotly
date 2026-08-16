@@ -160,8 +160,9 @@ src-tauri/src/
   highlight.rs   window-picker highlighting
   hotkeys.rs     the system-wide keys: storage, live rebinding, dispatch
   markup.rs      the shTL PNG chunk that keeps a saved capture editable
-  ocr.rs         text recognition, via macOS Vision
+  ocr.rs         text and QR/barcode recognition, via macOS Vision
   pin.rs         always-on-top pin windows
+  scroll.rs      scrolling capture: session loop and the row-signature stitcher
   platform.rs    AppKit escapes (window level, activation policy)
   update.rs      the self-updater
   lib.rs         tray, menu, window lifecycle, hotkey dispatch
@@ -176,6 +177,7 @@ src/
   windows/editor/    editor and library window
   windows/annotate/  the live screen-drawing layer
   windows/pin/       one pinned capture
+  windows/scroll/    scrolling capture: region selection, then the HUD
 ```
 
 Three windows, three HTML entry points (`index.html`, `annotate.html`,
@@ -279,7 +281,6 @@ Invariants that keep an unusable desktop impossible. Don't remove any of them:
 
 ## Not built yet
 
-Video and GIF recording, scrolling capture, backgrounds and shadows, upload
-destinations, measurement tools, and combining several captures onto one
-canvas. The capture layer is a trait, so a ScreenCaptureKit backend for video
-drops in behind it without touching the rest of the app.
+Video and GIF recording, measurement tools, and combining several captures
+onto one canvas. The capture layer is a trait, so a ScreenCaptureKit backend
+for video drops in behind it without touching the rest of the app.
