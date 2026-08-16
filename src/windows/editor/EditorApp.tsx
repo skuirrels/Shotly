@@ -148,9 +148,14 @@ export function EditorApp() {
    */
   const startCapture = useCallback(
     (mode: CaptureMode) => {
-      // Window capture is a choice made by looking rather than pointing — see
-      // `WindowPicker` for why the pointer turned out to be the wrong tool.
-      if (mode === "window") return setPicking((n) => n + 1);
+      // Every mode, window included, goes to Rust and is answered in one place
+      // there. This used to divert window capture straight to the thumbnail
+      // grid without asking Rust at all, which meant the toolbar button and the
+      // hotkey did entirely different things: the key drew an outline that
+      // followed the pointer, the button photographed every open window first
+      // and then offered a contact sheet. Fixing the Rust side left the button
+      // untouched and the drift invisible — the grid is still reachable, from
+      // the tray, through `editor:pick-window` below.
       const call = mode === "fullscreen" ? ipc.captureFullscreen() : ipc.beginCapture(mode);
       void call.catch((err) => notify(describe(err), "error"));
     },
