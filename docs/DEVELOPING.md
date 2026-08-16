@@ -163,6 +163,7 @@ src-tauri/src/
   ocr.rs         text and QR/barcode recognition, via macOS Vision
   pin.rs         always-on-top pin windows
   scroll.rs      scrolling capture: session loop and the row-signature stitcher
+  combine.rs     several captures composed onto one sheet
   platform.rs    AppKit escapes (window level, activation policy)
   update.rs      the self-updater
   lib.rs         tray, menu, window lifecycle, hotkey dispatch
@@ -281,6 +282,5 @@ Invariants that keep an unusable desktop impossible. Don't remove any of them:
 
 ## Not built yet
 
-Video and GIF recording, measurement tools, and combining several captures
-onto one canvas. The capture layer is a trait, so a ScreenCaptureKit backend
-for video drops in behind it without touching the rest of the app.
+Video and GIF recording. The capture layer is a trait, so a ScreenCaptureKit
+backend for video drops in behind it without touching the rest of the app.

@@ -65,7 +65,7 @@ The shot opens in the editor. Press a letter to pick a tool:
 | <kbd>V</kbd> Select | <kbd>A</kbd> Arrow | <kbd>R</kbd> Rectangle | <kbd>E</kbd> Ellipse |
 | <kbd>L</kbd> Line | <kbd>P</kbd> Pen | <kbd>T</kbd> Text | <kbd>O</kbd> Callout |
 | <kbd>N</kbd> Step number | <kbd>B</kbd> Blur | <kbd>H</kbd> Highlight | <kbd>S</kbd> Spotlight |
-| <kbd>I</kbd> Pick colour | <kbd>G</kbd> Grab text & codes | <kbd>C</kbd> Crop | |
+| <kbd>I</kbd> Pick colour | <kbd>M</kbd> Measure | <kbd>G</kbd> Grab text & codes | <kbd>C</kbd> Crop |
 
 A few things worth knowing:
 
@@ -76,6 +76,11 @@ A few things worth knowing:
   words stay readable whatever colour you choose.
 - **Pick colour** copies the hex under the pointer to the clipboard as well as
   setting your ink — usually you wanted it for a stylesheet.
+- **Measure** draws a dimension line with the distance on it. Drag roughly
+  across a gap and both ends snap onto the edges either side, so you get the
+  real number without a steady hand — hold <kbd>⌥</kbd> if you'd rather it
+  didn't. On a Retina screenshot it reads in points by default (what CSS would
+  call it); the **pt/px** switch beside the colour changes that.
 - **Everything stays editable.** Reopen a capture Shotly saved and the arrows
   and text are still there to move, recolour or delete.
 - Drag an annotation to move it, drag a corner to resize, Alt-drag to draw
@@ -161,6 +166,18 @@ recoverable.
 **Save** keeps your annotations editable for later. **Export** flattens them —
 about half the file size, and the right choice for emailing, a ticket, or
 anywhere the markup doesn't need to be undone.
+
+### Putting captures side by side
+
+Select two or more in the library, right-click, and choose **Combine** — side
+by side, stacked, or as a grid. They're laid out on one canvas with an even gap
+and opened in the editor, ready to annotate and save as a single file.
+
+To arrange things yourself, the **Canvas** button in the title bar adds blank
+space around the capture. Make room, paste another screenshot with <kbd>⌘V</kbd>,
+drag it into place — or drag it wherever you like and hit **Shrink-wrap** to
+have the canvas take the shape of what's on it. Nothing is destructive: undo
+puts it all back.
 
 ### Resizing what you share
 
