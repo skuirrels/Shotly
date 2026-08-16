@@ -35,6 +35,7 @@ import { Canvas } from "./Canvas";
 import { CommandPalette } from "./CommandPalette";
 import { EmptyLibrary, PermissionNotice } from "./EmptyState";
 import { Library } from "./Library";
+import { RecentStrip } from "./RecentStrip";
 import { ShortcutSheet } from "./ShortcutSheet";
 import { Toolbar } from "./Toolbar";
 import { TopBar } from "./TopBar";
@@ -218,6 +219,31 @@ export function EditorApp() {
       });
     },
     [notify],
+  );
+
+  /**
+   * Open a capture from the recents rail.
+   *
+   * Same bargain as ⌘W: annotations live only in memory, so switching away
+   * from a dirty document asks once and goes on the second click. The rail is
+   * a click away from the canvas at all times, which makes it much easier to
+   * hit by accident than a menu command.
+   */
+  const openRecent = useCallback(
+    (path: string) => {
+      const state = useEditor.getState();
+      if (state.doc?.libraryPath === path) return;
+
+      if (state.dirty && Date.now() - pendingClose.current > 4000) {
+        pendingClose.current = Date.now();
+        notify("Unsaved annotations — ⌘S to save, or click again to discard", "error", 4000);
+        return;
+      }
+
+      pendingClose.current = 0;
+      openPath(path);
+    },
+    [notify, openPath],
   );
 
   const openFile = useCallback(async () => {
@@ -969,13 +995,23 @@ export function EditorApp() {
         onCopy={() => void (activeView === "library" ? copyPicked() : copy())}
         onDelete={() => void deleteCaptures(picked)}
         onSave={() => void save()}
+        onSaveAs={() => void saveAs()}
+        onExportFlat={() => void exportFlat()}
         pickedCount={picked.length}
         busy={busy}
       />
 
       <main className="relative flex flex-1 overflow-hidden">
         {activeView === "editor" ? (
-          <Canvas onNotify={notify} />
+          <>
+            <RecentStrip
+              refreshKey={libraryKey}
+              currentPath={doc?.libraryPath}
+              onOpen={openRecent}
+              onError={reportError}
+            />
+            <Canvas onNotify={notify} />
+          </>
         ) : (
           // Clicking anywhere that isn't a capture clears the selection, the
           // way it does in Finder. On the whole pane rather than the grid, so
