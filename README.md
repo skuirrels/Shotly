@@ -6,7 +6,10 @@ Screenshots for macOS: capture, mark up, and get on with your day.
 
 Shotly takes the shot, opens it in an editor built for annotating rather than
 retouching, and keeps everything you capture in one folder you can actually
-find. It stays out of the way in the menu bar until you press a key.
+find. **Screen annotation** goes a step further and lets you draw straight onto
+the live desktop, for when you're explaining something on a call rather than
+marking up a picture. It stays out of the way in the menu bar until you press a
+key.
 
 ---
 
@@ -133,7 +136,7 @@ Drag it anywhere. <kbd>⌘C</kbd> copies it, <kbd>+</kbd> / <kbd>−</kbd> /
 
 ---
 
-## Drawing on the live screen
+## Screen annotation — drawing on the live screen
 
 <kbd>⌃⇧A</kbd> puts a drawing layer over your actual desktop — for explaining
 something on a call or a screen share, where marking up a static picture is no
