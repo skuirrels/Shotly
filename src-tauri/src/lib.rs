@@ -1,4 +1,5 @@
 mod annotate;
+mod ax;
 mod backup;
 mod build_info;
 mod capture;
@@ -9,6 +10,7 @@ mod markup;
 mod ocr;
 mod pin;
 mod scroll;
+mod snap;
 mod platform;
 mod update;
 
@@ -27,8 +29,8 @@ use tauri_plugin_global_shortcut::ShortcutState;
 fn dispatch(app: &tauri::AppHandle, mode: CaptureMode) {
     let result = match mode {
         CaptureMode::Fullscreen => commands::capture_fullscreen(app.clone(), None).map(|_| ()),
-        // Window capture is a choice made by looking, not by pointing.
-        CaptureMode::Window => commands::request_window_pick(app),
+        // Window capture included: `start_capture` sends it to `snap`, so the
+        // hotkey, the tray and the editor's toolbar all take the same route.
         other => commands::start_capture(app, other),
     };
 
@@ -104,6 +106,7 @@ pub fn run() {
         .manage(annotate::AnnotateState::default())
         .manage(hotkeys::HotkeyState::default())
         .manage(scroll::ScrollState::default())
+        .manage(snap::SnapState::default())
         .invoke_handler(tauri::generate_handler![
             commands::capture_permission_status,
             commands::request_capture_permission,
@@ -146,6 +149,8 @@ pub fn run() {
             scroll::scroll_start,
             scroll::scroll_finish,
             scroll::scroll_cancel,
+            snap::snap_ready,
+            snap::snap_beat,
             pin::pin_open,
             pin::pin_png,
             pin::pin_close,
@@ -257,6 +262,11 @@ fn tray_menu(app: &tauri::AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
         MenuItem::with_id(app, "region", "Capture Region", true, accel(Action::Region))?;
     let window =
         MenuItem::with_id(app, "window", "Capture Window", true, accel(Action::Window))?;
+    // The outline can only offer what the pointer can reach. This is the way to
+    // a window that is behind another one, on another Space, or fully covered —
+    // and the way to capture at all without granting Accessibility access.
+    let window_list =
+        MenuItem::with_id(app, "window-list", "Capture Window from List…", true, None::<&str>)?;
     let screen =
         MenuItem::with_id(app, "screen", "Capture Screen", true, accel(Action::Fullscreen))?;
     let scroll =
@@ -273,7 +283,10 @@ fn tray_menu(app: &tauri::AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
 
     Menu::with_items(
         app,
-        &[&region, &window, &screen, &scroll, &sep, &annotate, &stop, &unpin, &sep, &updates, &quit],
+        &[
+            &region, &window, &window_list, &screen, &scroll, &sep, &annotate, &stop, &unpin, &sep,
+            &updates, &quit,
+        ],
     )
 }
 
@@ -311,6 +324,12 @@ fn build_tray(app: &tauri::AppHandle) -> tauri::Result<()> {
         .on_menu_event(|app, event| match event.id().as_ref() {
             "region" => dispatch(app, CaptureMode::Region),
             "window" => dispatch(app, CaptureMode::Window),
+            "window-list" => {
+                if let Err(err) = commands::request_window_pick(app) {
+                    eprintln!("[shotly] could not open the window list: {err}");
+                    let _ = tauri::Emitter::emit(app, "capture:error", err);
+                }
+            }
             "screen" => dispatch(app, CaptureMode::Fullscreen),
             "scroll" => {
                 if let Err(err) = scroll::scroll_begin(app.clone()) {

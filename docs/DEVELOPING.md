@@ -90,8 +90,9 @@ To produce that build:
    npm run release
    ```
 
-   Output: a signed, notarized `Shotly.dmg` in
-   `src-tauri/target/release/bundle/dmg/`.
+   Output: a signed, notarized `Shotly_<version>_aarch64.dmg` in
+   `src-tauri/target/release/bundle/dmg/`. `npm run publish` uploads a copy of
+   it named `Shotly.dmg`, so that the README's download link never goes stale.
 
 Without notarization the app still runs, but Gatekeeper shows a scary
 "cannot be opened because the developer cannot be verified" warning, and users
@@ -305,9 +306,14 @@ Nothing separates the two cases:
 
 An outline that can point at a window that is not there is worse than no
 outline: macOS draws its own highlight, and ours could contradict it. Window
-capture now goes through `WindowPicker` instead — a grid of windows with live
+capture went through `WindowPicker` instead — a grid of windows with live
 thumbnails, captured by id — where a phantom shows itself for what it is
 because its picture matches nothing you recognise.
+
+The outline is back, from a source that can be trusted; see below. The warning
+that survives is about the *source*, not about outlines: `CGWindowListCopyWindowInfo`
+answers "which window claims this point", which is not the same question as
+"what would a click here land on", and only the second one is worth drawing.
 
 Two things that cost an afternoon to learn, both worth keeping:
 
@@ -320,23 +326,59 @@ Two things that cost an afternoon to learn, both worth keeping:
   is active. Measured: centre alpha 0 against 255 for an ordinary window. The
   picker lists such windows and says so, rather than offering an empty frame.
 
-### How Snagit does the outline: the accessibility API
+### The outline that does work: the accessibility API (`snap.rs`, `ax.rs`)
 
-Worth recording, because it is the one approach that works. Snagit's snapping
-highlight comes from `AXUIElementCopyElementAtPosition`, not the window list.
-Measured on the same desktop that defeated the old outline:
+Snagit's snapping highlight comes from `AXUIElementCopyElementAtPosition`, not
+the window list, and so does Shotly's now. Measured on the same desktop that
+defeated the old outline:
 
 - It returns the window the user can actually see, and **never** the phantom —
   accessibility hit-testing follows what is really there, the way a click does.
 - It resolves *sub-elements* as well: probing a point inside a sidebar returned
-  a 393×29 row, not the whole window. That is where Snagit's "snap to the thing
-  under the pointer" comes from.
+  a 393×29 row, not the whole window. That is where "snap to the thing under
+  the pointer" comes from, and it is what the scroll wheel steps through.
 - The enclosing window's frame comes from `kAXWindowAttribute` and matches
-  `CGWindowListCopyWindowInfo` exactly.
+  `CGWindowListCopyWindowInfo` exactly — which is what lets an outlined window
+  be matched back to a `CGWindowID` and captured from its own backing store.
 
-The price is the Accessibility permission, which is a second TCC prompt on top
-of Screen Recording. That is a product decision rather than a technical one,
-which is why the picker was built first.
+The price is the Accessibility permission, a second TCC prompt on top of Screen
+Recording. Refusing it costs the outline and nothing else: window capture falls
+back to `WindowPicker`, which needs no such grant.
+
+**The property the whole design rests on.** A window that ignores mouse events
+is invisible to accessibility hit-testing; one that accepts them is not.
+Measured: a floating, `ignoresMouseEvents` overlay placed over another
+application's window, probed at its own centre, returned the window *underneath*.
+Setting `ignoresMouseEvents = false` on the same overlay changed the answer to
+error −25208. So the outline can be drawn over its own target without poisoning
+the hit test that positions it — but nothing that accepts a click may ever be
+put on screen, which is why the click is taken by a `CGEventTap` instead.
+
+**Ancestry is mostly noise.** At one point inside a web-based application the
+raw chain was 24 elements deep, 21 of which had an identical frame. `refine`
+drops anything that duplicates the frame outside it, is too small to aim at, or
+does not actually contain the pointer — leaving 6 levels worth scrolling
+through. The walk also could not reach `AXWindow` within 24 steps at all, which
+is why `chain_at` asks for the window directly and puts it at the front rather
+than hoping to arrive at it.
+
+**Two failures worth not repeating**, both of which made a working feature look
+like a broken Mac:
+
+- **Never cache a failed hit test.** For an instant after the overlay is created
+  it is still hit-testable, so the first probe of a session can fail. The
+  tracker skips ticks where the pointer has not moved — and caching that first
+  failure meant a pointer that then never moved left a dimmed screen with no
+  outline on it, while the tap swallowed every click. The skip is now only taken
+  while something is actually being shown.
+- **The tap must not start before the outline is visible.** It is created in
+  `snap_ready` and nowhere else. Swallowing clicks is only defensible while the
+  user can see what a click would take, so the dangerous half of the feature is
+  made to depend on the visible half.
+
+Related: the first target is routinely resolved before the page has finished
+loading, so the first `emit_to` goes nowhere. `snap_ready` re-sends the current
+outline for exactly that reason.
 
 ## Not built yet
 

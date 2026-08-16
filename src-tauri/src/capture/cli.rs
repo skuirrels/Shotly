@@ -335,7 +335,12 @@ impl CaptureBackend for ScreencaptureCli {
     ///
     /// Blocks until the user finishes, so callers must be off the main thread.
     /// `Ok(None)` means the user pressed Escape.
-    fn capture_interactive(&self, window_mode: bool) -> Result<Option<Frame>> {
+    ///
+    /// The crosshair only. `screencapture -i -w` — the system's window picker —
+    /// used to be reachable from here, and is not any more: Shotly picks
+    /// windows itself now, either by outlining what the pointer is over or from
+    /// a list of live thumbnails. See `snap.rs`.
+    fn capture_interactive(&self) -> Result<Option<Frame>> {
         if !has_permission() {
             return Err(CaptureError::PermissionDenied);
         }
@@ -343,13 +348,7 @@ impl CaptureBackend for ScreencaptureCli {
         let path = self.temp_png("selection");
         let path_str = path.to_string_lossy().into_owned();
 
-        let mut args = vec!["-x", "-t", "png", "-i"];
-        if window_mode {
-            // Window mode; `-o` drops the drop shadow from the captured image.
-            args.push("-w");
-            args.push("-o");
-        }
-        args.push(&path_str);
+        let args = ["-x", "-t", "png", "-i", &path_str];
 
         // A cancelled selection exits non-zero, which isn't an error — the
         // absence of the output file is what distinguishes the two.

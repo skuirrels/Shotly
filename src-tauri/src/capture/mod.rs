@@ -84,6 +84,9 @@ pub struct WindowInfo {
     pub app_name: String,
     pub bounds: Rect,
     pub layer: i32,
+    /// The owning process, which is how a window found through the
+    /// accessibility API is matched back to an id here. See `snap.rs`.
+    pub pid: i32,
     /// True when this window has been taken full screen.
     ///
     /// Worth knowing because such a window cannot be captured by id at all:
@@ -124,7 +127,7 @@ pub trait CaptureBackend: Send + Sync {
     fn crop(&self, frame: &Frame, region: Rect) -> Result<Frame>;
 
     /// Interactive selection driven by the OS. Blocks; `None` means cancelled.
-    fn capture_interactive(&self, window_mode: bool) -> Result<Option<Frame>>;
+    fn capture_interactive(&self) -> Result<Option<Frame>>;
 
     /// Capture a single window including its shadow and rounded corners.
     fn capture_window(&self, window_id: u32) -> Result<Frame>;

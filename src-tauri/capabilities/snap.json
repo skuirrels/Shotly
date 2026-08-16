@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "snap",
+  "description": "Capabilities for the window-capture outline. It draws and reports a heartbeat, and never accepts a click — the session's input is owned by an event tap in Rust, not by this window.",
+  "windows": ["snap"],
+  "permissions": ["core:default"]
+}

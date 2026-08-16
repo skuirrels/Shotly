@@ -33,6 +33,8 @@ export interface WindowInfo {
   appName: string;
   bounds: Rect;
   layer: number;
+  /** The owning process; how the snap outline matches a window back to an id. */
+  pid: number;
   /** Full-screen windows cannot be captured by id — see `WindowPicker`. */
   fullScreen: boolean;
 }

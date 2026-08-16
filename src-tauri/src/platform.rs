@@ -43,6 +43,7 @@ pub fn elevate_overlay_window(_window: &tauri::WebviewWindow) -> Result<(), Stri
     Ok(())
 }
 
+
 /// Hide the Dock icon so Shotly lives in the menu bar, the way capture tools
 /// are expected to. Called when the editor window closes.
 #[cfg(target_os = "macos")]

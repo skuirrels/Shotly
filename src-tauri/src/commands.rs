@@ -145,6 +145,13 @@ pub fn open_screen_recording_settings(app: AppHandle) -> CmdResult<()> {
 /// thread — blocking here would freeze the event loop, since the global
 /// shortcut handler calls it on the main thread.
 pub fn start_capture(app: &AppHandle, mode: CaptureMode) -> CmdResult<()> {
+    // Window capture is neither this crosshair nor the system's picker, and it
+    // is answered in one place so that the hotkey, the tray and the editor's
+    // own toolbar button cannot drift apart — which they had.
+    if mode == CaptureMode::Window {
+        return crate::snap::capture_window(app);
+    }
+
     if !cli::has_permission() {
         // Ask once; the OS only surfaces the prompt if it has never been answered.
         cli::request_permission();
@@ -155,34 +162,11 @@ pub fn start_capture(app: &AppHandle, mode: CaptureMode) -> CmdResult<()> {
     *app.state::<AppState>().hid_editor.lock().unwrap() = conceal_editor(app);
 
     let handle = app.clone();
-    let window_mode = mode == CaptureMode::Window;
 
     std::thread::spawn(move || {
-        // Window mode used to get a red outline of its own, tracking the
-        // pointer to show which window the click would take. It has been
-        // removed, because it could not be made to tell the truth.
-        //
-        // The outline read `CGWindowListCopyWindowInfo` and framed the topmost
-        // layer-0 window under the cursor. That list contains windows which
-        // report themselves frontmost and on-screen while not being drawn at
-        // all — measured here on a real desktop, where a full-screen window
-        // ranked second from front had pixels bearing no relation to what was
-        // actually on the display beneath it. Nothing in the window's metadata
-        // separates it from a genuine one: same layer, same alpha, same
-        // `kCGWindowIsOnscreen`, owning app not hidden.
-        //
-        // Nor can it be settled by looking: the in-process image API for one
-        // window was obsoleted in macOS 15, and the screen cannot be sampled
-        // during a picker session anyway, because `screencapture -i -w` puts a
-        // full-screen sheet of its own in front of everything for the duration.
-        //
-        // So the outline was a confident red rectangle around a window that
-        // might not be there — worse than no rectangle, since macOS's picker
-        // draws its own highlight and ours could contradict it. See
-        // `docs/DEVELOPING.md`.
         let outcome = {
             let state = handle.state::<AppState>();
-            state.backend.capture_interactive(window_mode)
+            state.backend.capture_interactive()
         };
 
         match outcome {

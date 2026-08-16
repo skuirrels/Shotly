@@ -128,6 +128,7 @@ mod imp {
                 height: dict_number(&bounds_dict, "Height").unwrap_or(0.0),
             },
             layer,
+            pid: dict_number(dict, "kCGWindowOwnerPID").unwrap_or(0.0) as i32,
             full_screen: layer == FULL_SCREEN_LAYER,
         })
     }
