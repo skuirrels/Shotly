@@ -19,6 +19,7 @@ import {
   IconLayers,
   IconOverlay,
   IconPen,
+  IconGear,
   IconPin,
   IconRedo,
   IconRefresh,
@@ -42,6 +43,7 @@ import { CommandPalette } from "./CommandPalette";
 import { EmptyLibrary, PermissionNotice } from "./EmptyState";
 import { Library } from "./Library";
 import { RecentStrip } from "./RecentStrip";
+import { Settings } from "./Settings";
 import { ShortcutSheet } from "./ShortcutSheet";
 import { TextResult } from "./TextResult";
 import { Toolbar } from "./Toolbar";
@@ -72,6 +74,7 @@ export function EditorApp() {
   const doc = useEditor((s) => s.doc);
   const [palette, setPalette] = useState(false);
   const [sheet, setSheet] = useState(false);
+  const [settings, setSettings] = useState(false);
   /** Lines the recogniser found, shown until dismissed. */
   const [scan, setScan] = useState<TextLine[] | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
@@ -1016,6 +1019,16 @@ export function EditorApp() {
           void ipc.annotateToggle().catch((err) => notify(`Annotation failed: ${err}`, "error")),
       },
       {
+        id: "app.settings",
+        title: "Settings",
+        group: "View",
+        shortcut: "Mod+,",
+        icon: <IconGear />,
+        keywords: "preferences backup google drive dropbox copy folder",
+        allowWhileTyping: true,
+        run: () => setSettings(true),
+      },
+      {
         id: "capture.pin",
         title: "Pin to screen",
         group: "Capture",
@@ -1140,7 +1153,7 @@ export function EditorApp() {
   ]);
 
   // Modals own the keyboard while they're up.
-  useKeymap(commands, !palette && !sheet);
+  useKeymap(commands, !palette && !sheet && !settings);
 
   // The editor pane needs something to show; without a document the library is
   // the only thing there is, whatever the last explicit choice was.
@@ -1250,6 +1263,8 @@ export function EditorApp() {
 
       {palette && <CommandPalette commands={commands} onClose={() => setPalette(false)} />}
       {sheet && <ShortcutSheet commands={commands} onClose={() => setSheet(false)} />}
+
+      {settings && <Settings onClose={() => setSettings(false)} />}
 
       {scan && (
         <TextResult

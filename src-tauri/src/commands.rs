@@ -373,6 +373,7 @@ pub fn save_png(path: String, bytes: Vec<u8>, scale: Option<f64>) -> CmdResult<(
 /// afternoon.
 #[tauri::command]
 pub fn save_editable_png(
+    app: AppHandle,
     path: String,
     bytes: Vec<u8>,
     source: String,
@@ -392,7 +393,13 @@ pub fn save_editable_png(
         }
     };
 
-    std::fs::write(&path, &out).map_err(|e| e.to_string())
+    std::fs::write(&path, &out).map_err(|e| e.to_string())?;
+
+    // Re-saving an existing capture never touches `write_into_library`, so
+    // without this a backup would hold the version from the first save for
+    // ever — quietly, which is the worst way for a backup to be wrong.
+    crate::backup::mirror_one(&app, &path);
+    Ok(())
 }
 
 /// The folder every capture lands in: `~/Documents/Shotly`.
@@ -468,7 +475,10 @@ pub fn write_into_library(app: &AppHandle, bytes: &[u8], stem: &str) -> CmdResul
     }
 
     std::fs::write(&target, bytes).map_err(|e| e.to_string())?;
-    Ok(target.to_string_lossy().into_owned())
+
+    let path = target.to_string_lossy().into_owned();
+    crate::backup::mirror_one(app, &path);
+    Ok(path)
 }
 
 // ---------------------------------------------------------------- library

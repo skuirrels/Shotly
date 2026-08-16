@@ -295,3 +295,25 @@ export interface TextLine {
   /** 0 to 1, as Vision reports it. */
   confidence: number;
 }
+
+// ---------------------------------------------------------------- backup
+
+/** Mirrors `Settings` in `src-tauri/src/backup.rs`. */
+export interface BackupSettings {
+  enabled: boolean;
+  destination: string | null;
+}
+
+/** A cloud sync folder found on this Mac. */
+export interface BackupTarget {
+  label: string;
+  path: string;
+}
+
+/** What one run of the backup did. */
+export interface BackupReport {
+  copied: number;
+  skipped: number;
+  failed: number;
+  destination: string;
+}

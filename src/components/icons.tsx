@@ -121,6 +121,14 @@ export const IconEyedropper = (p: SVGProps<SVGSVGElement>) => (
   </Icon>
 );
 
+/** The usual cog: a ring of teeth around a hub. */
+export const IconGear = (p: SVGProps<SVGSVGElement>) => (
+  <Icon {...p}>
+    <circle cx="8" cy="8" r="2.4" />
+    <path d="M8 1.6v1.8M8 12.6v1.8M14.4 8h-1.8M3.4 8H1.6M12.5 3.5l-1.3 1.3M4.8 11.2l-1.3 1.3M12.5 12.5l-1.3-1.3M4.8 4.8 3.5 3.5" />
+  </Icon>
+);
+
 /**
  * A picture inside a margin: an outer frame with an inner one set well in,
  * which is exactly what a backdrop does to a capture.

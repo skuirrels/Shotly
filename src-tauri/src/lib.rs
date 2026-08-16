@@ -1,4 +1,5 @@
 mod annotate;
+mod backup;
 mod build_info;
 mod capture;
 mod commands;
@@ -120,6 +121,10 @@ pub fn run() {
             commands::hide_editor,
             update::check_for_updates,
             update::pending_update,
+            backup::backup_targets,
+            backup::backup_settings,
+            backup::backup_configure,
+            backup::backup_now,
             ocr::recognize_text,
             pin::pin_open,
             pin::pin_png,

@@ -1,5 +1,8 @@
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import type {
+  BackupReport,
+  BackupSettings,
+  BackupTarget,
   CaptureMode,
   CaptureResult,
   HotkeyAction,
@@ -151,3 +154,14 @@ export const pinPng = (bytes: Uint8Array) =>
   invoke<string>("pin_png", { bytes: Array.from(bytes) });
 
 export const pinCloseAll = () => invoke<void>("pin_close_all");
+
+/** Cloud sync folders this Mac has, to offer as one-click backup choices. */
+export const backupTargets = () => invoke<BackupTarget[]>("backup_targets");
+
+export const backupSettings = () => invoke<BackupSettings>("backup_settings");
+
+export const backupConfigure = (enabled: boolean, destination: string | null) =>
+  invoke<BackupSettings>("backup_configure", { enabled, destination });
+
+/** Copy everything in the library that isn't already at the destination. */
+export const backupNow = () => invoke<BackupReport>("backup_now");
