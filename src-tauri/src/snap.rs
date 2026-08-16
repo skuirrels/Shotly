@@ -376,17 +376,10 @@ fn spawn_tap(generation: u64) {
     use core_foundation::runloop::{kCFRunLoopCommonModes, kCFRunLoopDefaultMode, CFRunLoop};
     use core_graphics::event::{
         CGEventTap, CGEventTapLocation, CGEventTapOptions, CGEventTapPlacement, CGEventType,
-        EventField,
+        CallbackResult, EventField,
     };
 
     std::thread::spawn(move || {
-        /// Neutralise an event so it reaches nobody. A tap callback cannot
-        /// return null through this binding, but an event with no type is
-        /// delivered and ignored, which comes to the same thing.
-        fn swallow(event: &core_graphics::event::CGEvent) {
-            event.set_type(CGEventType::Null);
-        }
-
         fn decide(verdict: u8) {
             // First verdict wins: a click and an Escape in the same tick should
             // not be able to overwrite one another.
@@ -416,15 +409,17 @@ fn spawn_tap(generation: u64) {
                 match etype {
                     CGEventType::LeftMouseDown => {
                         decide(VERDICT_TAKE);
-                        swallow(event);
+                        CallbackResult::Drop
                     }
                     // The other half of a click we already took, and any drag
                     // that follows it. Passing these on would leave whatever is
                     // underneath handling a mouse-up it never saw pressed.
-                    CGEventType::LeftMouseUp | CGEventType::LeftMouseDragged => swallow(event),
+                    CGEventType::LeftMouseUp | CGEventType::LeftMouseDragged => {
+                        CallbackResult::Drop
+                    }
                     CGEventType::RightMouseDown | CGEventType::RightMouseUp => {
                         decide(VERDICT_CANCEL);
-                        swallow(event);
+                        CallbackResult::Drop
                     }
                     CGEventType::KeyDown | CGEventType::KeyUp => {
                         // Escape and nothing else. A bare letter was tried here
@@ -436,7 +431,9 @@ fn spawn_tap(generation: u64) {
                         let code = event.get_integer_value_field(EventField::KEYBOARD_EVENT_KEYCODE);
                         if code == KEY_ESCAPE {
                             decide(VERDICT_CANCEL);
-                            swallow(event);
+                            CallbackResult::Drop
+                        } else {
+                            CallbackResult::Keep
                         }
                     }
                     CGEventType::ScrollWheel => {
@@ -456,7 +453,7 @@ fn spawn_tap(generation: u64) {
                             )
                         };
                         SCROLL.fetch_add(delta, Ordering::Relaxed);
-                        swallow(event);
+                        CallbackResult::Drop
                     }
                     // The system has switched the tap off — either the callback
                     // was too slow or the user did something that invalidates
@@ -475,6 +472,7 @@ fn spawn_tap(generation: u64) {
                     // loop below does it, so this stays a single store.
                     CGEventType::TapDisabledByTimeout => {
                         REARM.store(true, Ordering::SeqCst);
+                        CallbackResult::Keep
                     }
                     // This one is not ours to argue with: it means something
                     // took the input away — secure input, a password field —
@@ -482,11 +480,13 @@ fn spawn_tap(generation: u64) {
                     // moment. An outline that no longer owns the click is a lie.
                     CGEventType::TapDisabledByUserInput => {
                         eprintln!("[snap] the tap was disabled by the system; ending the session");
-                        decide(VERDICT_CANCEL)
+                        decide(VERDICT_CANCEL);
+                        CallbackResult::Keep
                     }
-                    _ => {}
+                    // Everything else passes through untouched, which is what
+                    // keeps ⌘Tab and ⌘Q working while a session is up.
+                    _ => CallbackResult::Keep,
                 }
-                None
             },
         );
 
@@ -499,7 +499,7 @@ fn spawn_tap(generation: u64) {
         // SAFETY: the run loop source belongs to this thread's run loop, and
         // both are dropped together when this function returns.
         unsafe {
-            let Ok(source) = tap.mach_port.create_runloop_source(0) else {
+            let Ok(source) = tap.mach_port().create_runloop_source(0) else {
                 eprintln!("[snap] the event tap has no run loop source");
                 VERDICT.store(VERDICT_CANCEL, Ordering::SeqCst);
                 return;
