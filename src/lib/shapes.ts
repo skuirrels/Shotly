@@ -12,14 +12,34 @@ export const FONT_STACK =
 export type { Point };
 
 /**
- * Outline of a tapered arrow, tail to head.
+ * How much heavier an arrow is than its stroke width suggests.
  *
- * A filled polygon rather than a stroked line with a marker: markers don't
- * scale with stroke width predictably across renderers, and the taper is what
- * makes an annotation arrow look drawn rather than diagrammatic.
+ * An arrow is not a line, and weighting it like one made it disappear into
+ * screenshots — a stroke that reads clearly as a rectangle's border is thin and
+ * apologetic once it has a head on the end and is pointing at something.
+ *
+ * The figure is measured rather than chosen. Against a reference arrow of the
+ * intended weight, drawn over a 1860×1317 capture: head 65pt across and 75pt
+ * long, shaft 22pt. At the default stroke of 10 this geometry gives 66 / 79 /
+ * 24 — the same arrow. The ratios below already matched; only the weight did
+ * not, which is why this is one number and not four.
+ */
+const ARROW_WEIGHT = 2.2;
+
+/**
+ * Outline of an arrow: a parallel-sided shaft with a head on the end.
+ *
+ * A filled polygon rather than a stroked line with a marker, because markers
+ * don't scale with stroke width predictably across renderers.
+ *
+ * The shaft used to taper from a near-point tail, on the theory that it made
+ * the arrow look drawn rather than diagrammatic. It doesn't — it makes the tail
+ * look like it is fading out, and an arrow pointing at something in a
+ * screenshot wants a constant weight the eye can follow back to where it
+ * started. Only the head flares.
  */
 export function arrowPolygon(a: LineAnnotation): Point[] {
-  const sw = a.style.strokeWidth;
+  const sw = a.style.strokeWidth * ARROW_WEIGHT;
   const dx = a.x2 - a.x1;
   const dy = a.y2 - a.y1;
   const len = Math.hypot(dx, dy) || 1;
@@ -34,20 +54,19 @@ export function arrowPolygon(a: LineAnnotation): Point[] {
   // into a triangle with no shaft.
   const headLen = Math.min(sw * 3.6, len * 0.6);
   const headHalf = sw * 1.5;
-  const tailHalf = sw * 0.18;
   const shaftHalf = sw * 0.55;
 
   const bx = a.x2 - ux * headLen;
   const by = a.y2 - uy * headLen;
 
   return [
-    { x: a.x1 + px * tailHalf, y: a.y1 + py * tailHalf },
+    { x: a.x1 + px * shaftHalf, y: a.y1 + py * shaftHalf },
     { x: bx + px * shaftHalf, y: by + py * shaftHalf },
     { x: bx + px * headHalf, y: by + py * headHalf },
     { x: a.x2, y: a.y2 },
     { x: bx - px * headHalf, y: by - py * headHalf },
     { x: bx - px * shaftHalf, y: by - py * shaftHalf },
-    { x: a.x1 - px * tailHalf, y: a.y1 - py * tailHalf },
+    { x: a.x1 - px * shaftHalf, y: a.y1 - py * shaftHalf },
   ];
 }
 
