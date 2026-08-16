@@ -84,6 +84,14 @@ export const IconHighlight = (p: SVGProps<SVGSVGElement>) => (
   </Icon>
 );
 
+/** A filled box with words in it — a label you drag out, not a caret. */
+export const IconCallout = (p: SVGProps<SVGSVGElement>) => (
+  <Icon {...p}>
+    <rect x="1.5" y="3" width="13" height="10" rx="2.2" />
+    <path d="M4.5 7h7M4.5 9.8h4.5" />
+  </Icon>
+);
+
 /** A darkened field with a clear rectangle punched out of the middle. */
 export const IconSpotlight = (p: SVGProps<SVGSVGElement>) => (
   <Icon {...p}>

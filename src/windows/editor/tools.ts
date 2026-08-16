@@ -2,6 +2,7 @@ import type { ReactNode } from "react";
 import {
   IconArrow,
   IconBlur,
+  IconCallout,
   IconCrop,
   IconEllipse,
   IconEyedropper,
@@ -38,6 +39,7 @@ export const TOOLS: ToolDef[] = [
   { id: "line", label: "Line", shortcut: "L", icon: IconLine },
   { id: "pen", label: "Pen", shortcut: "P", icon: IconPen },
   { id: "text", label: "Text", shortcut: "T", icon: IconText },
+  { id: "callout", label: "Callout", shortcut: "O", icon: IconCallout },
   { id: "step", label: "Step number", shortcut: "N", icon: IconStep },
   { id: "blur", label: "Blur", shortcut: "B", icon: IconBlur },
   { id: "highlight", label: "Highlight", shortcut: "H", icon: IconHighlight },
@@ -75,6 +77,10 @@ export function styleControlsFor(kind: ToolId | string): {
 
   switch (kind) {
     case "text":
+      return { ...none, font: true, color: true };
+    // No stroke or fill control: a callout *is* its fill, and the text colour
+    // follows from it automatically so the words stay legible on any swatch.
+    case "callout":
       return { ...none, font: true, color: true };
     case "blur":
       return { ...none, blur: true };

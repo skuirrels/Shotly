@@ -76,6 +76,7 @@ export type ToolId =
   | "pen"
   | "text"
   | "step"
+  | "callout"
   | "blur"
   | "highlight"
   | "spotlight"
@@ -83,7 +84,14 @@ export type ToolId =
   | "crop";
 
 /** Tools that produce a box-shaped annotation by dragging a rectangle. */
-export type BoxKind = "rect" | "ellipse" | "blur" | "highlight" | "spotlight" | "text";
+export type BoxKind =
+  | "rect"
+  | "ellipse"
+  | "blur"
+  | "highlight"
+  | "spotlight"
+  | "text"
+  | "callout";
 /** Tools defined by two endpoints rather than a bounding box. */
 export type LineKind = "arrow" | "line";
 
@@ -113,7 +121,7 @@ export interface BoxAnnotation extends AnnotationBase {
   y: number;
   width: number;
   height: number;
-  /** Only meaningful for `kind === "text"`. */
+  /** Only meaningful for `kind === "text"` and `kind === "callout"`. */
   text?: string;
 }
 
@@ -149,7 +157,8 @@ export type Annotation = BoxAnnotation | LineAnnotation | StepAnnotation | PenAn
 
 export function isBox(a: Annotation): a is BoxAnnotation {
   return a.kind === "rect" || a.kind === "ellipse" || a.kind === "blur" ||
-    a.kind === "highlight" || a.kind === "spotlight" || a.kind === "text";
+    a.kind === "highlight" || a.kind === "spotlight" || a.kind === "text" ||
+    a.kind === "callout";
 }
 
 export function isLine(a: Annotation): a is LineAnnotation {

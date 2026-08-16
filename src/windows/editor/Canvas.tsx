@@ -1,5 +1,13 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
-import { FREEHAND_MIN_STEP, measureText, stepRadius } from "@/lib/shapes";
+import {
+  calloutLayout,
+  CALLOUT_PADDING,
+  contrastInk,
+  FREEHAND_MIN_STEP,
+  measureText,
+  stepRadius,
+  wrapText,
+} from "@/lib/shapes";
 import { forgetPixels, preloadPixels, sampleColor } from "@/lib/pick";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import {
@@ -23,7 +31,25 @@ type Drag =
   | { kind: "resize"; id: string; handle: HandleId; snapshot: Annotation }
   | { kind: "crop"; origin: Point };
 
-const BOX_TOOLS: BoxKind[] = ["rect", "ellipse", "blur", "highlight", "spotlight"];
+const BOX_TOOLS: BoxKind[] = ["rect", "ellipse", "blur", "highlight", "spotlight", "callout"];
+
+/** A callout dragged out smaller than this gets a usable size instead. */
+const CALLOUT_MIN = { width: 160, height: 56 };
+
+/**
+ * Grow a callout so every line of its text is inside it.
+ *
+ * Applied to the stored geometry rather than at draw time, so the selection
+ * box and handles agree with what is on screen. Dragging the box narrower
+ * rewraps the text and pushes the height back out, which is the behaviour you
+ * want: a callout that hides its own words is broken.
+ */
+function fitCallout(a: Annotation): Annotation {
+  if (a.kind !== "callout" || !isBox(a)) return a;
+  const box = boundsOf(a);
+  const { needed } = calloutLayout(a.text ?? "", a.style.fontSize, box.width);
+  return { ...a, x: box.x, y: box.y, width: box.width, height: Math.max(box.height, needed) };
+}
 const PAD = 48;
 
 export function Canvas({ onNotify }: { onNotify?: (text: string) => void }) {
@@ -493,14 +519,36 @@ export function Canvas({ onNotify }: { onNotify?: (text: string) => void }) {
 
     const store = useEditor.getState();
 
-    // A click with a drawing tool that produced nothing leaves an empty shape
-    // behind; drop it and the history entry that came with it.
     if (active.kind === "create") {
       const created = store.annotations.find((a) => a.id === active.id);
+
+      if (created?.kind === "callout") {
+        // A callout is a box you then type into, so it goes straight into edit
+        // rather than waiting to be double-clicked. A click that dragged no
+        // box still makes one: unlike a rectangle, an empty callout is a
+        // perfectly good starting point — it is about to be filled with words.
+        const b = boundsOf(created);
+        store.update(created.id, {
+          width: Math.max(b.width, CALLOUT_MIN.width),
+          height: Math.max(b.height, CALLOUT_MIN.height),
+        });
+        setEditingId(created.id);
+        return;
+      }
+
+      // A click with a drawing tool that produced nothing leaves an empty shape
+      // behind; drop it and the history entry that came with it.
       if (created && isDegenerate(created)) {
         store.remove([active.id]);
         store.undo();
       }
+    }
+
+    // Narrowing a callout rewraps its text, which may now need more height
+    // than the drag left it.
+    if (active.kind === "resize") {
+      const shape = store.annotations.find((a) => a.id === active.id);
+      if (shape?.kind === "callout") store.update(shape.id, fitCallout(shape));
     }
   };
 
@@ -515,11 +563,16 @@ export function Canvas({ onNotify }: { onNotify?: (text: string) => void }) {
   const commitEdit = useCallback(() => {
     const store = useEditor.getState();
     const target = store.annotations.find((a) => a.id === editingId);
-    // An empty text box is a mis-click, not content.
-    if (target && target.kind === "text" && !(target.text ?? "").trim()) {
-      store.remove([target.id]);
-    }
     setEditingId(null);
+    if (!target) return;
+
+    // An empty box of either sort is a mis-click, not content.
+    if ((target.kind === "text" || target.kind === "callout") && !(target.text ?? "").trim()) {
+      store.remove([target.id]);
+      return;
+    }
+
+    if (target.kind === "callout") store.update(target.id, fitCallout(target));
   }, [editingId]);
 
   // Double-click a text annotation to edit it again. Not gated on the select
@@ -527,7 +580,7 @@ export function Canvas({ onNotify }: { onNotify?: (text: string) => void }) {
   // nothing for this to collide with.
   const onDoubleClick = (e: React.MouseEvent) => {
     const hit = [...annotations].reverse().find((a) => {
-      if (a.kind !== "text") return false;
+      if (a.kind !== "text" && a.kind !== "callout") return false;
       const b = boundsOf(a);
       const p = toDoc(e);
       return p.x >= b.x && p.x <= b.x + b.width && p.y >= b.y && p.y <= b.y + b.height;
@@ -614,14 +667,30 @@ export function Canvas({ onNotify }: { onNotify?: (text: string) => void }) {
             </div>
           )}
 
-          {editing && editing.kind === "text" && (
+          {editing && (editing.kind === "text" || editing.kind === "callout") && (
             <TextEditor
               key={editing.id}
               value={editing.text ?? ""}
-              x={editing.x * zoom}
-              y={editing.y * zoom}
-              color={editing.style.color}
+              x={boundsOf(editing).x * zoom}
+              y={boundsOf(editing).y * zoom}
+              // On a callout the words sit on the fill, so they take the same
+              // automatic ink the drawn shape would — typing has to look like
+              // the result, or committing is a jump-cut.
+              color={
+                editing.kind === "callout"
+                  ? contrastInk(editing.style.color)
+                  : editing.style.color
+              }
               fontSize={editing.style.fontSize * zoom}
+              box={
+                editing.kind === "callout"
+                  ? {
+                      width: boundsOf(editing).width * zoom,
+                      height: boundsOf(editing).height * zoom,
+                      padding: CALLOUT_PADDING * zoom,
+                    }
+                  : undefined
+              }
               onChange={(text) => useEditor.getState().update(editing.id, { text })}
               onCommit={commitEdit}
             />
@@ -710,6 +779,7 @@ function TextEditor({
   y,
   color,
   fontSize,
+  box,
   onChange,
   onCommit,
 }: {
@@ -718,6 +788,8 @@ function TextEditor({
   y: number;
   color: string;
   fontSize: number;
+  /** Set for a callout, whose text is bound to a box already on screen. */
+  box?: { width: number; height: number; padding: number };
   onChange: (v: string) => void;
   onCommit: () => void;
 }) {
@@ -745,6 +817,11 @@ function TextEditor({
   };
 
   const metrics = measureText(value, fontSize);
+  // Inside a box the text wraps, so the caret's resting place depends on the
+  // wrapped line count, not the typed one.
+  const lineCount = box
+    ? wrapText(value, fontSize, box.width - box.padding * 2).length
+    : metrics.lines.length;
 
   return (
     <textarea
@@ -769,12 +846,28 @@ function TextEditor({
         color,
         font: `600 ${fontSize}px -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif`,
         lineHeight: 1.3,
-        padding: 6,
-        width: Math.max(metrics.width, fontSize * 3),
-        height: metrics.height,
         caretColor: color,
-        textShadow: "0 1px 3px rgba(0,0,0,0.45)",
-        outline: "1px dashed var(--color-accent)",
+        ...(box
+          ? {
+              // Inside a callout the text wraps to the shape and sits in the
+              // middle of it, so the caret lands where the words will.
+              padding: box.padding,
+              width: box.width,
+              height: box.height,
+              textAlign: "center" as const,
+              // Vertically centred by padding the block down, since a textarea
+              // has no way to centre its content.
+              paddingTop: Math.max(box.padding, (box.height - lineCount * fontSize * 1.3) / 2),
+              textShadow: "none",
+              outline: "1px dashed rgba(255,255,255,0.55)",
+            }
+          : {
+              padding: 6,
+              width: Math.max(metrics.width, fontSize * 3),
+              height: metrics.height,
+              textShadow: "0 1px 3px rgba(0,0,0,0.45)",
+              outline: "1px dashed var(--color-accent)",
+            }),
       }}
     />
   );

@@ -1,6 +1,8 @@
 import { invoke } from "@tauri-apps/api/core";
 import {
   arrowPolygon,
+  calloutLayout,
+  contrastInk,
   fontFor,
   measureText,
   SHADOW,
@@ -232,6 +234,31 @@ function drawAnnotation(
       ctx.fill("evenodd");
       ctx.restore();
       break;
+
+    case "callout": {
+      const { lines, lineHeight } = calloutLayout(a.text ?? "", a.style.fontSize, b.width);
+
+      withShadow(ctx, a.style.shadow, () => {
+        ctx.beginPath();
+        ctx.roundRect(b.x, b.y, b.width, b.height, Math.min(10, b.width / 2, b.height / 2));
+        ctx.fillStyle = color;
+        ctx.fill();
+      });
+
+      ctx.save();
+      ctx.fillStyle = contrastInk(color);
+      ctx.font = fontFor(a.style.fontSize);
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      // Matches the SVG: centred as a block, so a two-line callout sits
+      // symmetrically rather than hanging from the top.
+      const first = b.y + b.height / 2 - ((lines.length - 1) * lineHeight) / 2;
+      lines.forEach((line, i) => {
+        ctx.fillText(line, b.x + b.width / 2, first + i * lineHeight);
+      });
+      ctx.restore();
+      break;
+    }
 
     case "text": {
       const m = measureText(a.text ?? "", a.style.fontSize);

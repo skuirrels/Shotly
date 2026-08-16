@@ -129,6 +129,80 @@ export function measureText(text: string, fontSize: number): TextMetrics {
   };
 }
 
+// ---------------------------------------------------------------- callout
+
+/** Breathing room between a callout's text and its edges. */
+export const CALLOUT_PADDING = 12;
+
+/**
+ * Wrap text to a width, breaking on spaces.
+ *
+ * The plain text tool deliberately doesn't wrap — its box is sized by what you
+ * type. A callout is the other way round: you drag out the box first, so the
+ * words have to fit the shape rather than the shape fitting the words. A single
+ * word longer than the box is left to overhang rather than broken mid-word,
+ * which is the lesser of two ugly outcomes.
+ */
+export function wrapText(text: string, fontSize: number, maxWidth: number): string[] {
+  const ctx = ctxFor(fontSize);
+  const room = Math.max(1, maxWidth);
+  const lines: string[] = [];
+
+  for (const paragraph of (text.length > 0 ? text : " ").split("\n")) {
+    let line = "";
+    for (const word of paragraph.split(" ")) {
+      const candidate = line ? `${line} ${word}` : word;
+      if (line && ctx.measureText(candidate).width > room) {
+        lines.push(line);
+        line = word;
+      } else {
+        line = candidate;
+      }
+    }
+    lines.push(line);
+  }
+
+  return lines;
+}
+
+export interface CalloutLayout {
+  lines: string[];
+  lineHeight: number;
+  /** The height the box needs to show every line. */
+  needed: number;
+}
+
+export function calloutLayout(
+  text: string,
+  fontSize: number,
+  boxWidth: number,
+): CalloutLayout {
+  const lines = wrapText(text, fontSize, boxWidth - CALLOUT_PADDING * 2);
+  const lineHeight = fontSize * LINE_HEIGHT;
+  return { lines, lineHeight, needed: lines.length * lineHeight + CALLOUT_PADDING * 2 };
+}
+
+/**
+ * Black or white text, whichever survives on this fill.
+ *
+ * A callout is a solid colour with words on it, and the palette runs from
+ * yellow to navy — one fixed ink would be invisible on half of it. Rec. 709
+ * luma, which is close enough to perceived brightness for a two-way choice.
+ */
+export function contrastInk(fill: string): string {
+  const hex = fill.replace("#", "");
+  const full =
+    hex.length === 3
+      ? hex
+          .split("")
+          .map((c) => c + c)
+          .join("")
+      : hex;
+  const [r, g, b] = [0, 2, 4].map((i) => parseInt(full.slice(i, i + 2), 16) || 0);
+  const luma = (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255;
+  return luma > 0.55 ? "#16181C" : "#FFFFFF";
+}
+
 // ------------------------------------------------------------------- step
 
 /** Radius of a step badge, derived from stroke width so it scales with style. */
