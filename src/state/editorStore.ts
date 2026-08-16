@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { type Backdrop, DEFAULT_BACKDROP, NO_BACKDROP } from "@/lib/backdrop";
 import { parse as parseMarkup } from "@/lib/markup";
 import { type OverlaySource, placeOverlay } from "@/lib/overlay";
 import {
@@ -86,6 +87,8 @@ interface HistoryEntry {
   stepCounter: number;
   /** Crop is undoable alongside annotations, so it rides in the same entry. */
   crop: Rect | null;
+  /** As is the frame: choosing one is an edit like any other. */
+  backdrop: Backdrop;
 }
 
 interface EditorState {
@@ -99,6 +102,8 @@ interface EditorState {
   /** A callout's remembered text size. See `DEFAULT_CALLOUT_FONT_SIZE`. */
   calloutFontSize: number;
   stepCounter: number;
+  /** The frame drawn around the capture on export. */
+  backdrop: Backdrop;
   /** Set while a crop gesture is pending confirmation. */
   pendingCrop: Rect | null;
   zoom: number;
@@ -118,6 +123,7 @@ interface EditorState {
   setTool: (tool: ToolId) => void;
   setStyle: (patch: Partial<Style>) => void;
   setCalloutFontSize: (fontSize: number) => void;
+  setBackdrop: (patch: Partial<Backdrop>) => void;
   setZoom: (zoom: number) => void;
   setFitToWindow: (fit: boolean) => void;
 
@@ -157,6 +163,7 @@ function snapshotOf(s: EditorState): HistoryEntry {
     annotations: s.annotations,
     stepCounter: s.stepCounter,
     crop: s.doc ? s.doc.crop : null,
+    backdrop: s.backdrop,
   };
 }
 
@@ -198,6 +205,7 @@ export const useEditor = create<EditorState>((set, get) => ({
   style: DEFAULT_STYLE,
   calloutFontSize: DEFAULT_CALLOUT_FONT_SIZE,
   stepCounter: 1,
+  backdrop: NO_BACKDROP,
   pendingCrop: null,
   zoom: 1,
   fitToWindow: true,
@@ -229,6 +237,7 @@ export const useEditor = create<EditorState>((set, get) => ({
       annotations: restored?.annotations ?? [],
       selectedIds: [],
       stepCounter: restored?.stepCounter ?? 1,
+      backdrop: restored?.backdrop ?? NO_BACKDROP,
       pendingCrop: null,
       past: [],
       future: [],
@@ -268,6 +277,26 @@ export const useEditor = create<EditorState>((set, get) => ({
   setCalloutFontSize: (fontSize) =>
     set((s) => ({ calloutFontSize: fontSize, ...restyleSelection(s, { fontSize }) })),
 
+  /**
+   * Change the frame.
+   *
+   * Undoable, and marks the document dirty: it changes the exported image, so
+   * it is an edit rather than a view setting. Choosing a colour for the first
+   * time also brings a sensible margin with it, since a frame of zero width
+   * would look like the swatch had done nothing.
+   */
+  setBackdrop: (patch) =>
+    set((s) => {
+      const arriving = patch.fill !== undefined && patch.fill !== "none" && s.backdrop.fill === "none";
+      const backdrop = { ...s.backdrop, ...(arriving ? DEFAULT_BACKDROP : {}), ...patch };
+      return {
+        backdrop,
+        dirty: true,
+        past: [...s.past, snapshotOf(s)].slice(-HISTORY_LIMIT),
+        future: [],
+      };
+    }),
+
   setZoom: (zoom) => set({ zoom: Math.min(8, Math.max(0.05, zoom)), fitToWindow: false }),
   setFitToWindow: (fitToWindow) => set({ fitToWindow }),
 
@@ -283,6 +312,7 @@ export const useEditor = create<EditorState>((set, get) => ({
         future: [snapshotOf(s), ...s.future].slice(0, HISTORY_LIMIT),
         annotations: prev.annotations,
         stepCounter: prev.stepCounter,
+        backdrop: prev.backdrop,
         doc: restoreDoc(s.doc, prev),
         // Drop references to shapes that no longer exist.
         selectedIds: s.selectedIds.filter((id) => prev.annotations.some((a) => a.id === id)),
@@ -299,6 +329,7 @@ export const useEditor = create<EditorState>((set, get) => ({
         future: s.future.slice(1),
         annotations: next.annotations,
         stepCounter: next.stepCounter,
+        backdrop: next.backdrop,
         doc: restoreDoc(s.doc, next),
         selectedIds: s.selectedIds.filter((id) => next.annotations.some((a) => a.id === id)),
         dirty: true,

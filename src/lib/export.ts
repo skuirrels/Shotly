@@ -11,6 +11,13 @@ import {
 } from "./shapes";
 import { type Annotation, boundsOf, isBox, isImage, isLine, isPen, isStep } from "./types";
 import type { Doc } from "@/state/editorStore";
+import {
+  type Backdrop,
+  backdropMetrics,
+  fillById,
+  fillToCanvas,
+  hasBackdrop,
+} from "./backdrop";
 
 /**
  * Renders the document to a PNG at native capture resolution.
@@ -19,7 +26,11 @@ import type { Doc } from "@/state/editorStore";
  * rather than fetched over the asset protocol — a cross-origin image would
  * taint the canvas and make `toBlob` throw.
  */
-export async function renderToPng(doc: Doc, annotations: Annotation[]): Promise<Uint8Array> {
+export async function renderToPng(
+  doc: Doc,
+  annotations: Annotation[],
+  backdrop?: Backdrop,
+): Promise<Uint8Array> {
   const bytes = await invoke<number[]>("read_capture_bytes", { path: doc.path });
   const blob = new Blob([new Uint8Array(bytes)], { type: "image/png" });
   const url = URL.createObjectURL(blob);
@@ -28,12 +39,27 @@ export async function renderToPng(doc: Doc, annotations: Annotation[]): Promise<
     const img = await loadImage(url);
 
     const { width, height } = doc.crop;
+    const frame = backdrop && hasBackdrop(backdrop) ? backdrop : null;
+    const metrics = frame ? backdropMetrics(frame, width, height) : null;
+
     const canvas = document.createElement("canvas");
-    canvas.width = Math.round(width);
-    canvas.height = Math.round(height);
+    canvas.width = Math.round(metrics ? metrics.width : width);
+    canvas.height = Math.round(metrics ? metrics.height : height);
 
     const ctx = canvas.getContext("2d");
     if (!ctx) throw new Error("could not acquire a 2D context");
+
+    if (frame && metrics) {
+      drawBackdrop(ctx, frame, metrics, canvas.width, canvas.height);
+      // Everything after this is drawn in the capture's own coordinates, as
+      // it always was — the frame is the only thing that knows about the
+      // margin, and shifting the origin once is what keeps it that way.
+      ctx.translate(metrics.pad, metrics.pad);
+      // Clip to the rounded corners so the capture's own edges are cut to the
+      // same shape as the shadow that was just drawn under them.
+      roundedPath(ctx, 0, 0, width, height, metrics.radius);
+      ctx.clip();
+    }
 
     ctx.drawImage(img, doc.crop.x, doc.crop.y, width, height, 0, 0, width, height);
 
@@ -50,6 +76,68 @@ export async function renderToPng(doc: Doc, annotations: Annotation[]): Promise<
   } finally {
     URL.revokeObjectURL(url);
   }
+}
+
+/**
+ * The frame: background, then the shadow the capture will sit on.
+ *
+ * The shadow is painted as a filled rounded rectangle *before* the capture
+ * rather than as a shadow on the capture itself — a shadow attached to the
+ * draw of an opaque image is hidden behind it everywhere except the edges,
+ * which is fine, but it also has to survive the clip that follows, and it
+ * does not.
+ */
+function drawBackdrop(
+  ctx: CanvasRenderingContext2D,
+  backdrop: Backdrop,
+  metrics: ReturnType<typeof backdropMetrics>,
+  width: number,
+  height: number,
+): void {
+  const fill = fillById(backdrop.fill);
+  if (!fill) return;
+
+  ctx.save();
+  ctx.fillStyle = fillToCanvas(ctx, fill, width, height);
+  ctx.fillRect(0, 0, width, height);
+  ctx.restore();
+
+  if (!backdrop.shadow) return;
+
+  ctx.save();
+  ctx.shadowColor = "rgba(0,0,0,0.45)";
+  ctx.shadowBlur = metrics.shadowBlur;
+  ctx.shadowOffsetY = metrics.shadowOffset;
+  ctx.fillStyle = "#000";
+  roundedPath(
+    ctx,
+    metrics.pad,
+    metrics.pad,
+    width - metrics.pad * 2,
+    height - metrics.pad * 2,
+    metrics.radius,
+  );
+  ctx.fill();
+  ctx.restore();
+}
+
+/** A rounded rectangle as a path, for both the shadow and the clip. */
+function roundedPath(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  width: number,
+  height: number,
+  radius: number,
+): void {
+  const r = Math.max(0, Math.min(radius, Math.min(width, height) / 2));
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.arcTo(x + width, y, x + width, y + height, r);
+  ctx.arcTo(x + width, y + height, x, y + height, r);
+  ctx.arcTo(x, y + height, x, y, r);
+  ctx.arcTo(x, y, x + width, y, r);
+  ctx.closePath();
 }
 
 function loadImage(url: string): Promise<HTMLImageElement> {

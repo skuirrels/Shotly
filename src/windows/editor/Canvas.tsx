@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import clsx from "clsx";
 import {
   calloutLayout,
   CALLOUT_PADDING,
@@ -33,6 +34,7 @@ import {
   movedBy,
 } from "@/lib/types";
 import { fitToBox } from "@/lib/overlay";
+import { backdropMetrics, fillById, fillToCss, hasBackdrop } from "@/lib/backdrop";
 import { useEditor } from "@/state/editorStore";
 import { AnnotationLayer, type HandleId } from "./AnnotationLayer";
 
@@ -98,6 +100,7 @@ export function Canvas({ onNotify, actions, onGrabText }: CanvasProps) {
   const zoomSetting = useEditor((s) => s.zoom);
   const fitToWindow = useEditor((s) => s.fitToWindow);
   const pendingCrop = useEditor((s) => s.pendingCrop);
+  const backdrop = useEditor((s) => s.backdrop);
 
   const viewport = useRef<HTMLDivElement>(null);
   const stage = useRef<HTMLDivElement>(null);
@@ -753,16 +756,48 @@ export function Canvas({ onNotify, actions, onGrabText }: CanvasProps) {
     tool === "select" ? "default" : tool === "text" ? "text" : "crosshair";
   const showSwatch = tool === "pick" && swatch;
 
+  // The frame wraps the stage rather than being drawn inside it. Every
+  // annotation coordinate is relative to the capture's top-left, and a margin
+  // painted *within* the stage would move that origin — so the margin lives
+  // one element out, where nothing has to know about it.
+  const frame = hasBackdrop(backdrop)
+    ? backdropMetrics(backdrop, doc.crop.width, doc.crop.height)
+    : null;
+  const frameFill = frame ? fillById(backdrop.fill) : null;
+
   return (
     <div ref={viewport} className="relative flex-1 overflow-auto bg-inset">
       <div className="flex min-h-full min-w-full items-center justify-center" style={{ padding: PAD }}>
         <div
+          className={clsx("shrink-0", !frame && "contents")}
+          style={
+            frame && frameFill
+              ? {
+                  padding: frame.pad * zoom,
+                  background: fillToCss(frameFill),
+                  lineHeight: 0,
+                }
+              : undefined
+          }
+        >
+        <div
           ref={stage}
-          className="relative shrink-0 shadow-[0_16px_60px_rgba(0,0,0,0.6)] ring-1 ring-white/10"
+          className={clsx(
+            "relative shrink-0 ring-1 ring-white/10",
+            // The framed capture gets its own shadow, sized to the frame; the
+            // unframed one keeps the editor's flat drop shadow.
+            !frame && "shadow-[0_16px_60px_rgba(0,0,0,0.6)]",
+          )}
           style={{
             width: doc.crop.width * zoom,
             height: doc.crop.height * zoom,
             cursor,
+            ...(frame && {
+              borderRadius: frame.radius * zoom,
+              boxShadow: backdrop.shadow
+                ? `0 ${frame.shadowOffset * zoom}px ${frame.shadowBlur * zoom}px rgba(0,0,0,0.45)`
+                : "none",
+            }),
             // Checkerboard shows through any transparency in the capture.
             backgroundImage:
               "linear-gradient(45deg,#1a1d22 25%,transparent 25%,transparent 75%,#1a1d22 75%)," +
@@ -781,7 +816,10 @@ export function Canvas({ onNotify, actions, onGrabText }: CanvasProps) {
           {/* The capture itself, windowed by the current crop. */}
           <div
             className="absolute inset-0 overflow-hidden"
-            style={{ imageRendering: zoom > 1.5 ? "pixelated" : "auto" }}
+            style={{
+              imageRendering: zoom > 1.5 ? "pixelated" : "auto",
+              borderRadius: frame ? frame.radius * zoom : undefined,
+            }}
           >
             <img
               src={doc.src}
@@ -869,6 +907,7 @@ export function Canvas({ onNotify, actions, onGrabText }: CanvasProps) {
               onCommit={commitEdit}
             />
           )}
+        </div>
         </div>
       </div>
 

@@ -1,3 +1,4 @@
+import type { Backdrop } from "./backdrop";
 import type { Annotation, Rect } from "./types";
 
 /**
@@ -14,18 +15,23 @@ export interface MarkupDoc {
   /** Where the step tool had counted to, so numbering continues rather than restarting. */
   stepCounter: number;
   annotations: Annotation[];
+  /** The frame drawn around the capture. Absent in payloads written before 5. */
+  backdrop?: Backdrop;
 }
 
 /**
  * 2 added the freehand and spotlight shapes; 3 added callouts; 4 added
- * overlaid images, which is also the first version whose payload can be large.
+ * overlaid images, which is also the first version whose payload can be large;
+ * 5 added the backdrop.
  *
  * Bumping rather than quietly extending the last one is what keeps the promise
  * below honest: a build that predates these shapes sees a version it doesn't
  * know and opens the capture flat, instead of drawing a document with pieces
- * of it silently missing.
+ * of it silently missing. The backdrop earns a bump on exactly those grounds —
+ * an older build would draw the annotations correctly and lose the frame, and
+ * a frame silently missing is a different picture.
  */
-const VERSION = 4;
+const VERSION = 5;
 
 export function serialize(doc: Omit<MarkupDoc, "version">): string {
   return JSON.stringify({ version: VERSION, ...doc });
@@ -65,6 +71,7 @@ export function parse(json: string): MarkupDoc | null {
     crop: doc.crop,
     stepCounter: typeof doc.stepCounter === "number" ? doc.stepCounter : 1,
     annotations: doc.annotations as Annotation[],
+    backdrop: isBackdrop(doc.backdrop) ? doc.backdrop : undefined,
   };
 }
 
@@ -78,5 +85,17 @@ function isRect(value: unknown): value is Rect {
     typeof r.height === "number" &&
     r.width > 0 &&
     r.height > 0
+  );
+}
+
+/** A frame from disk, checked field by field before it is trusted. */
+function isBackdrop(value: unknown): value is Backdrop {
+  if (typeof value !== "object" || value === null) return false;
+  const b = value as Partial<Backdrop>;
+  return (
+    typeof b.fill === "string" &&
+    typeof b.padding === "number" &&
+    typeof b.radius === "number" &&
+    typeof b.shadow === "boolean"
   );
 }

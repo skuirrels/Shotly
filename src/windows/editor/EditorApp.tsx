@@ -193,7 +193,7 @@ export function EditorApp() {
   const exportPng = useCallback(async () => {
     const state = useEditor.getState();
     if (!state.doc) return null;
-    return renderToPng(state.doc, state.annotations);
+    return renderToPng(state.doc, state.annotations, state.backdrop);
   }, []);
 
   /**
@@ -451,6 +451,7 @@ export function EditorApp() {
           crop: state.doc!.crop,
           stepCounter: state.stepCounter,
           annotations: state.annotations,
+          backdrop: state.backdrop,
         }),
       };
 
@@ -506,6 +507,7 @@ export function EditorApp() {
           crop: state.doc!.crop,
           stepCounter: state.stepCounter,
           annotations: state.annotations,
+          backdrop: state.backdrop,
         }),
         state.doc?.scale,
       );

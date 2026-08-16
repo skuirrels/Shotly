@@ -21,6 +21,7 @@ import {
 import { IconButton } from "@/components/ui/IconButton";
 import { Kbd } from "@/components/ui/Kbd";
 import { Popover } from "@/components/ui/Popover";
+import { BackdropPicker } from "./BackdropPicker";
 import { Tooltip } from "@/components/ui/Tooltip";
 import type { CaptureMode } from "@/lib/types";
 import { useEditor } from "@/state/editorStore";
@@ -213,6 +214,10 @@ export function TopBar({
                 onClick={() => setZoom(1)}
               />
             </div>
+
+            {/* Before Copy and Export, because framing is something you do
+                *to* the capture, and those two are what you do with it. */}
+            <BackdropPicker disabled={!doc || busy !== null} />
 
             <button
               type="button"

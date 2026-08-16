@@ -122,6 +122,17 @@ export const IconEyedropper = (p: SVGProps<SVGSVGElement>) => (
 );
 
 /**
+ * A picture inside a margin: an outer frame with an inner one set well in,
+ * which is exactly what a backdrop does to a capture.
+ */
+export const IconBackdrop = (p: SVGProps<SVGSVGElement>) => (
+  <Icon {...p}>
+    <rect x="1.5" y="1.5" width="13" height="13" rx="2" strokeDasharray="2.4 1.8" />
+    <rect x="4.5" y="4.5" width="7" height="7" rx="1.2" />
+  </Icon>
+);
+
+/**
  * A drawing pin, head-on: the disc of the head with the pin behind it, angled
  * the way one sits when it has been pushed into a board.
  */
