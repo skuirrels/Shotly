@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import clsx from "clsx";
 import {
   IconArrow,
@@ -9,12 +10,14 @@ import {
   IconHighlight,
   IconRect,
   IconRedo,
+  IconRegion,
   IconSelect,
   IconText,
   IconTrash,
   IconUndo,
 } from "@/components/icons";
 import { Kbd } from "@/components/ui/Kbd";
+import { captureStem } from "@/lib/naming";
 import { arrowPolygon, fontFor, measureText, polygonToPath, TEXT_PADDING } from "@/lib/shapes";
 import { SWATCHES } from "@/windows/editor/tools";
 
@@ -286,6 +289,15 @@ const TOOLBAR_TOOLS: ToolButton[] = [
 
 export function AnnotateApp() {
   const [strokes, setStrokes] = useState<Stroke[]>([]);
+  /**
+   * The same list, readable without being a dependency.
+   *
+   * `exit` is wired into the keyboard listener, which is rebuilt whenever any
+   * of its dependencies change. Depending on the strokes themselves would
+   * rebuild it on every point of every line drawn.
+   */
+  const strokesRef = useRef(strokes);
+  strokesRef.current = strokes;
   const [tool, setTool] = useState<Tool>("pen");
   const [color, setColor] = useState(SWATCHES[0].value);
   const [width, setWidth] = useState(4);
@@ -312,7 +324,79 @@ export function AnnotateApp() {
    */
   const [dock, setDock] = useState<{ x: number; y: number }>(storedDock);
 
-  const exit = useCallback(() => void invoke("annotate_stop"), []);
+  /**
+   * True while the desktop has the mouse back and the drawings are just
+   * sitting there being looked at.
+   */
+  const [interacting, setInteracting] = useState(false);
+  /** Set while the screenshot on the way out is being taken. */
+  const [saving, setSaving] = useState(false);
+  /** What was saved, shown briefly before the layer goes. */
+  const [saved, setSaved] = useState<string | null>(null);
+  /** The toolbar's rectangle, in page coordinates. See `annotate_pass_through`. */
+  const toolbarRect = useRef<DOMRect | null>(null);
+
+  /**
+   * Leave, taking the screen with us.
+   *
+   * The whole point of drawing on the desktop is the desktop underneath, so
+   * what gets filed is a photograph of the screen rather than the strokes on
+   * their own. Nothing to save means nothing to file: an empty layer exits as
+   * quickly as it always did rather than dropping a picture of an ordinary
+   * desktop into the library.
+   *
+   * Failures still exit. Being stuck under a full-screen window because a
+   * write failed is far worse than losing the copy.
+   */
+  const exit = useCallback(() => {
+    if (strokesRef.current.length === 0) {
+      void invoke("annotate_stop");
+      return;
+    }
+
+    // Selection handles are Shotly's furniture, not annotation.
+    setSelected([]);
+    setSaving(true);
+    // Two frames, so the toolbar is genuinely off the screen before the
+    // shutter — the same wait `annotate_ready` uses for the same reason.
+    requestAnimationFrame(() =>
+      requestAnimationFrame(() => {
+        void invoke<string>("annotate_save", { stem: captureStem() })
+          .then((path) => {
+            setSaving(false);
+            setSaved(path.split("/").pop() ?? "the library");
+            window.setTimeout(() => void invoke("annotate_stop"), 1100);
+          })
+          .catch(() => void invoke("annotate_stop"));
+      }),
+    );
+  }, []);
+
+  /**
+   * Hand the mouse to the desktop, or take it back.
+   *
+   * The drawings stay either way — that is the entire point. Rust keeps the
+   * toolbar clickable by watching the cursor (see `set_pass_through`), so the
+   * same button that stepped aside is still there to step back.
+   */
+  const interactingRef = useRef(interacting);
+  interactingRef.current = interacting;
+
+  const setInteract = useCallback((on: boolean) => {
+    const r = toolbarRect.current;
+    setInteracting(on);
+    void invoke("annotate_pass_through", {
+      enabled: on,
+      rect: on && r ? { x: r.x, y: r.y, width: r.width, height: r.height } : null,
+    }).catch(() => setInteracting(!on));
+  }, []);
+
+  // The hotkey is the way back when the pointer is somewhere else entirely and
+  // this page is getting no keys of its own.
+  useEffect(() => {
+    const unlisten = listen("annotate:interact", () => setInteract(!interactingRef.current));
+    return () => void unlisten.then((fn) => fn());
+  }, [setInteract]);
 
   // ------------------------------------------------------------- lifecycle
 
@@ -790,6 +874,10 @@ export function AnnotateApp() {
     <div className="fixed inset-0" style={{ cursor }}>
       <svg
         className="absolute inset-0 h-full w-full"
+        // Belt and braces with the window-level pass-through: the toolbar is a
+        // live hole in it, and a drag that starts on the toolbar and runs onto
+        // the canvas would otherwise draw a line nobody asked for.
+        style={{ pointerEvents: interacting ? "none" : "auto" }}
         onPointerDown={begin}
         onPointerMove={extend}
         onPointerUp={finish}
@@ -884,6 +972,9 @@ export function AnnotateApp() {
         />
       )}
 
+      {/* Out of the way for the shutter: the point of the picture is the
+          screen underneath, and Shotly's own toolbar is not part of it. */}
+      {!saving && !saved && (
       <Toolbar
         layout={layout}
         dock={dock}
@@ -904,7 +995,21 @@ export function AnnotateApp() {
         onClear={clearAll}
         onDeleteSelected={deleteSelected}
         onExit={exit}
+        interacting={interacting}
+        onInteract={setInteract}
+        onRect={(r) => (toolbarRect.current = r)}
       />
+      )}
+
+      {/* Said where the eye already is, rather than in a window that is about
+          to be behind everything else. */}
+      {saved && (
+        <div className="pointer-events-none absolute inset-0 grid place-items-center">
+          <div className="surface-float rounded-2xl px-4 py-2.5 text-[13px] text-ink">
+            Saved <span className="font-medium">{saved}</span> to your library
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -1127,6 +1232,9 @@ function Toolbar({
   onClear,
   onDeleteSelected,
   onExit,
+  interacting,
+  onInteract,
+  onRect,
 }: {
   layout: Layout | null;
   dock: { x: number; y: number };
@@ -1148,9 +1256,32 @@ function Toolbar({
   onClear: () => void;
   onDeleteSelected: () => void;
   onExit: () => void;
+  /** True while clicks are going to the desktop instead of the canvas. */
+  interacting: boolean;
+  onInteract: (on: boolean) => void;
+  /**
+   * Report where the toolbar is, in page coordinates.
+   *
+   * Rust needs it to keep this one rectangle clickable while the rest of the
+   * layer is letting clicks past — see `set_pass_through`. Reported rather
+   * than computed there because only the page knows where it has been dragged.
+   */
+  onRect: (rect: DOMRect) => void;
 }) {
   const current = screens.find((s) => s.isCurrent);
   const bar = useRef<HTMLDivElement>(null);
+
+  // Re-measured on every move and every change of size — a wider toolbar is a
+  // wider hole, and a stale rectangle is a button that cannot be clicked.
+  useEffect(() => {
+    const el = bar.current;
+    if (!el) return;
+    const report = () => onRect(el.getBoundingClientRect());
+    report();
+    const observer = new ResizeObserver(report);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [onRect, dock, layout, screens.length, selectedCount]);
 
   /**
    * Drag from the grip.
@@ -1342,9 +1473,36 @@ function Toolbar({
           </>
         )}
 
+        <span className="mx-1 h-5 w-px bg-white/10" />
+
+        {/* The way out of being trapped over your own desktop. Drawing and
+            using the machine underneath are both things you do constantly
+            during a share, and until this button existed the only way to click
+            anything was to throw the drawings away. */}
+        <button
+          type="button"
+          onClick={() => onInteract(!interacting)}
+          title={
+            interacting
+              ? "Back to drawing (\u2303\u21e7D) — your drawings stayed put"
+              : "Use the screen underneath (\u2303\u21e7D) — drawings stay on top"
+          }
+          aria-pressed={interacting}
+          className={clsx(
+            "flex h-[30px] items-center gap-1.5 rounded-lg px-2 text-[12px] font-medium transition-colors",
+            interacting
+              ? "bg-accent/18 text-accent shadow-[inset_0_0_0_1px_var(--color-accent)]"
+              : "text-ink-2 hover:bg-hover hover:text-ink",
+          )}
+        >
+          <IconRegion />
+          {interacting ? "Drawing off" : "Click through"}
+        </button>
+
         <button
           type="button"
           onClick={onExit}
+          title="Save the screen with these annotations, and close the layer"
           className="ml-1 flex h-8 items-center gap-1.5 rounded-lg bg-white/[0.07] px-2.5 text-[12.5px] font-medium text-ink hover:bg-white/[0.12]"
         >
           <IconClose />

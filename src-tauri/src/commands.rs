@@ -439,7 +439,16 @@ pub fn save_to_library(
         },
         _ => bytes,
     };
-    let dir = library_dir(&app)?;
+    write_into_library(&app, &bytes, &stem)
+}
+
+/// Write bytes into the library under `stem`, without overwriting anything.
+///
+/// Shared with the annotation layer, which saves the screen it was drawn over
+/// on its way out. Kept here because the naming rules — what a stem may
+/// contain, and how a collision is resolved — are the library's business.
+pub fn write_into_library(app: &AppHandle, bytes: &[u8], stem: &str) -> CmdResult<String> {
+    let dir = library_dir(app)?;
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
 
     // Strip anything that would break out of the directory or upset the
@@ -458,7 +467,7 @@ pub fn save_to_library(
         n += 1;
     }
 
-    std::fs::write(&target, &bytes).map_err(|e| e.to_string())?;
+    std::fs::write(&target, bytes).map_err(|e| e.to_string())?;
     Ok(target.to_string_lossy().into_owned())
 }
 

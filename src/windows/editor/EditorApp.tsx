@@ -30,6 +30,7 @@ import type { Command } from "@/lib/keys/types";
 import { renderToPng } from "@/lib/export";
 import * as ipc from "@/lib/ipc";
 import { serialize as serializeMarkup } from "@/lib/markup";
+import { captureStem } from "@/lib/naming";
 import { overlayFromClipboard } from "@/lib/overlay";
 import { useUpdates } from "@/lib/updater";
 import type { CaptureMode, CaptureResult } from "@/lib/types";
@@ -164,7 +165,7 @@ export function EditorApp() {
       // annotations" rather than "or else lose it".
       try {
         const original = await ipc.readCaptureBytes(result.frame.path);
-        const path = await ipc.saveToLibrary(original, defaultStem());
+        const path = await ipc.saveToLibrary(original, captureStem());
         useEditor.getState().setLibraryPath(path);
         setLibraryKey((k) => k + 1);
       } catch (err) {
@@ -416,15 +417,6 @@ export function EditorApp() {
     }
   }, [notify, requireDoc]);
 
-  /** macOS-style capture filename: "Shotly 2026-08-14 at 18.33.21". */
-  const defaultStem = () => {
-    const d = new Date();
-    const p = (n: number) => String(n).padStart(2, "0");
-    const date = `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
-    const time = `${p(d.getHours())}.${p(d.getMinutes())}.${p(d.getSeconds())}`;
-    return `Shotly ${date} at ${time}`;
-  };
-
   /**
    * ⌘S saves straight into ~/Documents/Shotly with no dialog — the whole point
    * of a capture tool is that saving is one keystroke. ⌘⇧S is the escape hatch
@@ -462,7 +454,7 @@ export function EditorApp() {
         await ipc.saveEditablePng(existing, png, editable.source, editable.doc, scale);
         path = existing;
       } else {
-        path = await ipc.saveToLibrary(png, defaultStem(), scale, editable);
+        path = await ipc.saveToLibrary(png, captureStem(), scale, editable);
         state.setLibraryPath(path);
       }
 
@@ -491,7 +483,7 @@ export function EditorApp() {
 
     const path = await saveDialog({
       title: "Save capture",
-      defaultPath: `${defaultStem()}.png`,
+      defaultPath: `${captureStem()}.png`,
       filters: [{ name: "PNG image", extensions: ["png"] }],
     });
     if (!path) return;
@@ -542,7 +534,7 @@ export function EditorApp() {
       // filename would have reopened wherever the sheet was left last, which
       // for most people is ~/Documents/Shotly: the one folder this file
       // deliberately does not belong in.
-      defaultPath: await downloadsPath(`${defaultStem()}.png`),
+      defaultPath: await downloadsPath(`${captureStem()}.png`),
       filters: [{ name: "PNG image", extensions: ["png"] }],
     });
     if (!path) return;

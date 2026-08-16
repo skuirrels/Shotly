@@ -40,6 +40,23 @@ pub struct AnnotateState {
     pub last_beat: Mutex<Option<Instant>>,
     /// Which display the overlay is currently covering.
     pub display: Mutex<Option<u32>>,
+    /// True while clicks are being handed to whatever is underneath.
+    pub pass_through: Mutex<bool>,
+    /// The toolbar, in window coordinates: the one region that stays clickable
+    /// while the rest of the layer is letting clicks past.
+    pub hot_rect: Mutex<Option<HotRect>>,
+    /// Bumped to retire the running cursor watcher; see `set_pass_through`.
+    pub watcher: Mutex<u64>,
+}
+
+/// A rectangle in the overlay page's own coordinates (CSS points from its
+/// top-left), which is the only frame the page can measure itself in.
+#[derive(Debug, Clone, Copy, serde::Deserialize)]
+pub struct HotRect {
+    pub x: f64,
+    pub y: f64,
+    pub width: f64,
+    pub height: f64,
 }
 
 fn state_beat(app: &AppHandle) -> Option<Instant> {
@@ -54,6 +71,11 @@ pub fn stop(app: &AppHandle) {
         let state = app.state::<AnnotateState>();
         *state.last_beat.lock().unwrap() = None;
         *state.display.lock().unwrap() = None;
+        *state.pass_through.lock().unwrap() = false;
+        *state.hot_rect.lock().unwrap() = None;
+        // Retire the cursor watcher: it holds a window handle and would
+        // otherwise outlive the layer it was following.
+        *state.watcher.lock().unwrap() += 1;
     }
 
     if let Some(window) = app.get_webview_window(LABEL) {
@@ -191,6 +213,78 @@ pub fn beat(app: &AppHandle) {
 pub fn set_click_through(app: &AppHandle, on: bool) -> Result<(), String> {
     let window = app.get_webview_window(LABEL).ok_or("annotation layer is not open")?;
     window.set_ignore_cursor_events(on).map_err(|e| e.to_string())
+}
+
+/// Hand the desktop back without packing up the drawings.
+///
+/// `set_ignore_cursor_events` is all-or-nothing for a window, so simply turning
+/// it on would take the toolbar with it and leave no way back except a global
+/// hotkey. Instead a watcher follows the cursor and lifts the pass-through for
+/// exactly as long as the pointer is over the toolbar, which is the only part
+/// of the layer that still wants clicks. The hotkey stays as the guarantee for
+/// when this page is not in a position to ask for anything.
+pub fn set_pass_through(app: &AppHandle, on: bool, rect: Option<HotRect>) -> Result<(), String> {
+    let window = app.get_webview_window(LABEL).ok_or("annotation layer is not open")?;
+
+    let generation = {
+        let state = app.state::<AnnotateState>();
+        *state.pass_through.lock().unwrap() = on;
+        *state.hot_rect.lock().unwrap() = rect;
+        let mut watcher = state.watcher.lock().unwrap();
+        *watcher += 1;
+        *watcher
+    };
+
+    if !on {
+        return window.set_ignore_cursor_events(false).map_err(|e| e.to_string());
+    }
+
+    window.set_ignore_cursor_events(true).map_err(|e| e.to_string())?;
+    follow_cursor(app, generation);
+    Ok(())
+}
+
+/// Poll the pointer and open a hole in the pass-through over the toolbar.
+///
+/// Polling because a window that ignores the mouse is told nothing about it —
+/// there is no enter or leave event to subscribe to. 30ms is under the
+/// threshold where a button feels dead on arrival, and the loop does nothing
+/// but read a point and compare it to a rectangle.
+fn follow_cursor(app: &AppHandle, generation: u64) {
+    let handle = app.clone();
+    std::thread::spawn(move || {
+        let mut ignoring = true;
+
+        loop {
+            std::thread::sleep(Duration::from_millis(30));
+
+            let Some(window) = handle.get_webview_window(LABEL) else { return };
+            let state = handle.state::<AnnotateState>();
+
+            // A newer call — or a return to drawing — has retired this watcher.
+            if *state.watcher.lock().unwrap() != generation {
+                return;
+            }
+
+            let rect = *state.hot_rect.lock().unwrap();
+            let over = match (rect, cursor_point(), window.outer_position(), window.scale_factor()) {
+                (Some(r), Some((cx, cy)), Ok(origin), Ok(scale)) => {
+                    // The page measures itself from its own top-left; the
+                    // cursor is in global points. Meet in the middle.
+                    let left = origin.x as f64 / scale + r.x;
+                    let top = origin.y as f64 / scale + r.y;
+                    cx >= left && cx <= left + r.width && cy >= top && cy <= top + r.height
+                }
+                _ => false,
+            };
+
+            let want_ignore = !over;
+            if want_ignore != ignoring {
+                let _ = window.set_ignore_cursor_events(want_ignore);
+                ignoring = want_ignore;
+            }
+        }
+    });
 }
 
 /// Dead-man's switch.
@@ -355,4 +449,49 @@ pub fn annotate_beat(app: AppHandle) {
 #[tauri::command]
 pub fn annotate_click_through(app: AppHandle, enabled: bool) -> Result<(), String> {
     set_click_through(&app, enabled)
+}
+
+#[tauri::command]
+pub fn annotate_pass_through(
+    app: AppHandle,
+    enabled: bool,
+    rect: Option<HotRect>,
+) -> Result<(), String> {
+    set_pass_through(&app, enabled, rect)
+}
+
+/// Photograph the annotated screen and file it in the library.
+///
+/// Deliberately a screenshot of the whole display rather than a rendering of
+/// the strokes: what was drawn only means anything on top of what it was drawn
+/// over, and the desktop underneath is not something this window has a copy of.
+/// The layer is still up when this runs, so its drawings are in the shot — the
+/// page hides its own toolbar first, which is the one part that shouldn't be.
+///
+/// Unlike every other capture this does not open the editor. It is the last
+/// thing that happens on the way out of a screen share, and having a window
+/// leap up in front of the audience is precisely what nobody wants.
+#[tauri::command]
+pub fn annotate_save(app: AppHandle, stem: String) -> Result<String, String> {
+    use crate::capture::CaptureBackend;
+    use crate::{commands, AppState};
+
+    let state = app.state::<AppState>();
+    let wanted = *app.state::<AnnotateState>().display.lock().unwrap();
+
+    let frames = state.backend.capture_displays().map_err(|e| e.to_string())?;
+    let displays = state.backend.displays().map_err(|e| e.to_string())?;
+
+    let idx = wanted
+        .and_then(|id| displays.iter().position(|d| d.id == id))
+        .or_else(|| displays.iter().position(|d| d.is_primary))
+        .unwrap_or(0);
+    let frame = frames.get(idx).ok_or("display not found")?;
+
+    let bytes = std::fs::read(&frame.path).map_err(|e| e.to_string())?;
+    // Stamp the DPI so a Retina screen reopens as @2x rather than a capture of
+    // mysteriously doubled dimensions.
+    let bytes = crate::capture::cli::with_dpi(&bytes, frame.scale);
+
+    commands::write_into_library(&app, &bytes, &stem)
 }

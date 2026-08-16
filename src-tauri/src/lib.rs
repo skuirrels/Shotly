@@ -42,6 +42,18 @@ fn annotate_shortcut() -> Shortcut {
     Shortcut::new(Some(Modifiers::CONTROL | Modifiers::SHIFT), Code::KeyA)
 }
 
+/// Steps in and out of drawing without packing the drawings away.
+///
+/// Also owned by Rust, and for a sharper reason than the one above: while the
+/// layer is letting clicks past, the pointer belongs to another app entirely
+/// and the annotation page may never see a key again. This is the way back.
+#[cfg(desktop)]
+fn interact_shortcut() -> Shortcut {
+    // Not Ctrl-Shift-S: Snagit claims that one, and a hotkey the machine
+    // already answers with someone else's window is no way back at all.
+    Shortcut::new(Some(Modifiers::CONTROL | Modifiers::SHIFT), Code::KeyD)
+}
+
 fn dispatch(app: &tauri::AppHandle, mode: CaptureMode) {
     let result = match mode {
         CaptureMode::Fullscreen => commands::capture_fullscreen(app.clone(), None).map(|_| ()),
@@ -78,6 +90,15 @@ pub fn run() {
                         if let Err(err) = annotate::toggle(app) {
                             eprintln!("[shotly] annotation toggle failed: {err}");
                         }
+                        return;
+                    }
+                    if shortcut == &interact_shortcut() {
+                        // The page owns the decision — it knows whether it is
+                        // already letting clicks past, and where its toolbar
+                        // has been dragged to. A layer that has stopped
+                        // answering simply doesn't toggle, and Ctrl-Shift-A
+                        // remains the way out of that.
+                        let _ = tauri::Emitter::emit_to(app, annotate::LABEL, "annotate:interact", ());
                         return;
                     }
                     if let Some((_, mode)) = shortcuts().iter().find(|(s, _)| s == shortcut) {
@@ -125,6 +146,8 @@ pub fn run() {
             annotate::annotate_ready,
             annotate::annotate_beat,
             annotate::annotate_click_through,
+            annotate::annotate_pass_through,
+            annotate::annotate_save,
             annotate::annotate_screens,
             annotate::annotate_layout,
             annotate::annotate_move,
@@ -141,6 +164,10 @@ pub fn run() {
             #[cfg(desktop)]
             if let Err(e) = app.global_shortcut().register(annotate_shortcut()) {
                 eprintln!("[shotly] could not register the annotation hotkey: {e}");
+            }
+            #[cfg(desktop)]
+            if let Err(e) = app.global_shortcut().register(interact_shortcut()) {
+                eprintln!("[shotly] could not register the interact hotkey: {e}");
             }
 
             if let Err(e) = build_menu(&handle) {
