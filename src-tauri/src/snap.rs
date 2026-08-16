@@ -646,6 +646,22 @@ fn spawn_tracker(app: AppHandle, generation: u64, origin: (f64, f64)) {
 /// exactly as it was.
 struct Stack(Vec<crate::capture::WindowInfo>);
 
+/// Everything on screen that the pointer could land on, front to back.
+///
+/// Shared with the scrolling capture's own selection overlay, which offers the
+/// same snap-to-a-window that this one does. One definition of "what can be
+/// pointed at" rather than two, because two would drift — and the last time a
+/// capture path drifted from its twin, one of them spent months photographing
+/// every open window while the other drew an outline.
+pub fn pointable_windows() -> Vec<crate::capture::WindowInfo> {
+    let mine = std::process::id() as i32;
+    crate::capture::display::windows()
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|w| is_pointable(w, mine))
+        .collect()
+}
+
 /// Can the pointer land on this window?
 ///
 /// Ordinary application windows only — layer 0, not full screen, not ours. See
@@ -671,14 +687,7 @@ impl Stack {
     /// Shotly's own go too, by process as well as by name: the outline overlay
     /// is on screen, under the pointer, for the whole session.
     fn take() -> Self {
-        let mine = std::process::id() as i32;
-        Stack(
-            crate::capture::display::windows()
-                .unwrap_or_default()
-                .into_iter()
-                .filter(|w| is_pointable(w, mine))
-                .collect(),
-        )
+        Stack(pointable_windows())
     }
 
     /// The window a click here would land on.

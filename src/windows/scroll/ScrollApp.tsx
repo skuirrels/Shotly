@@ -88,8 +88,22 @@ export function ScrollApp() {
 
 function Select() {
   const [drag, setDrag] = useState<{ from: { x: number; y: number }; box: Box } | null>(null);
+  /**
+   * The windows this selection can snap to, front to back, in this page's own
+   * coordinates. Fetched once: nothing can move while the overlay is up.
+   */
+  const windows = useRef<Box[]>([]);
+  /** The window under the pointer, when there is one and nothing is being dragged. */
+  const [hover, setHover] = useState<Box | null>(null);
 
   const cancel = useCallback(() => void invoke("scroll_cancel"), []);
+
+  useEffect(() => {
+    void invoke<Box[]>("scroll_windows")
+      .then((list) => (windows.current = list))
+      // Snapping is a convenience over the drag, not a precondition for it.
+      .catch(() => {});
+  }, []);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -106,7 +120,19 @@ function Select() {
   };
 
   const onPointerMove = (e: React.PointerEvent) => {
-    if (!drag) return;
+    if (!drag) {
+      // Front to back, so the first window holding the pointer is the one a
+      // click would land on — the same rule the capture outline uses.
+      const under = windows.current.find(
+        (w) =>
+          e.clientX >= w.x &&
+          e.clientY >= w.y &&
+          e.clientX < w.x + w.width &&
+          e.clientY < w.y + w.height,
+      );
+      setHover(under ?? null);
+      return;
+    }
     const box = {
       x: Math.min(drag.from.x, e.clientX),
       y: Math.min(drag.from.y, e.clientY),
@@ -118,9 +144,15 @@ function Select() {
 
   const onPointerUp = async () => {
     if (!drag) return;
-    const box = drag.box;
+    const dragged = drag.box;
     setDrag(null);
-    if (box.width < MIN_EDGE || box.height < MIN_EDGE) return;
+
+    // A drag that never really moved is a click, and a click means "that one" —
+    // the window being offered under the pointer. Dragging past the threshold
+    // says the area wanted is not any window's, and wins.
+    const box =
+      dragged.width >= MIN_EDGE && dragged.height >= MIN_EDGE ? dragged : hover;
+    if (!box || box.width < MIN_EDGE || box.height < MIN_EDGE) return;
 
     try {
       // The drag happened in window coordinates; the capture needs global
@@ -140,7 +172,7 @@ function Select() {
     }
   };
 
-  const box = drag?.box ?? null;
+  const box = drag?.box ?? hover;
   const big = box && box.width >= MIN_EDGE && box.height >= MIN_EDGE;
 
   return (
@@ -181,7 +213,7 @@ function Select() {
 
       <div className="pointer-events-none absolute top-8 left-1/2 -translate-x-1/2 rounded-xl bg-black/75 px-4 py-2.5 text-center shadow-lg">
         <p className="text-[13.5px] font-medium text-white">
-          Drag out the area to capture, then scroll the page yourself
+          Click a window, or drag out an area — then scroll the page yourself
         </p>
         <p className="mt-0.5 text-[11.5px] text-white/60">
           Esc cancels · leave a strip free beside it for the progress panel

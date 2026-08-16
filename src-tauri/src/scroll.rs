@@ -656,6 +656,28 @@ pub fn scroll_layout(app: AppHandle) -> Result<Rect, String> {
     bounds.map(|(rect, _)| rect).ok_or_else(|| "no scroll session".into())
 }
 
+/// The windows the selection can snap to, in the overlay page's own coordinates.
+///
+/// Taken once, when the page asks. Nothing can move while the overlay is up —
+/// it covers the display and takes the mouse — so this is a snapshot rather
+/// than something to poll, and the hit test itself belongs in the page where it
+/// costs nothing per pointer move.
+#[tauri::command]
+pub fn scroll_windows(app: AppHandle) -> Result<Vec<Rect>, String> {
+    let state = app.state::<ScrollState>();
+    let (display, _) = (*state.bounds.lock().unwrap()).ok_or("no scroll session")?;
+
+    Ok(crate::snap::pointable_windows()
+        .into_iter()
+        .map(|w| Rect {
+            x: w.bounds.x - display.x,
+            y: w.bounds.y - display.y,
+            width: w.bounds.width,
+            height: w.bounds.height,
+        })
+        .collect())
+}
+
 /// The region is chosen: turn the overlay into the HUD and start capturing.
 #[tauri::command]
 pub fn scroll_start(app: AppHandle, region: Rect) -> Result<(), String> {

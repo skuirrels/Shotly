@@ -5,7 +5,11 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Shotly Scrolling Capture</title>
   </head>
-  <body>
+  <!-- Transparent, like the annotation layer and the capture outline: this
+       window covers the display, and the default body background is opaque.
+       Without this you choose a region on a black screen, guessing at what is
+       underneath. -->
+  <body class="overlay-body">
     <div id="root"></div>
     <script type="module" src="/src/windows/scroll/main.tsx"></script>
   </body>

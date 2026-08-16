@@ -155,6 +155,7 @@ pub fn run() {
             scroll::scroll_ready,
             scroll::scroll_beat,
             scroll::scroll_layout,
+            scroll::scroll_windows,
             scroll::scroll_start,
             scroll::scroll_finish,
             scroll::scroll_cancel,
