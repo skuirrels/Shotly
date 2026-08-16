@@ -1,5 +1,7 @@
 # Shotly
 
+[![Download Shotly](https://img.shields.io/github/v/release/skuirrels/shotly?style=for-the-badge&label=Download%20Shotly&color=2f81f7)](https://github.com/skuirrels/shotly/releases/latest/download/Shotly.dmg)
+
 Screenshots for macOS: capture, mark up, and get on with your day.
 
 Shotly takes the shot, opens it in an editor built for annotating rather than
@@ -10,8 +12,8 @@ find. It stays out of the way in the menu bar until you press a key.
 
 ## Install
 
-1. Download the latest `Shotly.dmg` from
-   [Releases](https://github.com/skuirrels/shotly/releases/latest).
+1. Download [`Shotly.dmg`](https://github.com/skuirrels/shotly/releases/latest/download/Shotly.dmg)
+   — that link always serves the newest build. Apple Silicon only.
 2. Open it and drag **Shotly** to Applications.
 3. Launch it. macOS asks once for **Screen Recording** permission — click
    **Allow**. Nothing can take a screenshot without it.

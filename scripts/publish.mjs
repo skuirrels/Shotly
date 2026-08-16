@@ -12,7 +12,7 @@
 // usage: node scripts/publish.mjs [--notes "<markdown>"] [--dry-run]
 
 import { execFileSync, spawnSync } from "node:child_process";
-import { existsSync, readFileSync, writeFileSync, statSync } from "node:fs";
+import { copyFileSync, existsSync, readFileSync, writeFileSync, statSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 
@@ -52,6 +52,12 @@ const app = join(bundle, "macos/Shotly.app");
 const tarball = join(bundle, "macos/Shotly.app.tar.gz");
 const signature = `${tarball}.sig`;
 const dmg = join(bundle, `dmg/Shotly_${version}_aarch64.dmg`);
+
+// The bundler stamps the version into the disk image's name, which makes every
+// link to it go stale the moment the next one ships. Uploading a copy under a
+// fixed name buys the same trick the updater already relies on: a permanent
+// `releases/latest/download/Shotly.dmg` that the README can point straight at.
+const dmgAsset = join(bundle, "dmg/Shotly.dmg");
 
 for (const [what, path] of [
   ["the app bundle", app],
@@ -155,10 +161,12 @@ const manifest = {
 const manifestPath = join(bundle, "latest.json");
 writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
 
+copyFileSync(dmg, dmgAsset);
+
 const size = (path) => `${(statSync(path).size / 1_048_576).toFixed(1)} MB`;
 const row = (name, detail) => console.log(`  ${name.padEnd(30)}${detail}`);
 console.log(`\nShotly ${version} → ${tag}   (${authority})`);
-row(`Shotly_${version}_aarch64.dmg`, size(dmg));
+row("Shotly.dmg", size(dmgAsset));
 row("Shotly.app.tar.gz", size(tarball));
 row("latest.json", manifest.platforms["darwin-aarch64"].url);
 
@@ -170,7 +178,7 @@ if (dryRun) {
 // ----------------------------------------------------------------- upload
 
 const assets = [
-  `${dmg}#Shotly ${version} (Apple Silicon)`,
+  `${dmgAsset}#Shotly ${version} (Apple Silicon)`,
   tarball,
   signature,
   manifestPath,
