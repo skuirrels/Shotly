@@ -1,0 +1,4 @@
+/* Tailwind's source detection starts at the harness root, which does not see
+   the components under src/. Point it back at them. */
+@import "@/design/theme.css";
+@source "../src";

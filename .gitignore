@@ -28,3 +28,6 @@ dist-ssr
 *.key
 *.cer
 *.certSigningRequest
+
+# Local Claude Code launch config
+.claude/
