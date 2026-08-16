@@ -44,6 +44,47 @@ pub fn elevate_overlay_window(_window: &tauri::WebviewWindow) -> Result<(), Stri
 }
 
 
+/// Let a window follow the user between Spaces.
+///
+/// Shotly lives in the menu bar, which means it spends most of its life as an
+/// *accessory* application — and an accessory does not take part in the Space
+/// switching that ordinary apps get for free. Its window stays on whichever
+/// Space it was last used on, and asking macOS to activate the app there does
+/// not bring you to it: the app comes to the front, takes the keyboard, and
+/// shows you nothing at all.
+///
+/// Measured, because it looked for all the world like a launch that hung.
+/// Opening Shotly from Spotlight while on another Space spawned the process,
+/// checked it in, gave it keyboard focus — and its window reported
+/// `onscreen=false` throughout. Nothing was wrong with the launch; the window
+/// was simply somewhere else.
+///
+/// `MoveToActiveSpace` is the answer a menu-bar utility wants: there is one
+/// window and it belongs wherever you are, rather than to the desk you happened
+/// to open it on.
+#[cfg(target_os = "macos")]
+pub fn follow_active_space(window: &tauri::WebviewWindow) -> Result<(), String> {
+    use objc2_app_kit::{NSWindow, NSWindowCollectionBehavior};
+
+    let ptr = window.ns_window().map_err(|e| e.to_string())? as *mut NSWindow;
+    if ptr.is_null() {
+        return Err("window has no backing NSWindow".into());
+    }
+
+    // SAFETY: as `elevate_overlay_window` — a live NSWindow from Tauri, touched
+    // only from the main thread.
+    unsafe {
+        (*ptr).setCollectionBehavior(NSWindowCollectionBehavior::MoveToActiveSpace);
+    }
+
+    Ok(())
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn follow_active_space(_window: &tauri::WebviewWindow) -> Result<(), String> {
+    Ok(())
+}
+
 /// Hide the Dock icon so Shotly lives in the menu bar, the way capture tools
 /// are expected to. Called when the editor window closes.
 #[cfg(target_os = "macos")]

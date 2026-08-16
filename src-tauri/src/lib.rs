@@ -198,6 +198,15 @@ pub fn run() {
             // The editor is visible on launch so a first run explains itself
             // and can walk the user through the Screen Recording prompt.
             // Closing it drops the app to the menu bar, where it stays.
+            //
+            // And it follows the user between Spaces, because a menu-bar app
+            // that does not is one you can open and never see. See
+            // `platform::follow_active_space`.
+            if let Some(editor) = handle.get_webview_window("editor") {
+                if let Err(err) = platform::follow_active_space(&editor) {
+                    eprintln!("[shotly] the editor will not follow Spaces: {err}");
+                }
+            }
 
 
             Ok(())
