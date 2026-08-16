@@ -8,6 +8,15 @@ import {
   stepRadius,
   wrapText,
 } from "@/lib/shapes";
+import {
+  IconCopy,
+  IconImage,
+  IconLayers,
+  IconOverlay,
+  IconSelect,
+  IconTrash,
+} from "@/components/icons";
+import { ContextMenu, type MenuEntry } from "@/components/ui/ContextMenu";
 import { forgetPixels, preloadPixels, sampleColor } from "@/lib/pick";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import {
@@ -54,7 +63,23 @@ function fitCallout(a: Annotation): Annotation {
 }
 const PAD = 48;
 
-export function Canvas({ onNotify }: { onNotify?: (text: string) => void }) {
+interface CanvasProps {
+  onNotify?: (text: string) => void;
+  /**
+   * The document-wide actions the right-click menu offers.
+   *
+   * Passed in rather than reached for: they belong to the editor shell — they
+   * put up dialogs, write files, and show toasts — and the canvas only knows
+   * where the pointer was.
+   */
+  actions?: {
+    pasteImage: () => void;
+    copy: () => void;
+    exportFlat: () => void;
+  };
+}
+
+export function Canvas({ onNotify, actions }: CanvasProps) {
   const doc = useEditor((s) => s.doc);
   const annotations = useEditor((s) => s.annotations);
   const selectedIds = useEditor((s) => s.selectedIds);
@@ -76,6 +101,10 @@ export function Canvas({ onNotify }: { onNotify?: (text: string) => void }) {
   const [swatch, setSwatch] = useState<{ x: number; y: number; hex: string } | null>(null);
   /** Last pointer position in document space, for sampling without a move. */
   const pointer = useRef<Point | null>(null);
+  /** Open right-click menu: where it is, and which shape it was opened on. */
+  const [menu, setMenu] = useState<{ at: { x: number; y: number }; id: string | null } | null>(
+    null,
+  );
 
   const zoom = fitToWindow ? fitZoom : zoomSetting;
 
@@ -600,6 +629,84 @@ export function Canvas({ onNotify }: { onNotify?: (text: string) => void }) {
     if (hit) setEditingId(hit.id);
   };
 
+  /**
+   * Right-click on the canvas.
+   *
+   * Follows the library's rule: a shape already in the selection keeps it, one
+   * outside takes it over first. Otherwise "delete these three" would be
+   * impossible — the click needed to reach the menu would have thrown the
+   * selection away before the menu could act on it.
+   */
+  const onContextMenu = (e: React.MouseEvent) => {
+    e.preventDefault();
+    const id = (e.target as Element).closest("[data-annotation]")?.getAttribute("data-annotation");
+
+    if (id && !selectedIds.includes(id)) useEditor.getState().select([id]);
+    setMenu({ at: { x: e.clientX, y: e.clientY }, id: id ?? null });
+  };
+
+  const menuItems = (id: string | null): (MenuEntry | false | undefined)[] => {
+    const store = useEditor.getState();
+    const count = store.selectedIds.length;
+
+    return [
+      // First, and present whether or not there is a shape under the pointer:
+      // this menu exists because pasting had no home outside the keyboard.
+      actions && {
+        label: "Paste image",
+        icon: <IconOverlay />,
+        shortcut: "Mod+V",
+        run: actions.pasteImage,
+      },
+      Boolean(id) && "separator",
+      Boolean(id) && {
+        label: count > 1 ? `Duplicate ${count} annotations` : "Duplicate",
+        icon: <IconCopy />,
+        shortcut: "Mod+D",
+        run: () => store.duplicateSelection(),
+      },
+      Boolean(id) && {
+        label: "Bring to front",
+        icon: <IconLayers />,
+        shortcut: "Mod+Shift+]",
+        run: () => store.reorder("front"),
+      },
+      Boolean(id) && {
+        label: "Send to back",
+        icon: <IconLayers />,
+        shortcut: "Mod+Shift+[",
+        run: () => store.reorder("back"),
+      },
+      Boolean(id) && "separator",
+      Boolean(id) && {
+        label: count > 1 ? `Delete ${count} annotations` : "Delete",
+        icon: <IconTrash />,
+        shortcut: "Backspace",
+        danger: true,
+        run: () => store.deleteSelection(),
+      },
+      "separator",
+      annotations.length > 0 && {
+        label: "Select all annotations",
+        icon: <IconSelect />,
+        shortcut: "Mod+A",
+        run: () => store.selectAll(),
+      },
+      actions && {
+        label: "Copy image",
+        icon: <IconCopy />,
+        shortcut: "Mod+C",
+        run: actions.copy,
+      },
+      actions && {
+        label: "Export flattened PNG…",
+        icon: <IconImage />,
+        shortcut: "Mod+E",
+        run: actions.exportFlat,
+      },
+    ];
+  };
+
   if (!doc) return null;
 
   const editing = annotations.find((a) => a.id === editingId);
@@ -630,6 +737,7 @@ export function Canvas({ onNotify }: { onNotify?: (text: string) => void }) {
           onPointerUp={onPointerUp}
           onPointerCancel={onPointerUp}
           onDoubleClick={onDoubleClick}
+          onContextMenu={onContextMenu}
         >
           {/* The capture itself, windowed by the current crop. */}
           <div
@@ -709,6 +817,10 @@ export function Canvas({ onNotify }: { onNotify?: (text: string) => void }) {
           )}
         </div>
       </div>
+
+      {menu && (
+        <ContextMenu at={menu.at} items={menuItems(menu.id)} onClose={() => setMenu(null)} />
+      )}
     </div>
   );
 }

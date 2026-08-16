@@ -563,6 +563,22 @@ export function EditorApp() {
     }
   }, [busy, exportPng, notify]);
 
+  /**
+   * What the canvas's right-click menu can reach.
+   *
+   * Memoised because it is a prop object: rebuilt every render, it would make
+   * the canvas — the most expensive thing on screen — re-render on every
+   * keystroke of a text annotation.
+   */
+  const canvasActions = useMemo(
+    () => ({
+      pasteImage: () => void pasteOverlay(),
+      copy: () => void copy(),
+      exportFlat: () => void exportFlat(),
+    }),
+    [pasteOverlay, copy, exportFlat],
+  );
+
   // --------------------------------------------------------------- commands
 
   const commands = useMemo<Command[]>(() => {
@@ -1072,7 +1088,7 @@ export function EditorApp() {
               onOpen={openRecent}
               onError={reportError}
             />
-            <Canvas onNotify={notify} />
+            <Canvas onNotify={notify} actions={canvasActions} />
           </>
         ) : (
           // Clicking anywhere that isn't a capture clears the selection, the

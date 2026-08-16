@@ -83,6 +83,10 @@ export function AnnotationLayer({
       {annotations.map((a) => (
         <g
           key={a.id}
+          // Tagged so a right-click anywhere inside the shape can find out
+          // which one it hit, without the canvas having to re-run hit-testing
+          // the browser has already done.
+          data-annotation={a.id}
           onPointerDown={(e) => onShapePointerDown(e, a.id)}
           style={{ cursor: shapeCursor }}
         >

@@ -2,10 +2,17 @@ import { type ReactNode, useEffect, useLayoutEffect, useRef, useState } from "re
 import { createPortal } from "react-dom";
 import clsx from "clsx";
 import { placeAtPoint } from "./anchor";
+import { Kbd } from "./Kbd";
 
 export interface MenuItem {
   label: string;
   icon?: ReactNode;
+  /**
+   * Keyboard equivalent, shown greyed on the right — "Mod+V" style, as `Kbd`
+   * spells it. A right-click menu is where people go when they don't know the
+   * key yet, so it may as well be where they learn it.
+   */
+  shortcut?: string;
   /** Destructive actions get danger colouring and sit below a separator. */
   danger?: boolean;
   run: () => void;
@@ -116,7 +123,8 @@ export function ContextMenu({ at, items, onClose }: Props) {
             )}
           >
             <span className={item.danger ? "text-danger" : "text-ink-2"}>{item.icon}</span>
-            {item.label}
+            <span className="flex-1">{item.label}</span>
+            {item.shortcut && <Kbd shortcut={item.shortcut} muted />}
           </button>
         ),
       )}
