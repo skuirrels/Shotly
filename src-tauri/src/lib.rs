@@ -59,6 +59,15 @@ pub fn run() {
                     if event.state() != ShortcutState::Pressed {
                         return;
                     }
+                    // Escape is borrowed by the annotation layer while it is
+                    // on screen and owns the mouse, because WKWebView eats it
+                    // before the page can see it. It belongs to no action and
+                    // never reaches the settings list.
+                    if annotate::is_escape(shortcut) {
+                        annotate::on_escape(app);
+                        return;
+                    }
+
                     let Some(action) = hotkeys::resolve(app, shortcut) else {
                         return;
                     };

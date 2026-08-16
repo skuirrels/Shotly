@@ -466,27 +466,43 @@ export function AnnotateApp() {
    * sitting there being looked at.
    */
   const [interacting, setInteracting] = useState(false);
-  /** Set while the screenshot on the way out is being taken. */
-  const [saving, setSaving] = useState(false);
+  /** Set while the layer is on its way out, whether or not it will be filed.
+   *  The toolbar goes as soon as this is true: it is not part of the picture,
+   *  and its disappearing is what says the key was heard. */
+  const [departing, setDeparting] = useState(false);
+  /** Whether the departure in progress will file a picture. */
+  const [keeping, setKeeping] = useState(false);
+  const keepingRef = useRef(false);
   /** What was saved, shown briefly before the layer goes. */
   const [saved, setSaved] = useState<string | null>(null);
   /** The toolbar's rectangle, in page coordinates. See `annotate_pass_through`. */
   const toolbarRect = useRef<DOMRect | null>(null);
 
   /**
-   * How long the shutter waits after the toolbar goes, and therefore how long
-   * a second Escape has to call the whole thing off.
+   * How long leaving waits before it becomes final, and therefore how long a
+   * second Escape has to turn it into a save.
    *
-   * The wait is not a cost this buys: the toolbar has to be genuinely off the
-   * screen before the picture is taken, and that was already two animation
-   * frames. Stretching it to something a hand can land inside turns a delay
-   * nobody could use into the window where "no, not that one" still works —
-   * and it means discarding never has to race a file that is already written.
+   * The wait is not a cost this buys. The toolbar has to be genuinely off the
+   * screen before any picture is taken, and that was already two animation
+   * frames; stretching it to something a hand can land inside turns a delay
+   * nobody could use into the window where the second press still counts. It
+   * also means a save never has to race a layer that is already gone.
    */
-  const DISCARD_GRACE_MS = 400;
+  const SAVE_GRACE_MS = 400;
 
-  /** The shutter, once the toolbar is out of shot. Cancelling this discards. */
-  const pendingSave = useRef<number | null>(null);
+  /**
+   * How long the screen has to settle before the shutter.
+   *
+   * Everything Shotly puts on screen has to be gone first — the toolbar, and
+   * the notice offering the second press. Two animation frames would do it;
+   * this is generous because the cost is invisible and a caption baked into
+   * someone's saved screenshot is not.
+   */
+  const SHUTTER_SETTLE_MS = 200;
+
+  /** Leaving, once the toolbar is out of shot. What happens when it fires
+   *  depends on whether a second Escape arrived first. */
+  const pendingExit = useRef<number | null>(null);
   /** Set the moment leaving is settled, so nothing can ask twice. */
   const leaving = useRef(false);
 
@@ -496,53 +512,79 @@ export function AnnotateApp() {
   }, []);
 
   /**
-   * Leave, taking the screen with us.
+   * Start leaving.
    *
-   * The whole point of drawing on the desktop is the desktop underneath, so
-   * what gets filed is a photograph of the screen rather than the strokes on
-   * their own. Nothing to save means nothing to file: an empty layer exits as
-   * quickly as it always did rather than dropping a picture of an ordinary
-   * desktop into the library.
+   * Escape leaves without filing anything, which is the common case: most of
+   * what gets drawn on a live screen is said in the moment and worth nothing
+   * afterwards. Keeping it is the deliberate act — a second Escape inside the
+   * grace below, or the Exit button, both of which arrive here with `keep`
+   * already true.
    *
-   * Failures still exit. Being stuck under a full-screen window because a
-   * write failed is far worse than losing the copy.
+   * What gets filed is a photograph of the screen rather than the strokes on
+   * their own, because the desktop underneath is the whole point. Nothing
+   * drawn means nothing to weigh up, so an empty layer just goes.
    */
-  const exit = useCallback(() => {
-    if (leaving.current || pendingSave.current !== null) return;
-    if (strokesRef.current.length === 0) {
+  /** Leave, filing a picture first if that is what was asked for. */
+  const leaveNow = useCallback(() => {
+    pendingExit.current = null;
+    if (!keepingRef.current) {
       stop();
       return;
     }
-
-    // Selection handles are Shotly's furniture, not annotation.
-    setSelected([]);
-    setSaving(true);
-    pendingSave.current = window.setTimeout(() => {
-      pendingSave.current = null;
-      void invoke<string>("annotate_save", { stem: captureStem() })
-        .then((path) => {
-          setSaving(false);
-          setSaved(path.split("/").pop() ?? "the library");
-          window.setTimeout(stop, 1100);
-        })
-        .catch(stop);
-    }, DISCARD_GRACE_MS);
+    // Failures still exit. Being stuck under a full-screen window because a
+    // write failed is far worse than losing the copy.
+    void invoke<string>("annotate_save", { stem: captureStem() })
+      .then((path) => {
+        setDeparting(false);
+        setSaved(path.split("/").pop() ?? "the library");
+        window.setTimeout(stop, 1100);
+      })
+      .catch(stop);
   }, [stop]);
+
+  const beginLeaving = useCallback(
+    (keep: boolean) => {
+      if (leaving.current || pendingExit.current !== null) return;
+      if (strokesRef.current.length === 0) {
+        stop();
+        return;
+      }
+
+      keepingRef.current = keep;
+      setKeeping(keep);
+      // Selection handles are Shotly's furniture, not annotation.
+      setSelected([]);
+      setDeparting(true);
+
+      // Leaving waits for a second press; keeping only waits for the screen.
+      pendingExit.current = window.setTimeout(leaveNow, keep ? SHUTTER_SETTLE_MS : SAVE_GRACE_MS);
+    },
+    [leaveNow, stop],
+  );
 
   /**
-   * Leave with nothing filed.
+   * The second Escape: keep it after all.
    *
-   * Reached by pressing Escape a second time, and only ever while the shutter
-   * is still waiting — so this really does mean nothing was written, rather
-   * than something written and then tidied away.
+   * Only ever reached while the grace is still running, so this upgrades a
+   * departure that has not happened yet rather than un-deleting anything. The
+   * toolbar is already off screen by now, which is exactly what the picture
+   * needs — the two presses and the shutter want the same pause.
    */
-  const discard = useCallback(() => {
-    if (pendingSave.current !== null) {
-      window.clearTimeout(pendingSave.current);
-      pendingSave.current = null;
-    }
-    stop();
-  }, [stop]);
+  const keepIt = useCallback(() => {
+    if (pendingExit.current === null) return;
+    keepingRef.current = true;
+    setKeeping(true);
+
+    // Restarted rather than left to run out. The notice offering this press is
+    // still on screen, and whatever is left of the grace could be a handful of
+    // milliseconds — not enough for it to be gone before the shutter, which is
+    // how it ended up printed across a saved screenshot once.
+    window.clearTimeout(pendingExit.current);
+    pendingExit.current = window.setTimeout(leaveNow, SHUTTER_SETTLE_MS);
+  }, [leaveNow]);
+
+  /** Leave and file it, in one gesture. The toolbar's own button. */
+  const exit = useCallback(() => beginLeaving(true), [beginLeaving]);
 
   /** True once the keydown for the current press has been answered. */
   const escapeHandled = useRef(false);
@@ -984,19 +1026,39 @@ export function AnnotateApp() {
   /**
    * One Escape, answered by whichever layer is outermost.
    *
-   * Text box, then selection, then the way out — and once the way out is
-   * under way, a second press means "not that one": the shutter is still
-   * waiting, so calling it off leaves nothing behind. Past that point the
-   * picture exists and Escape just skips the notice about it.
+   * Text box, then selection, then the way out — and once the way out is under
+   * way, a second press means "actually, keep that": the grace is still
+   * running, so it becomes a save instead. Past that point the picture exists
+   * and Escape just skips the notice about it.
+   *
+   * The order matters more than it looks. Escape has to reach the text box and
+   * the selection first, or a stray press while typing would start closing the
+   * layer instead of finishing the sentence.
    */
   const onEscape = useCallback(() => {
     if (leaving.current) return;
     if (saved !== null) return stop();
-    if (saving) return discard();
+    // The ref, not the `departing` state that mirrors it. A double press is
+    // two events with nothing between them, and React has no obligation to
+    // have re-rendered in that gap — read the state and a fast pair both see
+    // "not leaving yet", so the second press is swallowed and the picture
+    // never gets taken. Measured: two Escapes a frame apart did exactly that.
+    if (pendingExit.current !== null) return keepIt();
     if (isEditing) return commitText();
     if (selected.length > 0) return setSelected([]);
-    exit();
-  }, [saved, saving, isEditing, selected.length, stop, discard, commitText, exit]);
+    beginLeaving(false);
+  }, [saved, isEditing, selected.length, stop, keepIt, commitText, beginLeaving]);
+
+  // Escape arrives from Rust, not from the keyboard: WKWebView consumes it
+  // before this page's own listeners run. Read through a ref so the listener,
+  // which is bound once, always calls the current ladder.
+  const onEscapeRef = useRef(onEscape);
+  onEscapeRef.current = onEscape;
+
+  useEffect(() => {
+    const unlisten = listen("annotate:escape", () => onEscapeRef.current());
+    return () => void unlisten.then((fn) => fn());
+  }, []);
 
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
@@ -1051,7 +1113,7 @@ export function AnnotateApp() {
       // The release is a second chance, not a second press. If the keydown
       // above got through, this is the same tap finishing and must not count
       // again — otherwise every single press would read as a double one, and
-      // Escape would always discard.
+      // Escape would always save.
       if (escapeHandled.current) {
         escapeHandled.current = false;
         return;
@@ -1187,7 +1249,7 @@ export function AnnotateApp() {
 
       {/* Out of the way for the shutter: the point of the picture is the
           screen underneath, and Shotly's own toolbar is not part of it. */}
-      {!saving && !saved && (
+      {!departing && !saved && (
       <Toolbar
         layout={layout}
         dock={dock}
@@ -1212,6 +1274,18 @@ export function AnnotateApp() {
         onInteract={setInteract}
         onRect={(r) => (toolbarRect.current = r)}
       />
+      )}
+
+      {/* The grace, made visible. A double press nobody is told about is a
+          feature nobody uses, and this is the one moment it can be said
+          without being in the way — the toolbar has just gone, the drawings
+          are still there, and the offer expires in under half a second. */}
+      {departing && !keeping && (
+        <div className="pointer-events-none absolute inset-0 grid place-items-center">
+          <div className="surface-float rounded-2xl px-4 py-2.5 text-[13px] text-ink">
+            Leaving. Press <Kbd shortcut="Escape" muted /> again to keep it.
+          </div>
+        </div>
       )}
 
       {/* Said where the eye already is, rather than in a window that is about

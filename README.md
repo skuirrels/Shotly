@@ -144,8 +144,14 @@ use.
 
 Draw with the same tools. When you need to *use* the machine underneath,
 <kbd>⌃⇧D</kbd> hands the mouse back to the desktop and your drawings stay put on
-top; press it again to carry on drawing. Press <kbd>⌃⇧A</kbd> again to leave,
-and the screen — drawings and all — is saved to your library.
+top; press it again to carry on drawing.
+
+**<kbd>esc</kbd> leaves.** Most of what gets drawn on a live screen is said in
+the moment and worth nothing afterwards, so leaving keeps nothing — and Shotly
+tells you, for a moment, that a second <kbd>esc</kbd> would keep it instead.
+Press it and the screen, drawings and all, is filed in your library. The
+toolbar's **Exit** button does the same in one go, and <kbd>⌃⇧A</kbd> closes the
+layer outright.
 
 The toolbar docks to any edge: drag it, or press <kbd>D</kbd> to send it round
 the four sides. Down the left or right it becomes a narrow column.
@@ -227,7 +233,8 @@ never lights up, pick a different combination.
 
 **Drawing on the screen:** tool letters as above · <kbd>1</kbd>–<kbd>6</kbd>
 colours · <kbd>[</kbd> <kbd>]</kbd> size · <kbd>D</kbd> move the toolbar ·
-<kbd>C</kbd> clear · <kbd>S</kbd> next display
+<kbd>C</kbd> clear · <kbd>S</kbd> next display · <kbd>esc</kbd> leave ·
+<kbd>esc</kbd> <kbd>esc</kbd> leave and keep it
 
 ---
 

@@ -23,9 +23,11 @@
 //!   even if the page is completely dead.
 
 use crate::capture::{display, DisplayInfo};
+use std::str::FromStr;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
-use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindowBuilder};
+use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder};
+use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut};
 
 pub const LABEL: &str = "annotate";
 
@@ -67,6 +69,7 @@ fn state_beat(app: &AppHandle) -> Option<Instant> {
 
 /// Tear the annotation layer down. Safe to call at any time, from any thread.
 pub fn stop(app: &AppHandle) {
+    hold_escape(app, false);
     {
         let state = app.state::<AnnotateState>();
         *state.last_beat.lock().unwrap() = None;
@@ -84,6 +87,50 @@ pub fn stop(app: &AppHandle) {
         let _ = window.set_ignore_cursor_events(true);
         let _ = window.close();
     }
+}
+
+/// Escape, as a global shortcut.
+///
+/// Owned in Rust for the same reason the toggle is: WKWebView eats this key
+/// before the page's own listener ever runs. Measured — a letter bound to the
+/// identical handler left the layer immediately, and Escape did nothing at all,
+/// which is why the page's second-Escape branch had been unreachable since the
+/// day it was written.
+fn escape() -> Option<Shortcut> {
+    Shortcut::from_str("Escape").ok()
+}
+
+/// Is this the key we borrowed?
+pub fn is_escape(shortcut: &Shortcut) -> bool {
+    escape().is_some_and(|esc| &esc == shortcut)
+}
+
+/// Borrow Escape, or give it back.
+///
+/// Only ever held while the layer owns the mouse. Handing the machine back —
+/// the click-through button — hands this back too, because a user who has
+/// stepped aside to work in another application needs Escape to mean what it
+/// means everywhere else. Released on teardown as well, so a layer that dies
+/// cannot take the key with it.
+pub fn hold_escape(app: &AppHandle, hold: bool) {
+    let Some(esc) = escape() else { return };
+    if hold {
+        if let Err(err) = app.global_shortcut().register(esc) {
+            // Not fatal: the toolbar's Exit button and the toggle both still
+            // work, and one missing key is not worth refusing to draw.
+            eprintln!("[annotate] could not borrow Escape: {err}");
+        }
+    } else {
+        let _ = app.global_shortcut().unregister(esc);
+    }
+}
+
+/// Hand an Escape press to the page, which decides what it means.
+///
+/// The ladder — text box, then selection, then leaving — lives there because
+/// only the page knows what is on screen.
+pub fn on_escape(app: &AppHandle) {
+    let _ = app.emit_to(LABEL, "annotate:escape", ());
 }
 
 pub fn is_active(app: &AppHandle) -> bool {
@@ -204,6 +251,10 @@ pub fn mark_ready(app: &AppHandle) -> Result<(), String> {
 
     window.set_ignore_cursor_events(false).map_err(|e| e.to_string())?;
     let _ = window.set_focus();
+    // Borrowed only now, not when the window was built: until the page has
+    // painted there is nothing on screen for Escape to mean anything to, and a
+    // layer that never paints must not be holding the key.
+    hold_escape(app, true);
     Ok(())
 }
 
@@ -238,6 +289,8 @@ pub fn set_pass_through(app: &AppHandle, on: bool, rect: Option<HotRect>) -> Res
         *watcher += 1;
         *watcher
     };
+
+    hold_escape(app, !on);
 
     if !on {
         return window.set_ignore_cursor_events(false).map_err(|e| e.to_string());
