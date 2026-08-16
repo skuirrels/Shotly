@@ -33,6 +33,8 @@ export interface WindowInfo {
   appName: string;
   bounds: Rect;
   layer: number;
+  /** Full-screen windows cannot be captured by id — see `WindowPicker`. */
+  fullScreen: boolean;
 }
 
 export type CaptureMode = "region" | "window" | "fullscreen";

@@ -27,6 +27,8 @@ use tauri_plugin_global_shortcut::ShortcutState;
 fn dispatch(app: &tauri::AppHandle, mode: CaptureMode) {
     let result = match mode {
         CaptureMode::Fullscreen => commands::capture_fullscreen(app.clone(), None).map(|_| ()),
+        // Window capture is a choice made by looking, not by pointing.
+        CaptureMode::Window => commands::request_window_pick(app),
         other => commands::start_capture(app, other),
     };
 
@@ -111,6 +113,8 @@ pub fn run() {
             commands::cancel_capture,
             commands::capture_fullscreen,
             commands::list_windows,
+            commands::window_thumbnail,
+            commands::capture_window,
             commands::open_image,
             commands::read_capture_bytes,
             commands::save_png,

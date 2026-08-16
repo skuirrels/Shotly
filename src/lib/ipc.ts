@@ -30,6 +30,20 @@ export const captureFullscreen = (displayId?: number) =>
 
 export const listWindows = () => invoke<WindowInfo[]>("list_windows");
 
+/**
+ * A small picture of one window, as a data URL.
+ *
+ * Taken from the window's own backing store, so it works for windows that are
+ * behind others or not on screen at all — which is exactly what makes the
+ * picker able to show you what you're choosing.
+ */
+export const windowThumbnail = (windowId: number, max = 320) =>
+  invoke<string>("window_thumbnail", { windowId, max });
+
+/** Capture one window by id and open it in the editor. */
+export const captureWindow = (windowId: number) =>
+  invoke<CaptureResult>("capture_window", { windowId });
+
 /** Load an existing PNG/JPEG from disk into the editor. */
 export const openImage = (path: string) => invoke<CaptureResult>("open_image", { path });
 

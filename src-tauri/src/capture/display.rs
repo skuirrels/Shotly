@@ -115,6 +115,8 @@ mod imp {
             return None;
         }
 
+        let layer = dict_number(dict, "kCGWindowLayer").unwrap_or(0.0) as i32;
+
         Some(WindowInfo {
             id: id as u32,
             title: dict_string(dict, "kCGWindowName").unwrap_or_default(),
@@ -125,7 +127,8 @@ mod imp {
                 width: dict_number(&bounds_dict, "Width").unwrap_or(0.0),
                 height: dict_number(&bounds_dict, "Height").unwrap_or(0.0),
             },
-            layer: dict_number(dict, "kCGWindowLayer").unwrap_or(0.0) as i32,
+            layer,
+            full_screen: layer == FULL_SCREEN_LAYER,
         })
     }
 
@@ -135,16 +138,43 @@ mod imp {
             .ok_or_else(|| CaptureError::Process("CGWindowListCopyWindowInfo returned null".into()))
     }
 
-    /// Is this something the user could sensibly capture?
+    /// The layer macOS moves a window to when it goes full screen.
+    const FULL_SCREEN_LAYER: i32 = 1000;
+
+    /// The window layers that hold ordinary application windows.
     ///
-    /// Layer 0 is the normal application window layer. Everything above it is
-    /// system chrome, and it is not merely uninteresting — the Dock owns an
-    /// invisible full-screen window at layer 20 that sits in front of every
-    /// application, so admitting other layers makes the Dock the answer to
-    /// every hit test.
+    /// 0 is the usual one. 1000 is full screen, listed so that a full-screen
+    /// app is not simply missing from the picker with no explanation — it
+    /// cannot be captured by id, and being told that is better than being told
+    /// nothing. Leaving it out entirely was worse than it sounds: with every
+    /// app full screen there are no layer-0 windows at all and the picker came
+    /// back empty with nothing to say for itself.
+    ///
+    /// Everything else is system chrome, and excluding it is not merely
+    /// tidiness — the Dock owns an invisible full-screen window at layer 20,
+    /// the menu bar sits at 24 and Control Centre at 25.
+    const APP_LAYERS: [i32; 2] = [0, FULL_SCREEN_LAYER];
+
+    /// Processes that draw the system's own interface rather than documents.
+    /// Belt and braces beside the layer rule, and spelled both ways because
+    /// the name follows the user's region.
+    const SYSTEM_OWNERS: [&str; 7] = [
+        "Dock",
+        "Window Server",
+        "WindowServer",
+        "Control Centre",
+        "Control Center",
+        "Notification Centre",
+        "Notification Center",
+    ];
+
+    /// Is this something the user could sensibly capture?
     fn is_target(info: &WindowInfo) -> bool {
-        // Slivers are 1px helper windows some apps keep around.
-        info.layer == 0 && info.bounds.width >= 40.0 && info.bounds.height >= 40.0
+        APP_LAYERS.contains(&info.layer)
+            && !SYSTEM_OWNERS.contains(&info.app_name.as_str())
+            // Slivers are helper windows some apps keep around.
+            && info.bounds.width >= 40.0
+            && info.bounds.height >= 40.0
     }
 
     pub fn windows() -> Result<Vec<WindowInfo>> {
@@ -199,3 +229,5 @@ pub fn virtual_bounds(displays: &[DisplayInfo]) -> Option<Rect> {
 
     Some(Rect { x: min_x, y: min_y, width: max_x - min_x, height: max_y - min_y })
 }
+
+

@@ -84,6 +84,13 @@ pub struct WindowInfo {
     pub app_name: String,
     pub bounds: Rect,
     pub layer: i32,
+    /// True when this window has been taken full screen.
+    ///
+    /// Worth knowing because such a window cannot be captured by id at all:
+    /// `screencapture -l` hands back its drop shadow and nothing else, an
+    /// image whose middle is entirely transparent, whichever Space is in
+    /// front. The picker says so rather than offering an empty rectangle.
+    pub full_screen: bool,
 }
 
 /// A captured image plus the geometry it came from.

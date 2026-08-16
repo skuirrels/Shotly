@@ -34,7 +34,7 @@ Four keys, and they work in any app:
 | | |
 |---|---|
 | <kbd>⌃⇧4</kbd> | **Region** — drag out the part of the screen you want |
-| <kbd>⌃⇧5</kbd> | **Window** — click a window and Shotly takes it whole |
+| <kbd>⌃⇧5</kbd> | **Window** — pick from a grid of every open window, shown as it looks |
 | <kbd>⌃⇧3</kbd> | **Full screen** |
 | <kbd>⌃⇧6</kbd> | **Scrolling capture** — a whole page, taller than the screen |
 
@@ -43,8 +43,13 @@ Command-Shift-3/4/5 for its own screenshot tools, and quietly stealing those
 would be rude. **You can change any of them** — see
 [Changing the keys](#changing-the-keys).
 
-Region and window selection use the macOS selector you already know, complete
-with its magnifier and pixel readout.
+Region selection uses the macOS selector you already know, complete with its
+magnifier and pixel readout.
+
+**Window** opens a picker instead of a crosshair: every open window as a live
+thumbnail, filterable by app or title, arrow keys and <kbd>⏎</kbd> to take one.
+It reaches windows the pointer cannot — behind other windows, or fully covered —
+and because you choose by looking, you always get the window you meant.
 
 ### Capturing a whole page
 

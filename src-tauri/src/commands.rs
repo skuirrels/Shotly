@@ -209,6 +209,26 @@ pub fn begin_capture(app: AppHandle, mode: CaptureMode) -> CmdResult<()> {
     start_capture(&app, mode)
 }
 
+/// Ask the editor to put up the window picker.
+///
+/// Window capture no longer goes through `screencapture -i -w`. Choosing by
+/// sight beats choosing by pointer here: the pointer can only reach what is in
+/// front, and — as the removed outline proved — cannot even reliably tell you
+/// what that is. See `window_thumbnail`.
+pub fn request_window_pick(app: &AppHandle) -> CmdResult<()> {
+    if !cli::has_permission() {
+        cli::request_permission();
+        return Err("permission-denied".into());
+    }
+
+    let editor = app.get_webview_window("editor").ok_or("editor window missing")?;
+    *app.state::<AppState>().hid_editor.lock().unwrap() = false;
+    platform::set_accessory_mode(app, false);
+    editor.show().map_err(|e| e.to_string())?;
+    editor.set_focus().map_err(|e| e.to_string())?;
+    app.emit_to("editor", "editor:pick-window", ()).map_err(|e| e.to_string())
+}
+
 /// Abandon an in-flight capture and restore the editor.
 #[tauri::command]
 pub fn cancel_capture(app: AppHandle) -> CmdResult<()> {
@@ -580,6 +600,55 @@ pub fn list_library(app: AppHandle) -> CmdResult<Vec<LibraryItem>> {
 ///
 /// Cached under the source's path hash *and* mtime, so an edited file
 /// regenerates rather than serving a stale image.
+/// A picture of one window, small, for the picker to show.
+///
+/// `screencapture -l` reads the window's own backing store rather than the
+/// screen, so this works for a window that is behind another, on a different
+/// Space, or — as it turns out — not being composited at all. That is the
+/// whole point of the picker: a window that looks like nothing you recognise
+/// is one you can decline to choose, where the old red outline just pointed at
+/// it and offered no way to tell.
+///
+/// Not cached. A window's contents change, and a picker showing what an app
+/// looked like ten minutes ago would be its own kind of lie.
+#[tauri::command]
+pub fn window_thumbnail(app: AppHandle, window_id: u32, max: u32) -> CmdResult<String> {
+    let state = app.state::<AppState>();
+    let shot = state
+        .backend
+        .capture_window(window_id)
+        .map_err(|e| e.to_string())?;
+
+    let image = image::open(&shot.path).map_err(|e| e.to_string())?;
+    let thumb = image.thumbnail(max, max);
+    let _ = std::fs::remove_file(&shot.path);
+
+    let mut png = Vec::new();
+    thumb
+        .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+        .map_err(|e| e.to_string())?;
+
+    use base64::Engine;
+    Ok(format!(
+        "data:image/png;base64,{}",
+        base64::engine::general_purpose::STANDARD.encode(&png)
+    ))
+}
+
+/// Capture one window by id and open it in the editor.
+///
+/// The counterpart to the picker. Nothing has to be hidden first and no
+/// overlay goes up: `-l` photographs the window itself, so Shotly's own window
+/// being in front of it is irrelevant.
+#[tauri::command]
+pub fn capture_window(app: AppHandle, window_id: u32) -> CmdResult<CaptureResult> {
+    let frame = {
+        let state = app.state::<AppState>();
+        state.backend.capture_window(window_id).map_err(|e| e.to_string())?
+    };
+    deliver(&app, frame)
+}
+
 #[tauri::command]
 pub fn library_thumbnail(path: String, max: u32) -> CmdResult<String> {
     use std::hash::{Hash, Hasher};

@@ -304,11 +304,39 @@ Nothing separates the two cases:
   everything for the duration.
 
 An outline that can point at a window that is not there is worse than no
-outline: macOS draws its own highlight, and ours could contradict it. If a
-truthful one is ever wanted, it needs Shotly to own window selection too — a
-list or grid of windows with live thumbnails, captured by id through the
-existing `list_windows` and `capture_window`, where a phantom shows itself for
-what it is because its thumbnail does not match anything on screen.
+outline: macOS draws its own highlight, and ours could contradict it. Window
+capture now goes through `WindowPicker` instead — a grid of windows with live
+thumbnails, captured by id — where a phantom shows itself for what it is
+because its picture matches nothing you recognise.
+
+Two things that cost an afternoon to learn, both worth keeping:
+
+- **Full-screen windows sit at layer 1000**, not 0. `is_target` accepted only
+  layer 0, so a full-screen app was missing from the list — and since a desktop
+  where everything is full screen has *no* layer-0 windows, the picker came back
+  empty with nothing to say for itself.
+- **A full-screen window cannot be captured by id at all.** `screencapture -l`
+  returns its drop shadow and a completely transparent middle, whichever Space
+  is active. Measured: centre alpha 0 against 255 for an ordinary window. The
+  picker lists such windows and says so, rather than offering an empty frame.
+
+### How Snagit does the outline: the accessibility API
+
+Worth recording, because it is the one approach that works. Snagit's snapping
+highlight comes from `AXUIElementCopyElementAtPosition`, not the window list.
+Measured on the same desktop that defeated the old outline:
+
+- It returns the window the user can actually see, and **never** the phantom —
+  accessibility hit-testing follows what is really there, the way a click does.
+- It resolves *sub-elements* as well: probing a point inside a sidebar returned
+  a 393×29 row, not the whole window. That is where Snagit's "snap to the thing
+  under the pointer" comes from.
+- The enclosing window's frame comes from `kAXWindowAttribute` and matches
+  `CGWindowListCopyWindowInfo` exactly.
+
+The price is the Accessibility permission, which is a second TCC prompt on top
+of Screen Recording. That is a product decision rather than a technical one,
+which is why the picker was built first.
 
 ## Not built yet
 

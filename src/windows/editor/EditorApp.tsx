@@ -46,6 +46,7 @@ import { EmptyLibrary, PermissionNotice } from "./EmptyState";
 import { Library } from "./Library";
 import { RecentStrip } from "./RecentStrip";
 import { Settings } from "./Settings";
+import { WindowPicker } from "./WindowPicker";
 import { ShortcutSheet } from "./ShortcutSheet";
 import { ScanResult } from "./ScanResult";
 import { Toolbar } from "./Toolbar";
@@ -77,6 +78,14 @@ export function EditorApp() {
   const [palette, setPalette] = useState(false);
   const [sheet, setSheet] = useState(false);
   const [settings, setSettings] = useState(false);
+  /**
+   * The window picker, opened by window capture.
+   *
+   * A counter rather than a flag, and used as the component's key: asking for
+   * window capture while the picker is already up has to re-read the window
+   * list, or it goes on offering the windows that existed a minute ago.
+   */
+  const [picking, setPicking] = useState(0);
   /** Lines the recogniser found, shown until dismissed. */
   const [scan, setScan] = useState<Scan | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
@@ -139,8 +148,20 @@ export function EditorApp() {
    */
   const startCapture = useCallback(
     (mode: CaptureMode) => {
+      // Window capture is a choice made by looking rather than pointing — see
+      // `WindowPicker` for why the pointer turned out to be the wrong tool.
+      if (mode === "window") return setPicking((n) => n + 1);
       const call = mode === "fullscreen" ? ipc.captureFullscreen() : ipc.beginCapture(mode);
       void call.catch((err) => notify(describe(err), "error"));
+    },
+    [notify, describe],
+  );
+
+  /** Capture the chosen window and let the usual open path take it from there. */
+  const takeWindow = useCallback(
+    (windowId: number) => {
+      setPicking(0);
+      void ipc.captureWindow(windowId).catch((err) => notify(describe(err), "error"));
     },
     [notify, describe],
   );
@@ -187,9 +208,14 @@ export function EditorApp() {
       notify(describe(event.payload), "error"),
     );
 
+    // The hotkey and the tray both ask for window capture through Rust, which
+    // brings this window forward and hands the choosing back to us.
+    const pickUnlisten = listen("editor:pick-window", () => setPicking((n) => n + 1));
+
     return () => {
       void openUnlisten.then((fn) => fn());
       void errorUnlisten.then((fn) => fn());
+      void pickUnlisten.then((fn) => fn());
     };
   }, [notify, describe]);
 
@@ -1343,6 +1369,15 @@ export function EditorApp() {
       {sheet && <ShortcutSheet commands={commands} onClose={() => setSheet(false)} />}
 
       {settings && <Settings onClose={() => setSettings(false)} />}
+
+      {picking > 0 && (
+        <WindowPicker
+          key={picking}
+          onCapture={takeWindow}
+          onClose={() => setPicking(0)}
+          onError={reportError}
+        />
+      )}
 
       {scan && (
         <ScanResult
