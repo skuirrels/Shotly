@@ -19,6 +19,7 @@ import {
   IconLayers,
   IconOverlay,
   IconPen,
+  IconPin,
   IconRedo,
   IconRefresh,
   IconSave,
@@ -560,6 +561,40 @@ export function EditorApp() {
   }, [busy, exportPng, notify]);
 
   /**
+   * Stick what the editor is showing onto the front of the screen.
+   *
+   * The flattened view rather than the file underneath, so the annotations
+   * come with it: a pin of a screenshot you have just marked up, without the
+   * marks, would be the wrong picture.
+   */
+  const pin = useCallback(async () => {
+    if (busy) return;
+    if (!requireDoc()) return;
+
+    setBusy("pin");
+    try {
+      const png = await exportPng();
+      if (!png) return;
+      await ipc.pinPng(png);
+    } catch (e) {
+      notify(`Could not pin: ${e}`, "error");
+    } finally {
+      setBusy(null);
+    }
+  }, [busy, exportPng, notify, requireDoc]);
+
+  /**
+   * Pin a capture straight from the library.
+   *
+   * Its own path rather than the editor's: nothing has been opened, so there
+   * is nothing to flatten — the file on disk is already the picture.
+   */
+  const pinFile = useCallback(
+    (path: string) => void ipc.pinOpen(path).catch((e) => notify(`Could not pin: ${e}`, "error")),
+    [notify],
+  );
+
+  /**
    * What the canvas's right-click menu can reach.
    *
    * Memoised because it is a prop object: rebuilt every render, it would make
@@ -979,6 +1014,16 @@ export function EditorApp() {
           void ipc.annotateToggle().catch((err) => notify(`Annotation failed: ${err}`, "error")),
       },
       {
+        id: "capture.pin",
+        title: "Pin to screen",
+        group: "Capture",
+        shortcut: "Mod+Shift+P",
+        icon: <IconPin />,
+        keywords: "float always on top reference overlay stick",
+        enabled: hasDoc,
+        run: () => void pin(),
+      },
+      {
         id: "capture.openFile",
         title: "Open image…",
         group: "Capture",
@@ -1157,6 +1202,7 @@ export function EditorApp() {
               selected={picked}
               onSelect={setPicked}
               onItems={onLibraryItems}
+              onPin={pinFile}
             />
           </div>
         )}

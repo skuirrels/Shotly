@@ -6,6 +6,7 @@ mod highlight;
 mod hotkeys;
 mod markup;
 mod ocr;
+mod pin;
 mod platform;
 mod update;
 
@@ -113,12 +114,17 @@ pub fn run() {
             commands::reveal_in_finder,
             commands::copy_png_to_clipboard,
             commands::copy_files_to_clipboard,
+            commands::copy_file_image_to_clipboard,
             commands::read_clipboard_image,
             commands::image_data_url,
             commands::hide_editor,
             update::check_for_updates,
             update::pending_update,
             ocr::recognize_text,
+            pin::pin_open,
+            pin::pin_png,
+            pin::pin_close,
+            pin::pin_close_all,
             hotkeys::hotkeys_list,
             hotkeys::hotkeys_set,
             hotkeys::hotkeys_reset,
@@ -231,13 +237,16 @@ fn tray_menu(app: &tauri::AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
     let annotate =
         MenuItem::with_id(app, "annotate", "Annotate Screen", true, accel(Action::Annotate))?;
     let stop = MenuItem::with_id(app, "stop-annotate", "Exit Annotation Mode", true, None::<&str>)?;
+    // The way out of a screen covered in pins — and the way to shut one whose
+    // page has stopped answering its own close button.
+    let unpin = MenuItem::with_id(app, "close-pins", "Close All Pins", true, None::<&str>)?;
     let updates = MenuItem::with_id(app, "update", "Check for Updates…", true, None::<&str>)?;
     let sep = PredefinedMenuItem::separator(app)?;
     let quit = MenuItem::with_id(app, "quit", "Quit Shotly", true, Some("Cmd+Q"))?;
 
     Menu::with_items(
         app,
-        &[&region, &window, &screen, &sep, &annotate, &stop, &sep, &updates, &quit],
+        &[&region, &window, &screen, &sep, &annotate, &stop, &unpin, &sep, &updates, &quit],
     )
 }
 
@@ -282,6 +291,7 @@ fn build_tray(app: &tauri::AppHandle) -> tauri::Result<()> {
                 }
             }
             "stop-annotate" => annotate::stop(app),
+            "close-pins" => pin::close_all(app),
             "update" => update::check_from_tray(app),
             "quit" => app.exit(0),
             _ => {}

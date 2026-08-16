@@ -137,3 +137,17 @@ export const recognizeText = (
   path: string,
   region: { x: number; y: number; width: number; height: number } | null,
 ) => invoke<TextLine[]>("recognize_text", { path, region });
+
+/**
+ * Stick an image to the front of the screen.
+ *
+ * Two ways in, because there are two things worth pinning: a capture that is
+ * already a file, and whatever the editor is showing right now — which only
+ * exists as pixels until someone saves it.
+ */
+export const pinOpen = (path: string) => invoke<string>("pin_open", { path });
+
+export const pinPng = (bytes: Uint8Array) =>
+  invoke<string>("pin_png", { bytes: Array.from(bytes) });
+
+export const pinCloseAll = () => invoke<void>("pin_close_all");

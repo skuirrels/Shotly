@@ -13,9 +13,10 @@ export default defineConfig({
   build: {
     rollupOptions: {
       input: {
-        // The editor, and the live screen-annotation layer.
+        // The editor, the live screen-annotation layer, and the pins.
         index: resolve(__dirname, "index.html"),
         annotate: resolve(__dirname, "annotate.html"),
+        pin: resolve(__dirname, "pin.html"),
       },
     },
   },

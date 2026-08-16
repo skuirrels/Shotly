@@ -122,6 +122,18 @@ export const IconEyedropper = (p: SVGProps<SVGSVGElement>) => (
 );
 
 /**
+ * A drawing pin, head-on: the disc of the head with the pin behind it, angled
+ * the way one sits when it has been pushed into a board.
+ */
+export const IconPin = (p: SVGProps<SVGSVGElement>) => (
+  <Icon {...p}>
+    <path d="M9.6 1.9 14.1 6.4" />
+    <path d="M11.2 3.5 7.4 5.1a1.2 1.2 0 0 0-.5.3L4.1 8.2a.8.8 0 0 0 0 1.1l2.6 2.6a.8.8 0 0 0 1.1 0l2.8-2.8a1.2 1.2 0 0 0 .3-.5l1.6-3.8" />
+    <path d="M5.4 10.6 2 14" />
+  </Icon>
+);
+
+/**
  * Text being lifted out of a picture: the corner marks of a selection, with
  * lines of prose caught inside them.
  *

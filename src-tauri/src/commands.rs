@@ -745,6 +745,17 @@ pub fn copy_png_to_clipboard(bytes: Vec<u8>) -> CmdResult<()> {
         .map_err(|e| e.to_string())
 }
 
+/// Copy an image that is already on disk.
+///
+/// The path rather than the pixels, for the pins: they know where their image
+/// came from, and sending several megabytes up to the page and straight back
+/// down again only to reach the same clipboard would be wasted work.
+#[tauri::command]
+pub fn copy_file_image_to_clipboard(path: String) -> CmdResult<()> {
+    let bytes = std::fs::read(&path).map_err(|e| format!("could not read {path}: {e}"))?;
+    copy_png_to_clipboard(bytes)
+}
+
 /// Whatever image is on the clipboard, as a PNG data URL.
 ///
 /// `Ok(None)` rather than an error when there isn't one: pressing ⌘V with text

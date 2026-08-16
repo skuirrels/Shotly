@@ -1,6 +1,14 @@
 import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import clsx from "clsx";
-import { IconClose, IconCopy, IconFolder, IconImage, IconSearch, IconTrash } from "@/components/icons";
+import {
+  IconClose,
+  IconCopy,
+  IconFolder,
+  IconImage,
+  IconPin,
+  IconSearch,
+  IconTrash,
+} from "@/components/icons";
 import { ContextMenu, type MenuEntry } from "@/components/ui/ContextMenu";
 import { Kbd } from "@/components/ui/Kbd";
 import { Tooltip } from "@/components/ui/Tooltip";
@@ -27,6 +35,8 @@ interface Props {
   onSelect: (paths: string[]) => void;
   /** Reports the visible order, so ⌘A upstairs can select everything. */
   onItems: (paths: string[]) => void;
+  /** Stick one capture to the front of the screen. */
+  onPin: (path: string) => void;
 }
 
 /**
@@ -46,6 +56,7 @@ export function Library({
   selected,
   onSelect,
   onItems,
+  onPin,
 }: Props) {
   const [items, setItems] = useState<LibraryItem[] | null>(null);
   const [scope, setScope] = useState<Scope>(null);
@@ -220,6 +231,13 @@ export function Library({
         label: many ? `Copy ${targets.length} captures` : "Copy",
         icon: <IconCopy />,
         run: () => onCopy(targets),
+      },
+      // One at a time: pinning a selection of twelve would bury the screen
+      // under the very thing the pins are meant to sit beside.
+      !many && {
+        label: "Pin to screen",
+        icon: <IconPin />,
+        run: () => void onPin(targets[0]),
       },
       !many && {
         label: "Show in Finder",
