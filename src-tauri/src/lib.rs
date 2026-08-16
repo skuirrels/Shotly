@@ -115,6 +115,8 @@ pub fn run() {
             commands::reveal_in_finder,
             commands::copy_png_to_clipboard,
             commands::copy_files_to_clipboard,
+            commands::read_clipboard_image,
+            commands::image_data_url,
             commands::hide_editor,
             update::check_for_updates,
             update::pending_update,

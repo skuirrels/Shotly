@@ -153,7 +153,35 @@ export interface PenAnnotation extends AnnotationBase {
   points: Point[];
 }
 
-export type Annotation = BoxAnnotation | LineAnnotation | StepAnnotation | PenAnnotation;
+/**
+ * Another picture, laid over this one.
+ *
+ * `src` is a PNG data URL — the pixels themselves, not a path to them. An
+ * overlay is part of the document, and a document that referred to a file could
+ * lose half of itself to a capture being renamed or thrown away long after the
+ * fact. Embedding costs size in the saved file, which is exactly what the
+ * flattened export is for.
+ *
+ * The natural size rides along so a resize can hold the aspect ratio without
+ * waiting on a decode.
+ */
+export interface ImageAnnotation extends AnnotationBase {
+  kind: "image";
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  src: string;
+  naturalWidth: number;
+  naturalHeight: number;
+}
+
+export type Annotation =
+  | BoxAnnotation
+  | LineAnnotation
+  | StepAnnotation
+  | PenAnnotation
+  | ImageAnnotation;
 
 export function isBox(a: Annotation): a is BoxAnnotation {
   return a.kind === "rect" || a.kind === "ellipse" || a.kind === "blur" ||
@@ -173,9 +201,18 @@ export function isPen(a: Annotation): a is PenAnnotation {
   return a.kind === "pen";
 }
 
+export function isImage(a: Annotation): a is ImageAnnotation {
+  return a.kind === "image";
+}
+
+/** Anything positioned by a rectangle, whatever else it may be. */
+export function isRectangular(a: Annotation): a is BoxAnnotation | ImageAnnotation {
+  return isBox(a) || isImage(a);
+}
+
 /** Axis-aligned bounds of any annotation, used for selection and handles. */
 export function boundsOf(a: Annotation): Rect {
-  if (isBox(a)) {
+  if (isRectangular(a)) {
     return {
       x: Math.min(a.x, a.x + a.width),
       y: Math.min(a.y, a.y + a.height),
@@ -224,7 +261,7 @@ export function boundsOf(a: Annotation): Rect {
  * them at once.
  */
 export function movedBy(a: Annotation, dx: number, dy: number): Annotation {
-  if (isBox(a)) return { ...a, x: a.x + dx, y: a.y + dy };
+  if (isRectangular(a)) return { ...a, x: a.x + dx, y: a.y + dy };
   if (isLine(a)) {
     return { ...a, x1: a.x1 + dx, y1: a.y1 + dy, x2: a.x2 + dx, y2: a.y2 + dy };
   }

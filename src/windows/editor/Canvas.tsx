@@ -17,11 +17,13 @@ import {
   type Rect,
   boundsOf,
   isBox,
+  isImage,
   isLine,
   isPen,
   isStep,
   movedBy,
 } from "@/lib/types";
+import { fitToBox } from "@/lib/overlay";
 import { useEditor } from "@/state/editorStore";
 import { AnnotationLayer, type HandleId } from "./AnnotationLayer";
 
@@ -505,6 +507,14 @@ export function Canvas({ onNotify }: { onNotify?: (text: string) => void }) {
               y: box.y + (p.y - b.y) * sy,
             })),
           });
+          break;
+        }
+
+        // An overlay holds its proportions: a stretched screenshot looks like a
+        // mistake, and there is no reason to want one. Shift is already taken
+        // by the square snap above, so distorting is simply not offered.
+        if (isImage(original)) {
+          store.update(active.id, fitToBox(original, box, anchor));
           break;
         }
 

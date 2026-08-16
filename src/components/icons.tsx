@@ -121,6 +121,18 @@ export const IconEyedropper = (p: SVGProps<SVGSVGElement>) => (
   </Icon>
 );
 
+/**
+ * One picture laid over another: a back frame, and a front one carrying the
+ * usual hill-and-sun shorthand so it reads as an image rather than a rectangle.
+ */
+export const IconOverlay = (p: SVGProps<SVGSVGElement>) => (
+  <Icon {...p}>
+    <path d="M2 11V3.2A1.2 1.2 0 0 1 3.2 2H11" />
+    <rect x="5" y="5" width="9.5" height="9.5" rx="1.6" />
+    <path d="M5 12.2 8 9.4l2.2 2M11.6 8.2a.9.9 0 1 0 0-.1z" />
+  </Icon>
+);
+
 export const IconCrop = (p: SVGProps<SVGSVGElement>) => (
   <Icon {...p}>
     <path d="M4.5 1.5v10h10" />

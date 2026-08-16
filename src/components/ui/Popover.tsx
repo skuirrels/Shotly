@@ -38,13 +38,26 @@ export function Popover({ trigger, children, align = "center" }: Props) {
 
     // The panel is already mounted (off-screen at -9999), so it can be measured
     // before being placed.
-    setPos(
-      placeAgainst(
-        el.getBoundingClientRect(),
-        { width: panel.current?.offsetWidth ?? 220, height: panel.current?.offsetHeight ?? 180 },
-        align,
-      ),
-    );
+    const place = () =>
+      setPos(
+        placeAgainst(
+          el.getBoundingClientRect(),
+          { width: panel.current?.offsetWidth ?? 220, height: panel.current?.offsetHeight ?? 180 },
+          align,
+        ),
+      );
+
+    place();
+
+    // Measuring once is not enough for a panel that fills in after it opens.
+    // The palette sits at the bottom of the window, so placement is really the
+    // decision to flip above the trigger — made on the panel's height, which
+    // for a menu still fetching its contents is the height of the word
+    // "Loading". It then grew downward, off the bottom of the window.
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(place);
+    if (panel.current) observer.observe(panel.current);
+    return () => observer.disconnect();
   }, [open, align]);
 
   useEffect(() => {

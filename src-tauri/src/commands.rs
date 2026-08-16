@@ -736,6 +736,47 @@ pub fn copy_png_to_clipboard(bytes: Vec<u8>) -> CmdResult<()> {
         .map_err(|e| e.to_string())
 }
 
+/// Whatever image is on the clipboard, as a PNG data URL.
+///
+/// `Ok(None)` rather than an error when there isn't one: pressing ⌘V with text
+/// on the clipboard is an ordinary thing to do, not a failure to report.
+///
+/// A data URL rather than a file on disk because an overlay embeds its pixels
+/// in the document — see `lib/overlay.ts` for why.
+#[tauri::command]
+pub fn read_clipboard_image() -> CmdResult<Option<String>> {
+    let mut clipboard = arboard::Clipboard::new().map_err(|e| e.to_string())?;
+    let Ok(image) = clipboard.get_image() else {
+        return Ok(None);
+    };
+
+    let (width, height) = (image.width as u32, image.height as u32);
+    let buffer = image::RgbaImage::from_raw(width, height, image.bytes.into_owned())
+        .ok_or("the clipboard image was not the size it claimed")?;
+
+    let mut png = std::io::Cursor::new(Vec::new());
+    image::DynamicImage::ImageRgba8(buffer)
+        .write_to(&mut png, image::ImageFormat::Png)
+        .map_err(|e| e.to_string())?;
+
+    Ok(Some(data_url(&png.into_inner())))
+}
+
+/// A saved capture's pixels as a PNG data URL, for overlaying onto another.
+///
+/// Goes through `png_bytes`, which strips any markup the file carries: an
+/// overlay wants the picture, not a second document's worth of shapes nested
+/// inside the one being edited.
+#[tauri::command]
+pub fn image_data_url(path: String) -> CmdResult<String> {
+    Ok(data_url(&png_bytes(std::path::Path::new(&path))?))
+}
+
+fn data_url(png: &[u8]) -> String {
+    use base64::Engine;
+    format!("data:image/png;base64,{}", base64::engine::general_purpose::STANDARD.encode(png))
+}
+
 // -------------------------------------------------------------- window control
 
 #[tauri::command]

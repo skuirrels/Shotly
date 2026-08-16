@@ -205,6 +205,22 @@ function Shape({ a, doc, hidden }: { a: Annotation; doc: Doc; hidden: boolean })
   const b = boundsOf(a);
 
   switch (a.kind) {
+    case "image":
+      return (
+        <image
+          href={a.src}
+          x={b.x}
+          y={b.y}
+          width={b.width}
+          height={b.height}
+          // The aspect ratio is held by the resize itself, so the renderer is
+          // told to fill the rectangle exactly rather than letter-box inside it
+          // and leave a transparent margin that still hit-tests.
+          preserveAspectRatio="none"
+          filter={shadow}
+        />
+      );
+
     case "rect":
       return (
         <rect

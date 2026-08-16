@@ -16,6 +16,7 @@ import {
   IconGrid,
   IconImage,
   IconLayers,
+  IconOverlay,
   IconPen,
   IconRedo,
   IconRefresh,
@@ -28,6 +29,7 @@ import type { Command } from "@/lib/keys/types";
 import { renderToPng } from "@/lib/export";
 import * as ipc from "@/lib/ipc";
 import { serialize as serializeMarkup } from "@/lib/markup";
+import { overlayFromClipboard } from "@/lib/overlay";
 import { useUpdates } from "@/lib/updater";
 import type { CaptureMode, CaptureResult } from "@/lib/types";
 import { useEditor } from "@/state/editorStore";
@@ -378,6 +380,25 @@ export function EditorApp() {
       setBusy(null);
     }
   }, [busy, exportPng, notify]);
+
+  /**
+   * ⌘V: lay whatever image is on the clipboard over the capture.
+   *
+   * Silent on text — ⌘V is a general-purpose key, and saying "no image on the
+   * clipboard" every time someone pastes out of habit would be nagging. The
+   * picker's own button says it, because there the ask was explicit.
+   */
+  const pasteOverlay = useCallback(async () => {
+    if (!requireDoc()) return;
+    try {
+      const source = await overlayFromClipboard();
+      if (!source) return;
+      useEditor.getState().addOverlay(source);
+      notify("Image overlaid — drag a corner to resize");
+    } catch (e) {
+      notify(`Could not paste that image: ${e}`, "error");
+    }
+  }, [notify, requireDoc]);
 
   /** macOS-style capture filename: "Shotly 2026-08-14 at 18.33.21". */
   const defaultStem = () => {
@@ -890,6 +911,16 @@ export function EditorApp() {
         run: () => void openFile(),
       },
 
+      {
+        id: "edit.overlayPaste",
+        title: "Overlay image from clipboard",
+        group: "Edit",
+        shortcut: "Mod+V",
+        icon: <IconOverlay />,
+        keywords: "paste image picture on top composite",
+        run: () => void pasteOverlay(),
+      },
+
       // ----------------------------------------------------------- export
       {
         id: "export.copy",
@@ -968,6 +999,7 @@ export function EditorApp() {
     ];
   }, [
     copy,
+    pasteOverlay,
     save,
     saveAs,
     exportFlat,
@@ -1051,7 +1083,9 @@ export function EditorApp() {
             />
           </div>
         )}
-        {activeView === "editor" && <Toolbar />}
+        {activeView === "editor" && (
+          <Toolbar currentPath={doc?.libraryPath} onNotify={notify} />
+        )}
 
         {dropping && (
           <div className="animate-in-fade pointer-events-none absolute inset-3 z-50 grid place-items-center rounded-2xl border-2 border-dashed border-accent bg-canvas/80">

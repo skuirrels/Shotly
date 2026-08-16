@@ -9,7 +9,7 @@ import {
   stepFontSize,
   TEXT_PADDING,
 } from "./shapes";
-import { type Annotation, boundsOf, isBox, isLine, isPen, isStep } from "./types";
+import { type Annotation, boundsOf, isBox, isImage, isLine, isPen, isStep } from "./types";
 import type { Doc } from "@/state/editorStore";
 
 /**
@@ -37,8 +37,13 @@ export async function renderToPng(doc: Doc, annotations: Annotation[]): Promise<
 
     ctx.drawImage(img, doc.crop.x, doc.crop.y, width, height, 0, 0, width, height);
 
+    // Overlays carry their own pixels and have to be decoded before a
+    // synchronous draw loop can put them down. Data URLs don't taint the
+    // canvas, so this stays a plain `drawImage`.
+    const overlays = await decodeOverlays(annotations);
+
     for (const a of annotations) {
-      drawAnnotation(ctx, a, img, doc);
+      drawAnnotation(ctx, a, img, doc, overlays);
     }
 
     return await canvasToPng(canvas);
@@ -54,6 +59,18 @@ function loadImage(url: string): Promise<HTMLImageElement> {
     img.onerror = () => reject(new Error("could not decode the capture"));
     img.src = url;
   });
+}
+
+async function decodeOverlays(
+  annotations: Annotation[],
+): Promise<Map<string, HTMLImageElement>> {
+  const decoded = new Map<string, HTMLImageElement>();
+  await Promise.all(
+    annotations.filter(isImage).map(async (a) => {
+      decoded.set(a.id, await loadImage(a.src));
+    }),
+  );
+  return decoded;
 }
 
 function canvasToPng(canvas: HTMLCanvasElement): Promise<Uint8Array> {
@@ -83,6 +100,7 @@ function drawAnnotation(
   a: Annotation,
   img: HTMLImageElement,
   doc: Doc,
+  overlays: Map<string, HTMLImageElement>,
 ) {
   const { color, strokeWidth, fillOpacity } = a.style;
 
@@ -146,6 +164,17 @@ function drawAnnotation(
   }
 
   const b = boundsOf(a);
+
+  if (isImage(a)) {
+    const overlay = overlays.get(a.id);
+    // A source that wouldn't decode is skipped rather than drawn as a hole:
+    // the rest of the document is still worth exporting.
+    if (overlay) {
+      withShadow(ctx, a.style.shadow, () => ctx.drawImage(overlay, b.x, b.y, b.width, b.height));
+    }
+    return;
+  }
+
   if (!isBox(a)) return;
 
   switch (a.kind) {

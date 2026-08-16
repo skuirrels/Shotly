@@ -94,6 +94,12 @@ export const copyPngToClipboard = (bytes: Uint8Array) =>
 export const copyFilesToClipboard = (paths: string[]) =>
   invoke<void>("copy_files_to_clipboard", { paths });
 
+/** The clipboard's image as a PNG data URL, or null if it holds something else. */
+export const readClipboardImage = () => invoke<string | null>("read_clipboard_image");
+
+/** A saved capture as a PNG data URL, for embedding as an overlay. */
+export const imageDataUrl = (path: string) => invoke<string>("image_data_url", { path });
+
 export const hideEditor = () => invoke<void>("hide_editor");
 
 /** Toggle the live screen-annotation layer. */

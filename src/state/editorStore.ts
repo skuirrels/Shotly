@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import { parse as parseMarkup } from "@/lib/markup";
+import { type OverlaySource, placeOverlay } from "@/lib/overlay";
 import {
   type Annotation,
   type CaptureResult,
@@ -128,6 +129,8 @@ interface EditorState {
   canRedo: () => boolean;
 
   add: (annotation: Annotation) => void;
+  /** Lay another image over this one, centred, selected and ready to resize. */
+  addOverlay: (source: OverlaySource) => void;
   update: (id: string, patch: Partial<Annotation>) => void;
   replaceAll: (annotations: Annotation[]) => void;
   remove: (ids: string[]) => void;
@@ -313,6 +316,26 @@ export const useEditor = create<EditorState>((set, get) => ({
       stepCounter: annotation.kind === "step" ? s.stepCounter + 1 : s.stepCounter,
       tool: TRANSIENT_TOOLS.includes(s.tool) ? "select" : s.tool,
     })),
+
+  addOverlay: (source) =>
+    set((s) => {
+      if (!s.doc) return {};
+      const overlay: Annotation = {
+        id: crypto.randomUUID(),
+        ...placeOverlay(source, docSize(s.doc), s.style),
+      };
+      return {
+        annotations: [...s.annotations, overlay],
+        // Selected and in the select tool, so the handles are already under the
+        // pointer: placing an overlay and resizing it are one gesture in
+        // practice, and nobody drops an image in at exactly the right size.
+        selectedIds: [overlay.id],
+        tool: "select",
+        dirty: true,
+        past: [...s.past, snapshotOf(s)].slice(-HISTORY_LIMIT),
+        future: [],
+      };
+    }),
 
   update: (id, patch) =>
     set((s) => ({

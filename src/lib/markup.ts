@@ -17,14 +17,15 @@ export interface MarkupDoc {
 }
 
 /**
- * 2 added the freehand and spotlight shapes; 3 added callouts.
+ * 2 added the freehand and spotlight shapes; 3 added callouts; 4 added
+ * overlaid images, which is also the first version whose payload can be large.
  *
  * Bumping rather than quietly extending the last one is what keeps the promise
  * below honest: a build that predates these shapes sees a version it doesn't
  * know and opens the capture flat, instead of drawing a document with pieces
  * of it silently missing.
  */
-const VERSION = 3;
+const VERSION = 4;
 
 export function serialize(doc: Omit<MarkupDoc, "version">): string {
   return JSON.stringify({ version: VERSION, ...doc });

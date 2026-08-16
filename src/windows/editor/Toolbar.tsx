@@ -5,6 +5,7 @@ import { Popover } from "@/components/ui/Popover";
 import { Tooltip } from "@/components/ui/Tooltip";
 import type { Style } from "@/lib/types";
 import { useEditor } from "@/state/editorStore";
+import { OverlayPicker } from "./OverlayPicker";
 import { FONT_PRESETS, STROKE_PRESETS, SWATCHES, TOOLS, styleControlsFor } from "./tools";
 
 /**
@@ -14,7 +15,13 @@ import { FONT_PRESETS, STROKE_PRESETS, SWATCHES, TOOLS, styleControlsFor } from 
  * or selection appear, so the bar stays short instead of showing a font size
  * next to the blur tool.
  */
-export function Toolbar() {
+interface Props {
+  /** Passed through to the overlay picker; see `OverlayPicker`. */
+  currentPath?: string;
+  onNotify: (text: string) => void;
+}
+
+export function Toolbar({ currentPath, onNotify }: Props) {
   const tool = useEditor((s) => s.tool);
   const setTool = useEditor((s) => s.setTool);
   const style = useEditor((s) => s.style);
@@ -57,6 +64,10 @@ export function Toolbar() {
             onClick={() => setTool(t.id)}
           />
         ))}
+
+        {/* Not one of the TOOLS: nothing is drawn with it, so it opens a menu
+            of sources instead of becoming the tool in hand. */}
+        <OverlayPicker currentPath={currentPath} onNotify={onNotify} />
 
         {anyControls && <Divider />}
 
