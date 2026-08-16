@@ -46,13 +46,28 @@ use crate::capture::{cli, display, Frame, Rect};
 
 pub const LABEL: &str = "scroll";
 
-/// How often the region is photographed. `screencapture` takes 100–250ms per
-/// shot, so this is a target rather than a promise.
-const INTERVAL_MS: u64 = 350;
+/// How often the region is photographed.
+///
+/// Measured rather than guessed: `screencapture` costs about 100ms for a
+/// region this size and the matching costs 2ms, so this is close to as fast as
+/// the shutter goes. It matters more than it looks — the fastest scroll the
+/// stitcher can follow is a fraction of a frame *per interval*, so every
+/// millisecond here is scroll speed the user is allowed. The first version
+/// used 350ms and spent three quarters of it asleep, which is most of why it
+/// lost the thread on an ordinary trackpad flick.
+const INTERVAL_MS: u64 = 120;
 
 /// The stitched page may not grow beyond this many device pixels tall. At a
 /// sane capture width that is tens of full screens — a limit met on purpose.
 const MAX_HEIGHT: u32 = 40_000;
+
+/// How many fruitless frames before the user is told they have lost the thread.
+///
+/// Not one: a single scroll back over ground already captured is normal, and
+/// crying wolf at it would train people to ignore the warning. Three in a row
+/// at this interval is under half a second, so the warning still arrives while
+/// the hand is on the trackpad.
+const STALL_AFTER: u32 = 3;
 
 /// The floating panel's size, in points.
 const HUD_WIDTH: f64 = 260.0;
@@ -115,6 +130,31 @@ fn min_evidence(h: usize) -> usize {
     (h / 16).clamp(16, 48)
 }
 
+/// How much of the frame must overlap the canvas before a match is believed.
+///
+/// This is the guard that was missing, and its absence is what made the
+/// feature look broken. A frame sharing only its last few rows with the canvas
+/// can score a near-perfect match by pure chance — real interfaces are largely
+/// flat chrome, and any two thin strips of flat chrome look alike. Measured on
+/// a real screenshot: with no genuine overlap at all, the best offset scored
+/// 0.63 against a threshold of 6, from 57 shared rows out of 400.
+///
+/// Demanding a quarter of the frame costs some maximum scroll speed — the
+/// largest followable jump drops from about 93% of a frame to 75% — and buys
+/// back the thing that matters, which is never stitching two pieces of page
+/// that were never next to each other.
+fn min_overlap(h: usize) -> usize {
+    (h / 4).max(64).min(h)
+}
+
+/// How much better than typical the winning offset has to score.
+///
+/// A second, independent guard. Where `min_overlap` asks "was there enough to
+/// compare?", this asks "did comparing it actually tell us anything?" — on a
+/// blank or strongly repeating region every offset scores alike, and a winner
+/// drawn from a field of equals is a coin toss dressed as a measurement.
+const DISTINCT_RATIO: f32 = 3.0;
+
 fn signatures(img: &RgbaImage) -> Vec<Sig> {
     let (w, h) = img.dimensions();
     let mut sigs = Vec::with_capacity(h as usize);
@@ -154,7 +194,8 @@ fn offset_cost(tail: &[Sig], frame: &[Sig], moving: &[bool], o: i64) -> Option<f
     // Frame row y overlaps tail row y + o.
     let y0 = (-o).max(0) as usize;
     let y1 = (h as i64 - o.max(0)).max(0) as usize;
-    if y1 <= y0 {
+    // Too little shared page to be evidence of anything. See `min_overlap`.
+    if y1 <= y0 || y1 - y0 < min_overlap(h) {
         return None;
     }
 
@@ -209,6 +250,21 @@ fn search_offsets(
     if threshold.is_some_and(|t| best > t) {
         return None;
     }
+
+    // Did comparing actually distinguish anything? On a blank or repeating
+    // region every offset scores alike; picking the smallest of a field of
+    // equals is a coin toss. Needs a decent spread of candidates before the
+    // median means anything, so a narrow search is exempt — the coarse pass
+    // above it has already ruled on distinctiveness for those.
+    if threshold.is_some() && costs.len() >= 16 {
+        let mut sorted: Vec<f32> = costs.iter().map(|(_, c)| *c).collect();
+        sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        let median = sorted[sorted.len() / 2];
+        if median < best * DISTINCT_RATIO {
+            return None;
+        }
+    }
+
     costs
         .into_iter()
         .filter(|(_, c)| *c <= best + TIE_EPSILON)
@@ -296,11 +352,19 @@ fn find_offset(tail: &[Sig], frame: &[Sig], moving: &[bool]) -> Option<i64> {
 }
 
 /// What one new frame did to the canvas.
+///
+/// The three failures are deliberately distinct, because they mean opposite
+/// things to the person scrolling. Nothing moved: they are reading, and all is
+/// well. Moved but nothing new: they scrolled back over ground already
+/// covered, also fine. Moved and nothing matched: the page has run away from
+/// the stitcher, and only then is there something to tell them about.
 #[derive(Debug, PartialEq)]
 pub enum Push {
     /// `rows` new rows were appended.
     Appended { rows: u32 },
-    /// The content had not moved (or had moved back up); nothing to add.
+    /// Nothing on screen moved. The user is reading, not scrolling.
+    Idle,
+    /// The page moved, but onto ground the canvas already holds.
     Unchanged,
     /// The frame did not line up anywhere — a popup, a page change, or a
     /// scroll bigger than a frame can bridge.
@@ -360,7 +424,7 @@ impl Stitcher {
 
         // Nothing moved at all: the user is reading, not scrolling.
         if moved < min_evidence(h) / 2 {
-            return Push::Unchanged;
+            return Push::Idle;
         }
 
         // The canvas tail the frame is matched against: its last `h` rows.
@@ -390,16 +454,48 @@ impl Stitcher {
         RgbaImage::from_raw(self.width, self.height, self.canvas)
     }
 
+    /// The last few rows of the canvas, as a PNG data URL.
+    ///
+    /// This is what the user has to bring back on screen for stitching to
+    /// resume, and a picture of it is worth any amount of "scroll back a
+    /// little" — which was the old advice, and was wrong as often as not.
+    pub fn anchor_strip(&self, width: u32) -> Option<String> {
+        let rows = (self.frame_height / 6).clamp(40, 200).min(self.height);
+        self.encode(self.height - rows, rows, width)
+    }
+
     /// A thumbnail of the whole page so far, as a PNG data URL for the HUD.
     pub fn preview(&self, width: u32) -> Option<String> {
-        let img = RgbaImage::from_raw(self.width, self.height, self.canvas.clone())?;
-        let height = ((self.height as f64 / self.width as f64) * width as f64).round() as u32;
-        let small = image::imageops::resize(
-            &img,
-            width,
-            height.max(1),
-            image::imageops::FilterType::Triangle,
-        );
+        self.encode(0, self.height, width)
+    }
+
+    /// Scale a slice of the canvas down to `width` and encode it.
+    ///
+    /// Samples straight out of the byte buffer rather than building an image
+    /// to resize. The canvas is the whole stitched page — tens of megabytes
+    /// once someone has scrolled a while — and this runs on every frame that
+    /// changes anything, so copying it each time cost more than the capture
+    /// and the matching put together.
+    fn encode(&self, from_row: u32, rows: u32, width: u32) -> Option<String> {
+        if rows == 0 || self.width == 0 {
+            return None;
+        }
+        let width = width.min(self.width).max(1);
+        let height = (((rows as f64 / self.width as f64) * width as f64).round() as u32).max(1);
+
+        let src_stride = self.width as usize * 4;
+        let mut small = RgbaImage::new(width, height);
+        for ty in 0..height {
+            let sy = from_row as usize + (ty as usize * rows as usize) / height as usize;
+            let row = sy * src_stride;
+            for tx in 0..width {
+                let sx = (tx as usize * self.width as usize) / width as usize;
+                let i = row + sx * 4;
+                let px = self.canvas.get(i..i + 4)?;
+                small.put_pixel(tx, ty, image::Rgba([px[0], px[1], px[2], px[3]]));
+            }
+        }
+
         let mut png = Vec::new();
         small
             .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
@@ -409,6 +505,7 @@ impl Stitcher {
             base64::engine::general_purpose::STANDARD.encode(&png)
         ))
     }
+
 }
 
 // ------------------------------------------------------------------- session
@@ -423,8 +520,12 @@ struct Progress {
     /// Data-URL thumbnail of the stitched page. Absent when nothing changed.
     #[serde(skip_serializing_if = "Option::is_none")]
     preview: Option<String>,
-    /// Set when the last frame could not be matched.
+    /// Set when several frames running have contributed nothing.
     stalled: bool,
+    /// The bottom of what has been captured, as a data URL — the thing to
+    /// scroll back to. Only sent while stalled, since it costs an encode.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    anchor: Option<String>,
 }
 
 /// Open the region-selection overlay on the display under the cursor.
@@ -558,13 +659,23 @@ pub fn scroll_layout(app: AppHandle) -> Result<Rect, String> {
 /// The region is chosen: turn the overlay into the HUD and start capturing.
 #[tauri::command]
 pub fn scroll_start(app: AppHandle, region: Rect) -> Result<(), String> {
-    if region.width < 60.0 || region.height < 60.0 {
-        return Err("drag out a larger area".into());
-    }
-
     let state = app.state::<ScrollState>();
     let (display_bounds, scale) =
         (*state.bounds.lock().unwrap()).ok_or("no scroll session")?;
+
+    // Squared off before anything is captured with it.
+    //
+    // `screencapture -R` is quietly unhelpful with a rectangle it doesn't
+    // like: hand it fractions and it rounds *outward*, so 400.75 wide comes
+    // back 402 points wide; hand it a rectangle overhanging the display and it
+    // silently clips to what fits. Neither is fatal on its own — the same
+    // input gives the same output every time — but both mean the picture is
+    // not the one the user dragged, so settle it here where it can be seen.
+    let region = clamp_to_display(region, display_bounds);
+
+    if region.width < 60.0 || region.height < 60.0 {
+        return Err("drag out a larger area".into());
+    }
 
     {
         let session = state.session.lock().unwrap();
@@ -576,7 +687,10 @@ pub fn scroll_start(app: AppHandle, region: Rect) -> Result<(), String> {
     let window = app.get_webview_window(LABEL).ok_or("the overlay is gone")?;
 
     // The same window becomes the HUD: out of the way of the region, near it.
-    let hud = hud_position(&region, &display_bounds);
+    let hud = hud_position(&region, &display_bounds).ok_or(
+        "leave a strip of screen free beside the area — the progress panel has to \
+         sit somewhere that isn't being photographed",
+    )?;
     window
         .set_position(tauri::LogicalPosition::new(hud.0, hud.1))
         .and_then(|_| window.set_size(tauri::LogicalSize::new(HUD_WIDTH, HUD_HEIGHT)))
@@ -605,22 +719,46 @@ pub fn scroll_start(app: AppHandle, region: Rect) -> Result<(), String> {
     Ok(())
 }
 
+/// Whole points, and inside the display. See `scroll_start` for why.
+fn clamp_to_display(region: Rect, display: Rect) -> Rect {
+    let x0 = region.x.round().max(display.x);
+    let y0 = region.y.round().max(display.y);
+    let x1 = (region.x + region.width).round().min(display.x + display.width);
+    let y1 = (region.y + region.height).round().min(display.y + display.height);
+
+    Rect { x: x0, y: y0, width: (x1 - x0).max(0.0), height: (y1 - y0).max(0.0) }
+}
+
 /// Where the HUD goes: past the region's right edge, else its left, else
 /// inside its top-right corner. Never below or above, where page content the
 /// user is about to scroll would sit behind it.
-fn hud_position(region: &Rect, display: &Rect) -> (f64, f64) {
+fn hud_position(region: &Rect, display: &Rect) -> Option<(f64, f64)> {
     const GAP: f64 = 12.0;
-    let y = region.y.max(display.y + GAP);
+    let y = region.y.max(display.y + GAP).min(display.y + display.height - HUD_HEIGHT - GAP);
+    let x = region.x.max(display.x + GAP).min(display.x + display.width - HUD_WIDTH - GAP);
 
+    // Beside it, then under it, then over it — but never *on* it. The HUD is
+    // an ordinary window as far as the shutter is concerned, so a HUD inside
+    // the region is photographed into every single frame: baked into the
+    // finished page, and worse, changing between frames where the matcher
+    // reads it as page content that moved.
     let right = region.x + region.width + GAP;
     if right + HUD_WIDTH <= display.x + display.width - GAP {
-        return (right, y);
+        return Some((right, y));
     }
     let left = region.x - GAP - HUD_WIDTH;
     if left >= display.x + GAP {
-        return (left, y);
+        return Some((left, y));
     }
-    (region.x + region.width - HUD_WIDTH - GAP, y + GAP)
+    let below = region.y + region.height + GAP;
+    if below + HUD_HEIGHT <= display.y + display.height - GAP {
+        return Some((x, below));
+    }
+    let above = region.y - GAP - HUD_HEIGHT;
+    if above >= display.y + GAP {
+        return Some((x, above));
+    }
+    None
 }
 
 /// Stop and open what was captured in the editor.
@@ -692,7 +830,8 @@ fn run_session(
 ) {
     let mut stitcher: Option<Stitcher> = None;
     let mut frames = 0u32;
-    let mut stalled = false;
+    // Consecutive frames that moved without contributing anything.
+    let mut missed = 0u32;
 
     while !stop.load(Ordering::Relaxed) {
         let started = std::time::Instant::now();
@@ -707,12 +846,21 @@ fn run_session(
                     Some(s) => match s.push(img) {
                         Push::Appended { .. } => {
                             changed = true;
-                            stalled = false;
+                            missed = 0;
                         }
-                        Push::Unchanged => stalled = false,
-                        Push::NoMatch => stalled = true,
+                        // Reading, not scrolling. Says nothing either way, so
+                        // it must not clear a stall the user has not fixed.
+                        Push::Idle => {}
+                        // The page moved and none of it was captured. One of
+                        // these is a scroll back over old ground; several in a
+                        // row means the page has run away from us — which is
+                        // exactly the state the first version reported as
+                        // healthy progress.
+                        Push::Unchanged | Push::NoMatch => missed += 1,
                     },
                 }
+
+                let stalled = missed >= STALL_AFTER;
 
                 if let Some(s) = &stitcher {
                     let (_, height) = s.size();
@@ -721,6 +869,10 @@ fn run_session(
                         height,
                         preview: changed.then(|| s.preview(148)).flatten(),
                         stalled,
+                        // What the user has to scroll back to, shown only when
+                        // they need it: a picture of where the capture ends is
+                        // the one instruction that cannot be misread.
+                        anchor: stalled.then(|| s.anchor_strip(220)).flatten(),
                     };
                     let _ = app.emit_to(LABEL, "scroll:progress", &progress);
                     if height >= MAX_HEIGHT {
@@ -847,7 +999,7 @@ mod tests {
     fn a_pause_adds_nothing() {
         let page = page(320, 1200);
         let mut st = Stitcher::new(window(&page, 0, 400));
-        assert_eq!(st.push(window(&page, 0, 400)), Push::Unchanged);
+        assert_eq!(st.push(window(&page, 0, 400)), Push::Idle);
         assert_eq!(st.size().1, 400);
     }
 
@@ -907,6 +1059,122 @@ mod tests {
         assert!(
             per_frame < std::time::Duration::from_millis(300),
             "matching took {per_frame:?} per frame — too slow for the capture loop"
+        );
+    }
+
+    /// The bug that made the feature look broken in the field.
+    ///
+    /// A scroll too fast to follow must be *reported*, not silently accepted
+    /// on the strength of a few rows of flat chrome lining up by luck. The
+    /// first version answered `Unchanged` here, so the panel went on counting
+    /// frames and cheerfully saying "keep scrolling" while capturing nothing.
+    #[test]
+    fn an_unfollowable_scroll_is_never_mistaken_for_progress() {
+        let page = page(320, 4000);
+        let h = 400u32;
+
+        for jump in [500u32, 700, 1200, 2000, 3000] {
+            let mut st = Stitcher::new(window(&page, 0, h));
+            let got = st.push(window(&page, jump, h));
+            assert_eq!(got, Push::NoMatch, "a {jump}-row jump should be refused, got {got:?}");
+            assert_eq!(st.size().1, h, "nothing may be appended for a {jump}-row jump");
+        }
+    }
+
+    /// Losing the thread must not end the session — scrolling back into
+    /// ground already covered has to pick it up again.
+    #[test]
+    fn recovers_when_the_user_scrolls_back() {
+        let page = page(320, 3000);
+        let h = 400u32;
+        let mut st = Stitcher::new(window(&page, 0, h));
+
+        assert_eq!(st.push(window(&page, 900, h)), Push::NoMatch);
+        // Back into the captured region: picks up exactly where it left off.
+        assert_eq!(st.push(window(&page, 250, h)), Push::Appended { rows: 250 });
+        assert_eq!(st.push(window(&page, 400, h)), Push::Appended { rows: 150 });
+
+        let out = st.into_image().unwrap();
+        assert_eq!(out.as_raw(), window(&page, 0, 400 + h).as_raw());
+    }
+
+    /// Reading is not scrolling, and neither is scrolling back over old
+    /// ground. Only the third case is worth interrupting someone about.
+    #[test]
+    fn the_three_kinds_of_nothing_are_told_apart() {
+        let page = page(320, 3000);
+        let h = 400u32;
+        let mut st = Stitcher::new(window(&page, 0, h));
+
+        assert_eq!(st.push(window(&page, 0, h)), Push::Idle, "still page");
+        st.push(window(&page, 300, h));
+        assert_eq!(st.push(window(&page, 100, h)), Push::Unchanged, "scrolled back");
+        assert_eq!(st.push(window(&page, 2500, h)), Push::NoMatch, "ran away");
+    }
+
+    /// The panel is an ordinary window to the shutter, so it must never be
+    /// placed where it would be photographed into every frame.
+    #[test]
+    fn the_hud_is_never_placed_inside_the_captured_region() {
+        let display = Rect { x: 0.0, y: 0.0, width: 1512.0, height: 982.0 };
+        let overlaps = |r: &Rect, at: (f64, f64)| {
+            at.0 < r.x + r.width && at.0 + HUD_WIDTH > r.x
+                && at.1 < r.y + r.height && at.1 + HUD_HEIGHT > r.y
+        };
+
+        for region in [
+            Rect { x: 100.0, y: 100.0, width: 700.0, height: 700.0 },   // room right
+            Rect { x: 700.0, y: 60.0, width: 780.0, height: 800.0 },    // room left
+            Rect { x: 40.0, y: 40.0, width: 1430.0, height: 500.0 },    // room below
+            Rect { x: 40.0, y: 420.0, width: 1430.0, height: 520.0 },   // room above
+        ] {
+            let at = hud_position(&region, &display)
+                .unwrap_or_else(|| panic!("no place found for {region:?}"));
+            assert!(!overlaps(&region, at), "HUD at {at:?} sits inside {region:?}");
+        }
+
+        // A region with no room anywhere is refused rather than fudged.
+        let everything = Rect { x: 0.0, y: 0.0, width: 1512.0, height: 982.0 };
+        assert_eq!(hud_position(&everything, &display), None);
+    }
+
+    /// What the shutter is handed must be whole points inside the display, or
+    /// `screencapture` quietly rounds it outward and clips it.
+    #[test]
+    fn the_region_is_squared_off_before_capture() {
+        let display = Rect { x: 0.0, y: 0.0, width: 1512.0, height: 982.0 };
+
+        let fractional = Rect { x: 100.5, y: 100.25, width: 400.75, height: 300.5 };
+        let r = clamp_to_display(fractional, display);
+        assert_eq!((r.x, r.y, r.width, r.height), (101.0, 100.0, 400.0, 301.0));
+
+        // Hanging off two edges: trimmed to what actually exists.
+        let overhanging = Rect { x: -50.0, y: 800.0, width: 400.0, height: 400.0 };
+        let r = clamp_to_display(overhanging, display);
+        assert_eq!((r.x, r.y, r.width, r.height), (0.0, 800.0, 350.0, 182.0));
+    }
+
+    /// The thumbnail runs on nearly every frame, so it must not cost more
+    /// than the capture it illustrates.
+    #[test]
+    fn the_preview_stays_cheap_on_a_tall_page() {
+        let page = page(1562, 3000);
+        let mut st = Stitcher::new(window(&page, 0, 1492));
+        // Grow it to something like a long article.
+        for top in (40..1500).step_by(40) {
+            st.push(window(&page, top, 1492));
+        }
+        assert!(st.size().1 > 2800, "expected a tall canvas, got {}", st.size().1);
+
+        let t0 = std::time::Instant::now();
+        for _ in 0..10 {
+            assert!(st.preview(148).is_some());
+        }
+        let each = t0.elapsed() / 10;
+        assert!(
+            each < std::time::Duration::from_millis(25),
+            "preview took {each:?} per frame on a {}-row canvas",
+            st.size().1
         );
     }
 

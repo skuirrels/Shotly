@@ -43,6 +43,8 @@ interface Progress {
   height: number;
   preview?: string;
   stalled: boolean;
+  /** The bottom of what has been captured. Sent only while stalled. */
+  anchor?: string;
 }
 
 const MIN_EDGE = 60;
@@ -182,7 +184,7 @@ function Select() {
           Drag out the area to capture, then scroll the page yourself
         </p>
         <p className="mt-0.5 text-[11.5px] text-white/60">
-          Esc cancels · leave room to see the content you'll be scrolling
+          Esc cancels · leave a strip free beside it for the progress panel
         </p>
       </div>
     </div>
@@ -232,9 +234,27 @@ function Hud() {
       </div>
 
       {/* The page so far, growing as the user scrolls. Anchored to the bottom
-          because that is where the action is: the join they just caused. */}
+          because that is where the action is: the join they just caused.
+          While stalled it is replaced by the one thing that fixes it. */}
       <div className="flex min-h-0 flex-1 items-end justify-center overflow-hidden bg-inset p-2">
-        {preview.current ? (
+        {progress?.stalled && progress.anchor ? (
+          <div className="flex h-full flex-col justify-center gap-1.5 px-1">
+            <p className="text-center text-[11.5px] leading-snug text-danger">
+              Scrolled too fast — nothing is being captured.
+            </p>
+            <p className="text-center text-[11px] leading-snug text-ink-3">
+              Scroll back up until this is on screen again:
+            </p>
+            {/* A picture of where the capture ends. "Scroll back a little" was
+                the old advice and it was wrong as often as right — how far
+                back is a thing you can see and not a thing we can phrase. */}
+            <img
+              src={progress.anchor}
+              alt="The bottom of what has been captured"
+              className="w-full rounded-sm shadow-[0_0_0_1px_var(--color-danger)]"
+            />
+          </div>
+        ) : preview.current ? (
           <img
             src={preview.current}
             alt="Captured so far"
@@ -242,8 +262,8 @@ function Hud() {
           />
         ) : (
           <p className="self-center px-4 text-center text-[12px] text-ink-4">
-            Scroll the content behind the area you chose. Slow and steady
-            stitches best.
+            Scroll the content behind the area you chose. Any speed is fine —
+            it will say so if it loses track.
           </p>
         )}
       </div>
@@ -251,7 +271,7 @@ function Hud() {
       <div className="shrink-0 border-t border-white/8 px-3 py-2">
         <p className="mb-2 h-[15px] text-[11px] text-ink-4">
           {progress?.stalled
-            ? "Lost the thread — scroll back a little so the pictures overlap."
+            ? "Waiting for the page to come back into view…"
             : progress
               ? `${progress.frames} ${progress.frames === 1 ? "look" : "looks"} so far · keep scrolling`
               : "Starting…"}
