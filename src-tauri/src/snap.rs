@@ -84,6 +84,12 @@ const READY_GRACE: Duration = Duration::from_secs(3);
 /// event, and the capture will happily race the difference.
 const SETTLE: Duration = Duration::from_millis(140);
 
+/// How many times a session will switch its tap back on before giving up.
+///
+/// A cold start costs one. Anything beyond a handful is a callback that is
+/// actually too slow, which is a different problem and not one to paper over.
+const MAX_REARMS: u32 = 5;
+
 /// The only key the tap answers for.
 const KEY_ESCAPE: i64 = 53;
 
@@ -103,6 +109,9 @@ static LEVEL: AtomicI32 = AtomicI32::new(0);
 /// Wheel movement the tracker has yet to turn into levels.
 static SCROLL: AtomicI64 = AtomicI64::new(0);
 static VERDICT: AtomicU8 = AtomicU8::new(VERDICT_NONE);
+/// Set by the tap callback when macOS switches the tap off, and cleared by the
+/// tap's own loop when it switches it back on. See `spawn_tap`.
+static REARM: AtomicBool = AtomicBool::new(false);
 
 const VERDICT_NONE: u8 = 0;
 const VERDICT_TAKE: u8 = 1;
@@ -161,8 +170,8 @@ fn is_current(generation: u64) -> bool {
 }
 
 /// End a session and put the editor back, however it was reached.
-pub fn cancel(app: &AppHandle) {
-    stop(app);
+pub fn cancel(app: &AppHandle, reason: &str) {
+    stop(app, reason);
     commands::reveal_after_capture(app);
 }
 
@@ -201,7 +210,7 @@ pub fn begin(app: &AppHandle) -> Result<(), String> {
     // every key but Escape and L straight through, so the hotkey reaches us
     // even mid-session.
     if ACTIVE.swap(true, Ordering::SeqCst) {
-        cancel(app);
+        cancel(app, "the capture key was pressed again");
         return Ok(());
     }
 
@@ -209,6 +218,7 @@ pub fn begin(app: &AppHandle) -> Result<(), String> {
     LEVEL.store(0, Ordering::SeqCst);
     SCROLL.store(0, Ordering::SeqCst);
     VERDICT.store(VERDICT_NONE, Ordering::SeqCst);
+    REARM.store(false, Ordering::SeqCst);
 
     {
         let state = app.state::<SnapState>();
@@ -311,10 +321,14 @@ pub fn snap_beat(app: AppHandle) {
 
 /// Stop the session and take the overlay down. Safe from any thread, and when
 /// nothing is running.
-pub fn stop(app: &AppHandle) {
+///
+/// Every caller says why. A session that ends without saying so is one nobody
+/// can diagnose from a log — which is exactly how a tap being switched off by
+/// the system came to look like a capture key that did nothing.
+pub fn stop(app: &AppHandle, reason: &str) {
     let generation = GENERATION.fetch_add(1, Ordering::SeqCst);
     if ACTIVE.swap(false, Ordering::SeqCst) {
-        eprintln!("[snap] session {generation} closed");
+        eprintln!("[snap] session {generation} closed: {reason}");
     }
 
     {
@@ -415,8 +429,27 @@ fn spawn_tap(generation: u64) {
                     // it. Rather than re-enable and hope, end the session:
                     // clicks are reaching applications again from this moment,
                     // and an outline that no longer owns the click is a lie.
-                    CGEventType::TapDisabledByTimeout
-                    | CGEventType::TapDisabledByUserInput => decide(VERDICT_CANCEL),
+                    // Not a failure, and not the end of the session. macOS
+                    // switches a tap off when it decides the callback was slow,
+                    // and the moment it is most likely to decide that is the
+                    // first session after launch, when the main thread is busy
+                    // bringing up a webview. Ending the session there is what
+                    // made the first press of the capture key do nothing.
+                    //
+                    // Re-enabling is the documented answer, and it is safe here
+                    // because the tap is still valid — only switched off. The
+                    // loop below does it, so this stays a single store.
+                    CGEventType::TapDisabledByTimeout => {
+                        REARM.store(true, Ordering::SeqCst);
+                    }
+                    // This one is not ours to argue with: it means something
+                    // took the input away — secure input, a password field —
+                    // and clicks are reaching applications again from this
+                    // moment. An outline that no longer owns the click is a lie.
+                    CGEventType::TapDisabledByUserInput => {
+                        eprintln!("[snap] the tap was disabled by the system; ending the session");
+                        decide(VERDICT_CANCEL)
+                    }
                     _ => {}
                 }
                 None
@@ -441,11 +474,28 @@ fn spawn_tap(generation: u64) {
             tap.enable();
 
             let deadline = Instant::now() + MAX_SESSION;
+            let mut rearms = 0;
             // Pumped in slices rather than run outright, so this thread notices
             // the session ending without needing anyone to reach in and stop
-            // its run loop — and so the deadline is its own to enforce.
+            // its run loop — and so the deadline is its own to enforce. The
+            // slices are also what give the tap somewhere to be switched back
+            // on from, without the callback doing more than a store.
             while is_current(generation) && Instant::now() < deadline {
                 CFRunLoop::run_in_mode(kCFRunLoopDefaultMode, Duration::from_millis(100), false);
+
+                if REARM.swap(false, Ordering::SeqCst) {
+                    rearms += 1;
+                    // Bounded, because a callback that is genuinely too slow
+                    // would otherwise be switched off and on for the whole
+                    // session while every click vanished into it.
+                    if rearms > MAX_REARMS {
+                        eprintln!("[snap] the tap keeps being disabled; ending the session");
+                        VERDICT.store(VERDICT_CANCEL, Ordering::SeqCst);
+                        break;
+                    }
+                    eprintln!("[snap] the tap was disabled on a slow tick; switching it back on");
+                    tap.enable();
+                }
             }
 
             if is_current(generation) {
@@ -479,7 +529,7 @@ fn spawn_tracker(app: AppHandle, generation: u64, origin: (f64, f64)) {
                     // what is under the pointer now — those differ by a frame
                     // and the user chose the one they could see.
                     let chosen = target.clone();
-                    stop(&app);
+                    stop(&app, "a window was taken");
                     match chosen {
                         Some(node) => finish(&app, node),
                         None => commands::reveal_after_capture(&app),
@@ -487,7 +537,7 @@ fn spawn_tracker(app: AppHandle, generation: u64, origin: (f64, f64)) {
                     return;
                 }
                 VERDICT_CANCEL => {
-                    stop(&app);
+                    stop(&app, "cancelled");
                     commands::reveal_after_capture(&app);
                     return;
                 }
