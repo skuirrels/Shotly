@@ -137,6 +137,8 @@ pub fn run() {
             ocr::scan_image,
             combine::combine_captures,
             scroll::scroll_begin,
+            scroll::scroll_ready,
+            scroll::scroll_beat,
             scroll::scroll_layout,
             scroll::scroll_start,
             scroll::scroll_finish,

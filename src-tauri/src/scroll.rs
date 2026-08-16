@@ -13,9 +13,29 @@
 //! make the search cheap and forgive the odd antialiasing flicker; taking the
 //! strips from the middle of the frame keeps a sticky header or footer from
 //! pinning the match at zero.
+//!
+//! # Safety model
+//!
+//! The selection phase is a full-screen, always-on-top window that accepts the
+//! mouse — the most dangerous shape of window on macOS, and the same one
+//! `annotate` documents at length. It carries the same guards, for the same
+//! reasons, and they are not optional:
+//!
+//! * **Mouse-transparent until the page says it painted.** An unpainted
+//!   overlay passes clicks straight through instead of eating the desktop.
+//! * **Heartbeat.** The page pings once a second; silence means a hung or
+//!   crashed renderer, and the session is torn down. A hung page cannot report
+//!   that it hung, so the absence of a signal is the signal.
+//! * **A hotkey owned by Rust** toggles it, so there is a way out that does not
+//!   run any of this page's code.
+//!
+//! The heartbeat matters in the HUD phase too, and for a second reason: the
+//! capture loop only stops when the page asks it to. A dead HUD would leave a
+//! thread photographing the screen every 350ms with nobody left to stop it.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use base64::Engine;
 use image::RgbaImage;
@@ -38,12 +58,27 @@ const MAX_HEIGHT: u32 = 40_000;
 const HUD_WIDTH: f64 = 260.0;
 const HUD_HEIGHT: f64 = 348.0;
 
+/// How long the page may go silent before we assume it has died.
+const HEARTBEAT_GRACE: Duration = Duration::from_secs(3);
+/// How long it may take to paint before we give up on it.
+const READY_GRACE: Duration = Duration::from_secs(3);
+
 #[derive(Default)]
 pub struct ScrollState {
     /// The display the overlay covers, for mapping page coords to the screen.
     bounds: Mutex<Option<(Rect, f64)>>,
     /// Set to ask a running session to stop; the bool is "deliver the result".
     session: Mutex<Option<SessionHandle>>,
+    /// Last heartbeat from the page.
+    last_beat: Mutex<Option<Instant>>,
+    /// Whether the page has said it painted.
+    ///
+    /// Deliberately separate from the heartbeat above. A page can be running
+    /// its timer — so beating happily — while never getting a frame onto the
+    /// screen, and that state leaves a dark sheet over the whole display with
+    /// only the hotkey to remove it. Letting a beat stand in for "painted"
+    /// would make that state look healthy for ever.
+    ready: Mutex<bool>,
 }
 
 struct SessionHandle {
@@ -414,7 +449,14 @@ pub fn scroll_begin(app: AppHandle) -> Result<(), String> {
 
     let displays = display::displays().map_err(|e| e.to_string())?;
     let target = crate::annotate::display_under_cursor(&displays).ok_or("no displays")?;
-    *app.state::<ScrollState>().bounds.lock().unwrap() = Some((target.bounds, target.scale));
+    {
+        let state = app.state::<ScrollState>();
+        *state.bounds.lock().unwrap() = Some((target.bounds, target.scale));
+        // Cleared before the window exists, so a stale beat from a previous
+        // session can never vouch for this one.
+        *state.last_beat.lock().unwrap() = None;
+        *state.ready.lock().unwrap() = false;
+    }
 
     let bounds = target.bounds;
     let window = WebviewWindowBuilder::new(&app, LABEL, WebviewUrl::App("scroll.html".into()))
@@ -431,8 +473,78 @@ pub fn scroll_begin(app: AppHandle) -> Result<(), String> {
         .build()
         .map_err(|e| e.to_string())?;
 
+    // Clicks fall through until the page confirms it has drawn something. An
+    // overlay that never paints is then an invisible sheet the desktop can be
+    // used straight through, rather than one that swallows every click.
+    window.set_ignore_cursor_events(true).map_err(|e| e.to_string())?;
+
+    let _ = window.set_focus();
+    watch(&app);
+    Ok(())
+}
+
+/// The page has painted: hand it the mouse, and start expecting heartbeats.
+#[tauri::command]
+pub fn scroll_ready(app: AppHandle) -> Result<(), String> {
+    let window = app.get_webview_window(LABEL).ok_or("the overlay is not open")?;
+    {
+        let state = app.state::<ScrollState>();
+        *state.last_beat.lock().unwrap() = Some(Instant::now());
+        *state.ready.lock().unwrap() = true;
+    }
+    window.set_ignore_cursor_events(false).map_err(|e| e.to_string())?;
     let _ = window.set_focus();
     Ok(())
+}
+
+#[tauri::command]
+pub fn scroll_beat(app: AppHandle) {
+    *app.state::<ScrollState>().last_beat.lock().unwrap() = Some(Instant::now());
+}
+
+/// Tear the session down if the page stops answering.
+///
+/// Covers both phases. In the selection phase a dead page is a full-screen
+/// click target; in the HUD phase it is a capture loop nobody can stop. The
+/// same silence means the same thing in both, so one watcher answers for both.
+fn watch(app: &AppHandle) {
+    let handle = app.clone();
+    std::thread::spawn(move || {
+        let opened = Instant::now();
+
+        loop {
+            std::thread::sleep(Duration::from_millis(500));
+
+            // Finished or cancelled the ordinary way; nothing left to guard.
+            if handle.get_webview_window(LABEL).is_none() {
+                return;
+            }
+
+            let (ready, beat) = {
+                let state = handle.state::<ScrollState>();
+                let ready = *state.ready.lock().unwrap();
+                let beat = *state.last_beat.lock().unwrap();
+                (ready, beat)
+            };
+
+            let dead = if ready {
+                // Painted once: from here on, silence is the only symptom.
+                beat.is_none_or(|last| last.elapsed() > HEARTBEAT_GRACE)
+            } else {
+                // Never got a frame up, however chatty it may have been.
+                opened.elapsed() > READY_GRACE
+            };
+
+            if dead {
+                eprintln!("[shotly] scrolling capture stopped responding; closing it");
+                // Cancel rather than finish: a page that has stopped answering
+                // cannot be asked whether the stitched page was any good, and
+                // filing something nobody approved is the worse guess.
+                scroll_cancel(handle.clone());
+                return;
+            }
+        }
+    });
 }
 
 /// The overlay's place on screen, so the page can map a drag to global points.

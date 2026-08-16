@@ -16,7 +16,20 @@ import { listen } from "@tauri-apps/api/event";
  * Accessibility permission, no guessing at how any given app scrolls — and it
  * is why the HUD's job is narration. The one thing the user cannot otherwise
  * see is whether the stitcher is keeping up.
+ *
+ * Two obligations to Rust, both load-bearing — the selection phase is a
+ * full-screen window that accepts the mouse, so a rendering failure here would
+ * cover the desktop in an invisible click target:
+ *
+ *  1. Report `scroll_ready` as soon as we have painted. Until then the window
+ *     is mouse-transparent and clicks pass through.
+ *  2. Keep sending `scroll_beat`. If these stop, Rust tears the session down —
+ *     a hung renderer cannot report that it hung, so silence is the signal.
+ *     This matters just as much once we are the HUD: the capture loop only
+ *     stops when this page asks it to.
  */
+
+const HEARTBEAT_MS = 1000;
 
 interface Box {
   x: number;
@@ -42,6 +55,28 @@ export function ScrollApp() {
       if (e.payload === "hud") setPhase("hud");
     });
     return () => void un.then((fn) => fn());
+  }, []);
+
+  // Mounted here rather than in either phase, so the promise below survives
+  // the switch from selection overlay to HUD — that is one window throughout,
+  // and a gap in the heartbeat across the handover would read as a death.
+  useEffect(() => {
+    // Two frames, so "painted" means the compositor has actually shown
+    // something before Rust hands this window the mouse.
+    const raf = requestAnimationFrame(() =>
+      requestAnimationFrame(() => {
+        void invoke("scroll_ready").catch(() => void invoke("scroll_cancel"));
+      }),
+    );
+
+    const beat = window.setInterval(() => {
+      void invoke("scroll_beat").catch(() => {});
+    }, HEARTBEAT_MS);
+
+    return () => {
+      cancelAnimationFrame(raf);
+      window.clearInterval(beat);
+    };
   }, []);
 
   return phase === "select" ? <Select /> : <Hud />;
