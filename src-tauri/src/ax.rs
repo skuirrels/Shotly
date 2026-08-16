@@ -171,6 +171,8 @@ mod imp {
         fn AXUIElementSetMessagingTimeout(element: AXUIElementRef, timeout: f32) -> AXError;
         fn AXValueGetValue(value: CFTypeRef, the_type: u32, value_ptr: *mut c_void) -> u8;
         fn AXIsProcessTrusted() -> u8;
+        fn AXIsProcessTrustedWithOptions(options: *const c_void) -> u8;
+        static kAXTrustedCheckOptionPrompt: CFStringRef;
     }
 
     /// An owned `AXUIElementRef`.
@@ -295,6 +297,28 @@ mod imp {
         unsafe { AXIsProcessTrusted() != 0 }
     }
 
+    /// Ask for accessibility access, showing the system's own prompt.
+    ///
+    /// Two things happen, and the second matters more than the first. macOS
+    /// shows its dialog — but only the first time it is ever asked; after that
+    /// this is a silent no. What it also does, every time, is put Shotly into
+    /// the Accessibility list in System Settings, which is what turns "find the
+    /// app with the + button" into "tick the box next to it".
+    ///
+    /// Returns the answer rather than whether anything was shown, because
+    /// there is no way to ask which of the two happened.
+    pub fn request_trust() -> bool {
+        // SAFETY: `kAXTrustedCheckOptionPrompt` is a framework constant, live
+        // for the process lifetime.
+        let key = unsafe { CFString::wrap_under_get_rule(kAXTrustedCheckOptionPrompt) };
+        let options = core_foundation::dictionary::CFDictionary::from_CFType_pairs(&[(
+            key.as_CFType(),
+            core_foundation::boolean::CFBoolean::true_value().as_CFType(),
+        )]);
+        // SAFETY: the dictionary outlives the call.
+        unsafe { AXIsProcessTrustedWithOptions(options.as_CFTypeRef() as *const c_void) != 0 }
+    }
+
     /// Every level between the window and the deepest element at a point.
     ///
     /// Built from the inside out — the API only walks upwards — and reversed,
@@ -366,7 +390,7 @@ mod imp {
     }
 }
 
-pub use imp::{chain_at, trusted};
+pub use imp::{chain_at, request_trust, trusted};
 
 #[cfg(test)]
 mod tests {

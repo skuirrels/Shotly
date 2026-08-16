@@ -295,17 +295,31 @@ fn tray_menu(app: &tauri::AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
     // The way out of a screen covered in pins — and the way to shut one whose
     // page has stopped answering its own close button.
     let unpin = MenuItem::with_id(app, "close-pins", "Close All Pins", true, None::<&str>)?;
+    // Only shown when it would do something. macOS puts its Accessibility
+    // dialog up once and never again, so anyone who dismissed it that first time
+    // has no way back except knowing where to look — this is that way, and it
+    // disappears the moment it is no longer needed.
+    let accessibility = MenuItem::with_id(
+        app,
+        "accessibility",
+        "Allow Scrolling Into Windows…",
+        true,
+        None::<&str>,
+    )?;
     let updates = MenuItem::with_id(app, "update", "Check for Updates…", true, None::<&str>)?;
     let sep = PredefinedMenuItem::separator(app)?;
     let quit = MenuItem::with_id(app, "quit", "Quit Shotly", true, Some("Cmd+Q"))?;
 
-    Menu::with_items(
-        app,
-        &[
-            &region, &window, &window_list, &screen, &scroll, &sep, &annotate, &stop, &unpin, &sep,
-            &updates, &quit,
-        ],
-    )
+    let mut items: Vec<&dyn tauri::menu::IsMenuItem<tauri::Wry>> = vec![
+        &region, &window, &window_list, &screen, &scroll, &sep, &annotate, &stop, &unpin, &sep,
+    ];
+    if !crate::ax::trusted() {
+        items.push(&accessibility);
+    }
+    items.push(&updates);
+    items.push(&quit);
+
+    Menu::with_items(app, &items)
 }
 
 /// Put the current hotkeys back into the tray menu, after a rebind.
@@ -347,6 +361,16 @@ fn build_tray(app: &tauri::AppHandle) -> tauri::Result<()> {
                     eprintln!("[shotly] could not open the window list: {err}");
                     let _ = tauri::Emitter::emit(app, "capture:error", err);
                 }
+            }
+            "accessibility" => {
+                // Asking registers Shotly in the list; opening the pane is what
+                // makes something visibly happen for anyone whose dialog has
+                // already been spent. Neither grants anything — the tick is the
+                // user's, in System Settings, as it has to be.
+                crate::ax::request_trust();
+                let _ = std::process::Command::new("/usr/bin/open")
+                    .arg("x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")
+                    .spawn();
             }
             "screen" => dispatch(app, CaptureMode::Fullscreen),
             "scroll" => {

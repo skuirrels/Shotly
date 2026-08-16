@@ -38,6 +38,8 @@ interface Highlight {
 
 export function SnapApp() {
   const [target, setTarget] = useState<Highlight | null>(null);
+  /** Set when the wheel was turned and Rust had no accessibility to answer it. */
+  const [needsAccessibility, setNeedsAccessibility] = useState(false);
 
   useEffect(() => {
     // Two frames, so "painted" means the compositor has actually shown
@@ -61,10 +63,15 @@ export function SnapApp() {
     return () => void un.then((fn) => fn());
   }, []);
 
+  useEffect(() => {
+    const un = listen("snap:needs-accessibility", () => setNeedsAccessibility(true));
+    return () => void un.then((fn) => fn());
+  }, []);
+
   return (
     <div className="pointer-events-none fixed inset-0 select-none overflow-hidden">
       {target ? <Outline target={target} /> : <div className="absolute inset-0 bg-black/25" />}
-      <Hint />
+      <Hint needsAccessibility={needsAccessibility} />
     </div>
   );
 }
@@ -109,16 +116,30 @@ function Outline({ target }: { target: Highlight }) {
   );
 }
 
-function Hint() {
+/**
+ * What the outline is for, and — if the wheel turned out to be locked — why.
+ *
+ * The second line is replaced rather than added to. A hint that grows a
+ * paragraph the moment you touch the wheel is a hint nobody finishes reading,
+ * and the other advice keeps until the session after this one.
+ */
+function Hint({ needsAccessibility }: { needsAccessibility: boolean }) {
   return (
     <div className="absolute top-8 left-1/2 -translate-x-1/2 rounded-xl bg-black/75 px-4 py-2.5 text-center shadow-lg">
       <p className="text-[13.5px] font-medium text-white">
         Point at a window, then click to capture it
       </p>
-      <p className="mt-0.5 text-[11.5px] text-white/60">
-        Scroll to tighten onto what's inside · Esc cancels · for a window that's
-        hidden behind another, use Capture Window from List in the menu bar
-      </p>
+      {needsAccessibility ? (
+        <p className="mt-0.5 text-[11.5px] text-accent">
+          Scrolling into a window needs Accessibility · Shotly will ask for it
+          when you're done here
+        </p>
+      ) : (
+        <p className="mt-0.5 text-[11.5px] text-white/60">
+          Scroll to tighten onto what's inside · Esc cancels · for a window that's
+          hidden behind another, use Capture Window from List in the menu bar
+        </p>
+      )}
     </div>
   );
 }

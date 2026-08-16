@@ -112,6 +112,9 @@ static VERDICT: AtomicU8 = AtomicU8::new(VERDICT_NONE);
 /// Set by the tap callback when macOS switches the tap off, and cleared by the
 /// tap's own loop when it switches it back on. See `spawn_tap`.
 static REARM: AtomicBool = AtomicBool::new(false);
+/// Set when the wheel was turned during a session that had no accessibility
+/// access to answer it with. See `ask_for_accessibility`.
+static WANTED_AX: AtomicBool = AtomicBool::new(false);
 
 const VERDICT_NONE: u8 = 0;
 const VERDICT_TAKE: u8 = 1;
@@ -175,6 +178,23 @@ pub fn cancel(app: &AppHandle, reason: &str) {
     commands::reveal_after_capture(app);
 }
 
+/// Ask for accessibility, if this session found a use for it.
+///
+/// Deliberately after the overlay has gone rather than the moment the wheel
+/// turns. The prompt is a system dialog, and putting one on screen mid-session
+/// — over a dimmed desktop, while an event tap holds the mouse — is how a
+/// permission request turns into a Mac that appears to have seized up.
+///
+/// Asking also registers Shotly in the Accessibility list whether or not the
+/// dialog appears, which is the difference between "find the app with the +
+/// button" and "tick the box". macOS shows the dialog only once ever, so the
+/// tray keeps a way in for anyone who has already dismissed it.
+fn ask_for_accessibility() {
+    if WANTED_AX.swap(false, Ordering::SeqCst) && !ax::trusted() {
+        ax::request_trust();
+    }
+}
+
 /// Where the pointer is, in global point space with a top-left origin.
 #[cfg(target_os = "macos")]
 fn cursor() -> Option<(f64, f64)> {
@@ -219,6 +239,7 @@ pub fn begin(app: &AppHandle) -> Result<(), String> {
     SCROLL.store(0, Ordering::SeqCst);
     VERDICT.store(VERDICT_NONE, Ordering::SeqCst);
     REARM.store(false, Ordering::SeqCst);
+    WANTED_AX.store(false, Ordering::SeqCst);
 
     {
         let state = app.state::<SnapState>();
@@ -419,8 +440,21 @@ fn spawn_tap(generation: u64) {
                         }
                     }
                     CGEventType::ScrollWheel => {
-                        let delta =
-                            event.get_integer_value_field(EventField::SCROLL_WHEEL_EVENT_DELTA_AXIS_1);
+                        // A wheel reports whole lines. A trackpad reports pixels
+                        // and leaves the line delta at zero, so reading only the
+                        // first meant the gesture most Macs actually have did
+                        // nothing at all — the wheel appeared to be ignored on
+                        // every laptop. Only the sign is used downstream, which
+                        // is why no scaling is needed between the two units.
+                        let lines = event
+                            .get_integer_value_field(EventField::SCROLL_WHEEL_EVENT_DELTA_AXIS_1);
+                        let delta = if lines != 0 {
+                            lines
+                        } else {
+                            event.get_integer_value_field(
+                                EventField::SCROLL_WHEEL_EVENT_POINT_DELTA_AXIS_1,
+                            )
+                        };
                         SCROLL.fetch_add(delta, Ordering::Relaxed);
                         swallow(event);
                     }
@@ -530,6 +564,7 @@ fn spawn_tracker(app: AppHandle, generation: u64, origin: (f64, f64)) {
                     // and the user chose the one they could see.
                     let chosen = target.clone();
                     stop(&app, "a window was taken");
+                    ask_for_accessibility();
                     match chosen {
                         Some(node) => finish(&app, node),
                         None => commands::reveal_after_capture(&app),
@@ -538,6 +573,7 @@ fn spawn_tracker(app: AppHandle, generation: u64, origin: (f64, f64)) {
                 }
                 VERDICT_CANCEL => {
                     stop(&app, "cancelled");
+                    ask_for_accessibility();
                     commands::reveal_after_capture(&app);
                     return;
                 }
@@ -551,6 +587,14 @@ fn spawn_tracker(app: AppHandle, generation: u64, origin: (f64, f64)) {
             if wheel != 0 {
                 level = (level + if wheel > 0 { -1 } else { 1 }).max(0);
                 LEVEL.store(level, Ordering::SeqCst);
+
+                // Tightening onto what is inside a window is the one thing here
+                // that needs accessibility. Without it the wheel does nothing at
+                // all, which reads as a broken feature rather than a locked one,
+                // so say so on the overlay and ask once the session is over.
+                if !ax::trusted() && !WANTED_AX.swap(true, Ordering::SeqCst) {
+                    let _ = app.emit_to(LABEL, "snap:needs-accessibility", ());
+                }
             }
 
             let Some((x, y)) = cursor() else {
