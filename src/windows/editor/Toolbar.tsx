@@ -4,7 +4,7 @@ import { Kbd } from "@/components/ui/Kbd";
 import { Popover } from "@/components/ui/Popover";
 import { Tooltip } from "@/components/ui/Tooltip";
 import type { Style } from "@/lib/types";
-import { useEditor } from "@/state/editorStore";
+import { MAX_STROKE, MIN_STROKE, useEditor } from "@/state/editorStore";
 import { OverlayPicker } from "./OverlayPicker";
 import { FONT_PRESETS, STROKE_PRESETS, SWATCHES, TOOLS, styleControlsFor } from "./tools";
 
@@ -79,8 +79,8 @@ export function Toolbar({ currentPath, onNotify }: Props) {
             label="Stroke width"
             value={style.strokeWidth}
             presets={STROKE_PRESETS}
-            min={1}
-            max={40}
+            min={MIN_STROKE}
+            max={MAX_STROKE}
             onChange={(strokeWidth) => setStyle({ strokeWidth })}
             render={(v) => (
               <span

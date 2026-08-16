@@ -18,6 +18,7 @@ import {
 } from "@/components/icons";
 import { Kbd } from "@/components/ui/Kbd";
 import { captureStem } from "@/lib/naming";
+import { readColor, readNumber, readString, write } from "@/lib/prefs";
 import { arrowPolygon, fontFor, measureText, polygonToPath, TEXT_PADDING } from "@/lib/shapes";
 import { SWATCHES } from "@/windows/editor/tools";
 
@@ -360,6 +361,15 @@ const TOOLBAR_TOOLS: ToolButton[] = [
 ];
 
 const TOOL_KEY = "shotly.annotateTool";
+const COLOR_KEY = "shotly.annotateColor";
+const WIDTH_KEY = "shotly.annotateWidth";
+
+const DEFAULT_COLOR = SWATCHES[0].value;
+const DEFAULT_WIDTH = 4;
+
+/** The range the `[` / `]` keys can reach; see the keyboard handler below. */
+const MIN_WIDTH = 1;
+const MAX_WIDTH = 24;
 
 /**
  * The tool this layer was last using.
@@ -370,21 +380,30 @@ const TOOL_KEY = "shotly.annotateTool";
  * the layer unable to draw would look like it had failed to start.
  */
 function storedTool(): Tool {
-  try {
-    const saved = localStorage.getItem(TOOL_KEY);
-    return TOOLS.some((t) => t.id === saved) ? (saved as Tool) : "pen";
-  } catch {
-    return "pen";
-  }
+  const saved = readString(TOOL_KEY);
+  return TOOLS.some((t) => t.id === saved) ? (saved as Tool) : "pen";
 }
 
 function rememberTool(tool: Tool): void {
   if (tool === "select") return;
-  try {
-    localStorage.setItem(TOOL_KEY, tool);
-  } catch {
-    // Storage unavailable; the layer works, it just forgets.
-  }
+  write(TOOL_KEY, tool);
+}
+
+/**
+ * The ink this layer was last using, remembered separately from the editor's.
+ *
+ * They look like the same two controls and they are not the same choice. This
+ * layer draws over whatever is on the screen at the time — a call, a slide, a
+ * dark IDE — while the editor draws on a screenshot you are keeping, and the
+ * widths aren't even on the same scale here. Sharing one setting would mean
+ * every annotation session quietly restyled the next screenshot.
+ */
+function storedColor(): string {
+  return readColor(COLOR_KEY, DEFAULT_COLOR);
+}
+
+function storedWidth(): number {
+  return readNumber(WIDTH_KEY, DEFAULT_WIDTH, MIN_WIDTH, MAX_WIDTH);
 }
 
 export function AnnotateApp() {
@@ -399,8 +418,8 @@ export function AnnotateApp() {
   const strokesRef = useRef(strokes);
   strokesRef.current = strokes;
   const [tool, setTool] = useState<Tool>(storedTool);
-  const [color, setColor] = useState(SWATCHES[0].value);
-  const [width, setWidth] = useState(4);
+  const [color, setColor] = useState(storedColor);
+  const [width, setWidth] = useState(storedWidth);
 
   // Written here rather than beside every `setTool` call: the tool changes from
   // the toolbar, from a keyboard shortcut, and from finishing a text box, and
@@ -408,6 +427,17 @@ export function AnnotateApp() {
   useEffect(() => {
     rememberTool(tool);
   }, [tool]);
+
+  // The ink is remembered the same way, and for the same reason: it is set
+  // from the toolbar, from the number keys and from `[` / `]`, and watching
+  // the value catches all of them without a write beside each caller.
+  useEffect(() => {
+    write(COLOR_KEY, color);
+  }, [color]);
+
+  useEffect(() => {
+    write(WIDTH_KEY, String(width));
+  }, [width]);
 
   const drawing = useRef<Stroke | null>(null);
   const gesture = useRef<Gesture | null>(null);
@@ -1009,8 +1039,8 @@ export function AnnotateApp() {
       else if (e.code === "KeyS") nextScreen();
       else if (e.code === "KeyD") cycleDock();
       else if (e.code === "KeyC") clearAll();
-      else if (e.code === "BracketLeft") applyWidth(Math.max(1, width - 1));
-      else if (e.code === "BracketRight") applyWidth(Math.min(24, width + 1));
+      else if (e.code === "BracketLeft") applyWidth(Math.max(MIN_WIDTH, width - 1));
+      else if (e.code === "BracketRight") applyWidth(Math.min(MAX_WIDTH, width + 1));
     };
 
     // Capture phase, plus keyup as a second chance for Escape specifically:
@@ -1574,8 +1604,8 @@ function Toolbar({
   const widthSlider = (
     <input
       type="range"
-      min={1}
-      max={24}
+      min={MIN_WIDTH}
+      max={MAX_WIDTH}
       value={width}
       onChange={(e) => setWidth(Number(e.target.value))}
       title="Stroke width, or text size ( [ and ] )"
@@ -1670,9 +1700,17 @@ function Toolbar({
             )}
           >
             <span
+              // One width and one colour per state rather than a base plus an
+              // override: `ring-white/25` is emitted after `ring-white` in the
+              // generated stylesheet, so adding the selected ring on top of the
+              // resting one drew it at a quarter opacity — an invisible mark on
+              // a bright swatch, which is how the ink in hand went unshown here
+              // for as long as this toolbar has existed.
               className={clsx(
-                "size-[17px] rounded-full ring-1 ring-white/25 ring-inset",
-                s.value.toLowerCase() === color.toLowerCase() && "ring-2 ring-white",
+                "size-[17px] rounded-full ring-inset",
+                s.value.toLowerCase() === color.toLowerCase()
+                  ? "ring-2 ring-white"
+                  : "ring-1 ring-white/25",
               )}
               style={{ background: s.value }}
             />

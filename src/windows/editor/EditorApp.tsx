@@ -39,7 +39,7 @@ import { overlayFromClipboard } from "@/lib/overlay";
 import { useUpdates } from "@/lib/updater";
 import type { CaptureMode, CaptureResult, Rect, Scan } from "@/lib/types";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
-import { useEditor } from "@/state/editorStore";
+import { MAX_STROKE, MIN_STROKE, useEditor } from "@/state/editorStore";
 import { Canvas } from "./Canvas";
 import { CommandPalette } from "./CommandPalette";
 import { EmptyLibrary, PermissionNotice } from "./EmptyState";
@@ -753,7 +753,7 @@ export function EditorApp() {
       } else if (controls.dim) {
         st.setStyle({ dim: clamp(st.style.dim + delta * 0.05, 0.1, 0.95) });
       } else {
-        st.setStyle({ strokeWidth: clamp(st.style.strokeWidth + delta, 1, 40) });
+        st.setStyle({ strokeWidth: clamp(st.style.strokeWidth + delta, MIN_STROKE, MAX_STROKE) });
       }
     };
 

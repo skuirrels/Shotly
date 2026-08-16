@@ -2,6 +2,7 @@ import { create } from "zustand";
 import { type Backdrop, DEFAULT_BACKDROP, NO_BACKDROP } from "@/lib/backdrop";
 import { parse as parseMarkup } from "@/lib/markup";
 import { type OverlaySource, placeOverlay } from "@/lib/overlay";
+import { readColor, readNumber, readString, write } from "@/lib/prefs";
 import {
   type Annotation,
   type CaptureResult,
@@ -133,6 +134,20 @@ const DEFAULT_CANVAS_FILL = "#FFFFFF";
 const TRANSIENT_TOOLS: ToolId[] = ["crop"];
 
 const TOOL_KEY = "shotly.tool";
+const COLOR_KEY = "shotly.color";
+const STROKE_KEY = "shotly.strokeWidth";
+
+/**
+ * The range a stroke width may take.
+ *
+ * Exported so the size control and the `[` / `]` keys enforce the same numbers
+ * this validates a restored width against. Two copies that drifted would mean
+ * either a stored width the interface can't reach — a slider pinned to one end
+ * drawing something else — or a width the controls can produce and the reader
+ * throws away on the next launch.
+ */
+export const MIN_STROKE = 1;
+export const MAX_STROKE = 40;
 
 /**
  * Tools that are never remembered between sessions.
@@ -149,29 +164,51 @@ const UNREMEMBERED_TOOLS: ToolId[] = ["crop", "pick", "grab"];
 /**
  * The tool in hand when Shotly was last used.
  *
- * Guarded on both sides: reading storage can throw outright when the webview
- * has it disabled, and this runs while the module is still initialising, where
- * an exception would take the whole editor with it rather than one preference.
- * A stored id that is no longer a tool is discarded too — otherwise removing a
- * tool in some future version leaves a toolbar with nothing highlighted and a
- * canvas that ignores the mouse.
+ * A stored id that is no longer a tool is discarded — otherwise removing a tool
+ * in some future version leaves a toolbar with nothing highlighted and a canvas
+ * that ignores the mouse. See `lib/prefs` for why the read is guarded.
  */
 function storedTool(): ToolId {
-  try {
-    const saved = localStorage.getItem(TOOL_KEY);
-    return TOOL_IDS.includes(saved as ToolId) ? (saved as ToolId) : "select";
-  } catch {
-    return "select";
-  }
+  const saved = readString(TOOL_KEY);
+  return TOOL_IDS.includes(saved as ToolId) ? (saved as ToolId) : "select";
 }
 
 function rememberTool(tool: ToolId): void {
   if (UNREMEMBERED_TOOLS.includes(tool)) return;
-  try {
-    localStorage.setItem(TOOL_KEY, tool);
-  } catch {
-    // Storage unavailable. Losing the preference is not worth a broken click.
-  }
+  write(TOOL_KEY, tool);
+}
+
+/**
+ * The ink Shotly was last drawing with.
+ *
+ * Colour and stroke width only. They are the two that get chosen deliberately
+ * and are expected to stay chosen — someone who works in yellow at 4 wants
+ * yellow at 4 tomorrow, and having to set both again on every launch is the
+ * same papercut as landing in the wrong tool. Nothing else in `Style` is a
+ * preference in that sense: `blurRadius` and `dim` belong to one tool each,
+ * `fillOpacity` and `shadow` are toggles you flip for a particular shape, and
+ * `fontSize` is already remembered per kind, deliberately, in
+ * `DEFAULT_CALLOUT_FONT_SIZE`. Persisting those would turn a one-off
+ * experiment into the way the app now works.
+ */
+function storedStyle(): Style {
+  return {
+    ...DEFAULT_STYLE,
+    color: readColor(COLOR_KEY, DEFAULT_STYLE.color),
+    strokeWidth: readNumber(STROKE_KEY, DEFAULT_STYLE.strokeWidth, MIN_STROKE, MAX_STROKE),
+  };
+}
+
+/**
+ * Remember the sticky half of a style change.
+ *
+ * Takes the patch rather than the merged style so that a change to anything
+ * else — flipping a fill on, dimming a spotlight — doesn't rewrite these two
+ * with values it was never asked to set.
+ */
+function rememberStyle(patch: Partial<Style>): void {
+  if (patch.color !== undefined) write(COLOR_KEY, patch.color);
+  if (patch.strokeWidth !== undefined) write(STROKE_KEY, String(patch.strokeWidth));
 }
 
 interface HistoryEntry {
@@ -304,7 +341,7 @@ export const useEditor = create<EditorState>((set, get) => ({
   selectedIds: [],
   tool: storedTool(),
   pickReturn: "select",
-  style: DEFAULT_STYLE,
+  style: storedStyle(),
   calloutFontSize: DEFAULT_CALLOUT_FONT_SIZE,
   stepCounter: 1,
   backdrop: NO_BACKDROP,
@@ -381,7 +418,10 @@ export const useEditor = create<EditorState>((set, get) => ({
     }));
   },
 
-  setStyle: (patch) => set((s) => ({ style: { ...s.style, ...patch }, ...restyleSelection(s, patch) })),
+  setStyle: (patch) => {
+    rememberStyle(patch);
+    set((s) => ({ style: { ...s.style, ...patch }, ...restyleSelection(s, patch) }));
+  },
 
   // Same gesture, different memory: the size lands on any selected callout, but
   // is remembered where the next callout will look for it rather than in the
