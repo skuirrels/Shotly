@@ -1273,7 +1273,6 @@ export function EditorApp() {
         onCopy={() => void (activeView === "library" ? copyPicked() : copy())}
         onDelete={() => void deleteCaptures(picked)}
         onSave={() => void save()}
-        onSaveAs={() => void saveAs()}
         onExportFlat={() => void exportFlat()}
         pickedCount={picked.length}
         busy={busy}

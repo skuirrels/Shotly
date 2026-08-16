@@ -41,7 +41,6 @@ interface Props {
   onCopy: () => void;
   onDelete: () => void;
   onSave: () => void;
-  onSaveAs: () => void;
   /** Write the annotations into the pixels, without the re-editable payload. */
   onExportFlat: () => void;
   /** How many library captures are selected. Only meaningful in the library. */
@@ -73,7 +72,6 @@ export function TopBar({
   onCopy,
   onDelete,
   onSave,
-  onSaveAs,
   onExportFlat,
   pickedCount,
   busy,
@@ -229,11 +227,9 @@ export function TopBar({
               <span className="ml-0.5 font-sans text-[11px] text-ink-3">⌘C</span>
             </button>
 
-            {/* Export earns its own button rather than a row in the menu.
-                Sending someone a flattened PNG is an ending — the thing you do
-                once the annotating is finished — and an ending should not be
-                two clicks behind a chevron. It stays in the menu as well,
-                where there is room to say what it costs you. */}
+            {/* Export earns its own button. Sending someone a flattened PNG is
+                an ending — the thing you do once the annotating is finished —
+                and an ending should not be two clicks behind a chevron. */}
             <button
               type="button"
               onClick={onExportFlat}
@@ -246,101 +242,25 @@ export function TopBar({
               <span className="ml-0.5 font-sans text-[11px] text-ink-3">⌘E</span>
             </button>
 
-            {/* A split button: Save is one click, and the ways of saving that
-                are not "again, over the same file" live behind the chevron. */}
-            <div className="no-drag flex items-stretch overflow-hidden rounded-lg bg-accent text-accent-fg">
-              <button
-                type="button"
-                onClick={onSave}
-                disabled={!doc || busy !== null}
-                className="flex h-8 items-center gap-1.5 px-2.5 text-[12.5px] font-semibold transition-colors hover:bg-accent-hi active:bg-accent-lo disabled:opacity-40"
-              >
-                <IconSave />
-                {busy === "save" ? "Saving…" : "Save"}
-                <span className="ml-0.5 font-sans text-[11px] opacity-60">⌘S</span>
-              </button>
-
-              <span className="my-1.5 w-px bg-black/20" />
-
-              <Popover
-                align="center"
-                trigger={({ open, toggle }) => (
-                  <button
-                    type="button"
-                    onClick={toggle}
-                    disabled={!doc || busy !== null}
-                    aria-label="More ways to save"
-                    className={clsx(
-                      "grid h-8 w-6 place-items-center transition-colors hover:bg-accent-hi disabled:opacity-40",
-                      open && "bg-accent-lo",
-                    )}
-                  >
-                    <IconChevronDown />
-                  </button>
-                )}
-              >
-                {({ close }) => (
-                  <div className="w-[248px]">
-                    <SaveChoice
-                      title="Save as…"
-                      hint="A copy elsewhere, still re-editable"
-                      shortcut="Mod+Shift+S"
-                      icon={<IconSave />}
-                      onClick={() => {
-                        close();
-                        onSaveAs();
-                      }}
-                    />
-                    <SaveChoice
-                      title="Export flattened PNG…"
-                      hint="Annotations burned in — a smaller file, no longer editable"
-                      shortcut="Mod+E"
-                      icon={<IconImage />}
-                      onClick={() => {
-                        close();
-                        onExportFlat();
-                      }}
-                    />
-                  </div>
-                )}
-              </Popover>
-            </div>
+            {/* One button, one click. This was a split button whose chevron
+                offered Save as… and Export; Export now has a button of its own
+                beside it, which left a menu carrying one item and a duplicate.
+                Save as… keeps ⇧⌘S and its row in the command palette — the
+                right home for something reached once in a while. */}
+            <button
+              type="button"
+              onClick={onSave}
+              disabled={!doc || busy !== null}
+              className="no-drag flex h-8 items-center gap-1.5 rounded-lg bg-accent px-2.5 text-[12.5px] font-semibold text-accent-fg transition-colors hover:bg-accent-hi active:bg-accent-lo disabled:opacity-40"
+            >
+              <IconSave />
+              {busy === "save" ? "Saving…" : "Save"}
+              <span className="ml-0.5 font-sans text-[11px] opacity-60">⌘S</span>
+            </button>
           </>
         )}
       </div>
     </header>
-  );
-}
-
-/** One row of the Save menu: what it does, and what it costs you. */
-function SaveChoice({
-  title,
-  hint,
-  shortcut,
-  icon,
-  onClick,
-}: {
-  title: string;
-  hint: string;
-  shortcut: string;
-  icon: ReactNode;
-  onClick: () => void;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className="flex w-full items-start gap-2.5 rounded-lg px-2 py-2 text-left hover:bg-hover"
-    >
-      <span className="mt-px text-ink-3">{icon}</span>
-      <span className="min-w-0 flex-1">
-        <span className="flex items-center justify-between gap-2">
-          <span className="text-[12.5px] font-medium text-ink">{title}</span>
-          <Kbd shortcut={shortcut} muted />
-        </span>
-        <span className="mt-0.5 block text-[11px] leading-snug text-ink-4">{hint}</span>
-      </span>
-    </button>
   );
 }
 
