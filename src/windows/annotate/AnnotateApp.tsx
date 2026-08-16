@@ -409,6 +409,28 @@ export function AnnotateApp() {
   const toolbarRect = useRef<DOMRect | null>(null);
 
   /**
+   * How long the shutter waits after the toolbar goes, and therefore how long
+   * a second Escape has to call the whole thing off.
+   *
+   * The wait is not a cost this buys: the toolbar has to be genuinely off the
+   * screen before the picture is taken, and that was already two animation
+   * frames. Stretching it to something a hand can land inside turns a delay
+   * nobody could use into the window where "no, not that one" still works —
+   * and it means discarding never has to race a file that is already written.
+   */
+  const DISCARD_GRACE_MS = 400;
+
+  /** The shutter, once the toolbar is out of shot. Cancelling this discards. */
+  const pendingSave = useRef<number | null>(null);
+  /** Set the moment leaving is settled, so nothing can ask twice. */
+  const leaving = useRef(false);
+
+  const stop = useCallback(() => {
+    leaving.current = true;
+    void invoke("annotate_stop");
+  }, []);
+
+  /**
    * Leave, taking the screen with us.
    *
    * The whole point of drawing on the desktop is the desktop underneath, so
@@ -421,28 +443,44 @@ export function AnnotateApp() {
    * write failed is far worse than losing the copy.
    */
   const exit = useCallback(() => {
+    if (leaving.current || pendingSave.current !== null) return;
     if (strokesRef.current.length === 0) {
-      void invoke("annotate_stop");
+      stop();
       return;
     }
 
     // Selection handles are Shotly's furniture, not annotation.
     setSelected([]);
     setSaving(true);
-    // Two frames, so the toolbar is genuinely off the screen before the
-    // shutter — the same wait `annotate_ready` uses for the same reason.
-    requestAnimationFrame(() =>
-      requestAnimationFrame(() => {
-        void invoke<string>("annotate_save", { stem: captureStem() })
-          .then((path) => {
-            setSaving(false);
-            setSaved(path.split("/").pop() ?? "the library");
-            window.setTimeout(() => void invoke("annotate_stop"), 1100);
-          })
-          .catch(() => void invoke("annotate_stop"));
-      }),
-    );
-  }, []);
+    pendingSave.current = window.setTimeout(() => {
+      pendingSave.current = null;
+      void invoke<string>("annotate_save", { stem: captureStem() })
+        .then((path) => {
+          setSaving(false);
+          setSaved(path.split("/").pop() ?? "the library");
+          window.setTimeout(stop, 1100);
+        })
+        .catch(stop);
+    }, DISCARD_GRACE_MS);
+  }, [stop]);
+
+  /**
+   * Leave with nothing filed.
+   *
+   * Reached by pressing Escape a second time, and only ever while the shutter
+   * is still waiting — so this really does mean nothing was written, rather
+   * than something written and then tidied away.
+   */
+  const discard = useCallback(() => {
+    if (pendingSave.current !== null) {
+      window.clearTimeout(pendingSave.current);
+      pendingSave.current = null;
+    }
+    stop();
+  }, [stop]);
+
+  /** True once the keydown for the current press has been answered. */
+  const escapeHandled = useRef(false);
 
   /**
    * Hand the mouse to the desktop, or take it back.
@@ -878,6 +916,23 @@ export function AnnotateApp() {
 
   // -------------------------------------------------------------- keyboard
 
+  /**
+   * One Escape, answered by whichever layer is outermost.
+   *
+   * Text box, then selection, then the way out — and once the way out is
+   * under way, a second press means "not that one": the shutter is still
+   * waiting, so calling it off leaves nothing behind. Past that point the
+   * picture exists and Escape just skips the notice about it.
+   */
+  const onEscape = useCallback(() => {
+    if (leaving.current) return;
+    if (saved !== null) return stop();
+    if (saving) return discard();
+    if (isEditing) return commitText();
+    if (selected.length > 0) return setSelected([]);
+    exit();
+  }, [saved, saving, isEditing, selected.length, stop, discard, commitText, exit]);
+
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
       // While a text box has focus every key belongs to it — "R" is a letter,
@@ -887,11 +942,10 @@ export function AnnotateApp() {
 
       if (e.key === "Escape") {
         e.preventDefault();
-        // Layered, as in the editor: drop the selection first, leave on the
-        // second press. Only when something is selected — with nothing to
-        // deselect this stays the plain way out.
-        if (selected.length > 0) setSelected([]);
-        else exit();
+        // Auto-repeat from a held key would race through every layer at once.
+        if (e.repeat) return;
+        escapeHandled.current = true;
+        onEscape();
         return;
       }
       if (e.metaKey && e.code === "KeyZ") {
@@ -929,14 +983,15 @@ export function AnnotateApp() {
     // bubbled listener ever runs.
     const onKeyUp = (e: KeyboardEvent) => {
       if (e.key !== "Escape") return;
-      // Finishing a text box is hung here rather than inside the box for the
-      // same reason leaving is: WKWebView keeps Escape to itself, so the
-      // release is the only shot at it — and under injected input not even
-      // that arrives. Hence ⌘⏎ and click-away, which are the ones that can be
-      // relied on. Committing rather than exiting is still the right response
-      // if it does land: closing the overlay would bin what was just typed.
-      if (isEditing) commitText();
-      else exit();
+      // The release is a second chance, not a second press. If the keydown
+      // above got through, this is the same tap finishing and must not count
+      // again — otherwise every single press would read as a double one, and
+      // Escape would always discard.
+      if (escapeHandled.current) {
+        escapeHandled.current = false;
+        return;
+      }
+      onEscape();
     };
 
     window.addEventListener("keydown", onKeyDown, { capture: true });
@@ -946,9 +1001,8 @@ export function AnnotateApp() {
       window.removeEventListener("keyup", onKeyUp, { capture: true });
     };
   }, [
-    exit,
+    onEscape,
     isEditing,
-    commitText,
     nextScreen,
     cycleDock,
     selected.length,
@@ -1194,6 +1248,7 @@ function StrokeShape({ stroke, hitArea = false }: { stroke: Stroke; hitArea?: bo
               blurRadius: 0,
               dim: 0,
               shadow: false,
+            measureUnits: "pt",
             },
           }),
         )}
