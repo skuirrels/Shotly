@@ -160,24 +160,6 @@ fn is_current(generation: u64) -> bool {
     ACTIVE.load(Ordering::SeqCst) && GENERATION.load(Ordering::SeqCst) == generation
 }
 
-/// Capture a window, by whichever means this Mac allows.
-///
-/// Pointing is the better answer where it is available: your hand is already
-/// there, and the accessibility API makes it truthful. It costs an Accessibility
-/// permission, though, and it can only ever offer what the pointer can reach — a
-/// window behind another one is unreachable by definition. So the list of
-/// thumbnails is both the fallback when permission is refused and a standing
-/// alternative, reachable from the outline with `L` and from the tray.
-pub fn capture_window(app: &AppHandle) -> Result<(), String> {
-    match begin(app) {
-        Err(err) if err == "accessibility-denied" => {
-            eprintln!("[snap] no accessibility access; choosing from the list instead");
-            commands::request_window_pick(app)
-        }
-        other => other,
-    }
-}
-
 /// End a session and put the editor back, however it was reached.
 pub fn cancel(app: &AppHandle) {
     stop(app);
@@ -202,21 +184,16 @@ fn cursor() -> Option<(f64, f64)> {
 
 /// Start pointing. Idempotent: a second call while a session is up does nothing.
 ///
-/// Both permissions are checked before anything is put on screen, and both
-/// failures are named rather than generic, because the caller answers them
-/// differently — screen recording has no fallback, accessibility does.
+/// Screen recording is the only permission this needs. It used to demand
+/// Accessibility as well, and refuse to run without it, which was wrong on the
+/// facts: finding the window under the pointer is a hit test against a filtered
+/// window list, and nothing about that requires being trusted. Accessibility
+/// only buys the levels *below* the window, so it is asked for and then carried
+/// on without — see `Stack::chain_at`.
 pub fn begin(app: &AppHandle) -> Result<(), String> {
     if !crate::capture::cli::has_permission() {
         crate::capture::cli::request_permission();
         return Err("permission-denied".into());
-    }
-
-    if !ax::trusted() {
-        // Shows the system's prompt the first time and is silent afterwards,
-        // which is why the caller falls back to the picker either way rather
-        // than waiting for an answer that may never come.
-        ax::request_trust();
-        return Err("accessibility-denied".into());
     }
 
     // Pressing the capture key again is the second way out, and the one that
@@ -487,11 +464,12 @@ fn spawn_tap(_generation: u64) {}
 /// Follow the pointer, and act on whatever the tap decided.
 fn spawn_tracker(app: AppHandle, generation: u64, origin: (f64, f64)) {
     std::thread::spawn(move || {
+        let stack = Stack::take();
         let mut shown: Option<Highlight> = None;
         let mut target: Option<ax::Node> = None;
         let mut anchor: Option<Anchor> = None;
-        // Where the pointer was, and at what level, the last time anything was
-        // asked of the accessibility API.
+        // Where the pointer was, and at what level, the last time the outline
+        // was worked out.
         let mut last: Option<(f64, f64, i32)> = None;
 
         while is_current(generation) {
@@ -530,25 +508,23 @@ fn spawn_tracker(app: AppHandle, generation: u64, origin: (f64, f64)) {
                 continue;
             };
 
-            // A tick where nothing has moved asks nobody anything. This is what
-            // keeps the outline cheap: each resolve is IPC to another
+            // A tick where nothing has moved does no work. Level 0 is now only
+            // a hit test against a list already in hand and would be cheap to
+            // repeat, but the levels below it are still IPC to another
             // application — as many as fifty round trips once the chain is
             // being walked — and the pointer is still for most of a session.
             //
             // Only ever skipped while something is being shown. Caching a
-            // *failure* is what made this feature look broken: the very first
-            // hit test can fail, because for an instant after the overlay is
-            // created it is still hit-testable and accessibility answers with
-            // an error rather than with what is underneath. Cache that, and a
-            // pointer which then never moves leaves a dimmed screen with no
-            // outline on it for as long as the session lasts.
+            // *failure* is what made this feature look broken once before: the
+            // first resolve could fail, and a pointer which then never moved
+            // left a dimmed screen with no outline on it for the whole session.
             if shown.is_some() && last == Some((x, y, level)) {
                 std::thread::sleep(POLL);
                 continue;
             }
             last = Some((x, y, level));
 
-            let found = resolve(x, y, level, origin, &mut anchor);
+            let found = resolve(&stack, x, y, level, origin, &mut anchor);
             let (node, next) = match found {
                 Some((node, highlight)) => (Some(node), Some(highlight)),
                 None => (None, None),
@@ -568,12 +544,101 @@ fn spawn_tracker(app: AppHandle, generation: u64, origin: (f64, f64)) {
     });
 }
 
+/// The windows on screen when the session began, front to back.
+///
+/// Taken once rather than polled. Nothing can move while a session is up — the
+/// tap swallows every click and every scroll — so re-reading the list forty
+/// times a second would spend the whole session confirming that the desktop is
+/// exactly as it was.
+struct Stack(Vec<crate::capture::WindowInfo>);
+
+/// Can the pointer land on this window?
+///
+/// Ordinary application windows only — layer 0, not full screen, not ours. See
+/// `Stack::take` for why full screen in particular has to go.
+fn is_pointable(w: &crate::capture::WindowInfo, mine: i32) -> bool {
+    w.layer == 0 && !w.full_screen && w.pid != mine
+}
+
+impl Stack {
+    /// What is on screen and can actually be pointed at.
+    ///
+    /// Stricter than the list the thumbnail picker shows, and the difference is
+    /// the whole reason this outline works. `display::windows` already drops
+    /// the desktop, the fully transparent, the system chrome and the slivers,
+    /// but it deliberately keeps full-screen windows so the picker can list a
+    /// full-screen app and say why it cannot be captured by id. A hit test must
+    /// not: a full-screen window sits at layer 1000, above everything, covering
+    /// the whole display — and macOS reports it as on screen even when it is on
+    /// another Space entirely. Keep it and the answer is that same window
+    /// wherever you point, which is exactly the phantom that killed the first
+    /// version of this feature. Ordinary windows only.
+    ///
+    /// Shotly's own go too, by process as well as by name: the outline overlay
+    /// is on screen, under the pointer, for the whole session.
+    fn take() -> Self {
+        let mine = std::process::id() as i32;
+        Stack(
+            crate::capture::display::windows()
+                .unwrap_or_default()
+                .into_iter()
+                .filter(|w| is_pointable(w, mine))
+                .collect(),
+        )
+    }
+
+    /// The window a click here would land on.
+    ///
+    /// The list arrives ordered front to back, so the first one whose frame
+    /// holds the point is the answer — the same question `hitTestWindowInfo:`
+    /// answers in Snagit, and answered the same way. What made an earlier
+    /// version of this outline pick phantom windows was not the window list; it
+    /// was asking the window list without filtering it first.
+    fn hit(&self, x: f64, y: f64) -> Option<ax::Node> {
+        self.0
+            .iter()
+            .find(|w| {
+                x >= w.bounds.x
+                    && y >= w.bounds.y
+                    && x < w.bounds.x + w.bounds.width
+                    && y < w.bounds.y + w.bounds.height
+            })
+            .map(|w| ax::Node {
+                rect: w.bounds,
+                role: "AXWindow".into(),
+                title: if w.title.is_empty() { w.app_name.clone() } else { w.title.clone() },
+                pid: w.pid,
+                window: true,
+            })
+    }
+
+    /// The window under the pointer, and — where accessibility is granted —
+    /// what is inside it.
+    ///
+    /// The window itself never comes from accessibility now. It does not need
+    /// to: finding the window is a hit test against a filtered list, which is
+    /// free and works on every Mac. Accessibility buys exactly one thing here,
+    /// which is the ability to tighten onto a toolbar or a single row once you
+    /// are already on the right window, and it is skipped silently when it has
+    /// not been granted rather than gating the feature behind it.
+    fn chain_at(&self, x: f64, y: f64) -> Vec<ax::Node> {
+        let Some(window) = self.hit(x, y) else { return Vec::new() };
+        let mut chain = vec![window];
+        if ax::trusted() {
+            let inner = ax::refine(ax::chain_at(x, y), x, y);
+            chain.extend(inner.into_iter().filter(|n| !n.window));
+        }
+        chain
+    }
+}
+
 /// What to draw at a point, or `None` where nothing can be captured.
 ///
 /// Level 0 is deliberately not the same code path as the rest: it only needs
-/// the window, which is two round trips, and it is where the pointer spends
-/// almost all of its time.
+/// the window, which is a hit test against a list already in hand, and it is
+/// where the pointer spends almost all of its time.
 fn resolve(
+    stack: &Stack,
     x: f64,
     y: f64,
     level: i32,
@@ -581,10 +646,10 @@ fn resolve(
     anchor: &mut Option<Anchor>,
 ) -> Option<(ax::Node, Highlight)> {
     let (window, mut node, mut level, depth) = if level == 0 {
-        let window = ax::window_at(x, y)?;
+        let window = stack.hit(x, y)?;
         (window.clone(), window, 0, 0)
     } else {
-        let chain = ax::refine(ax::chain_at(x, y), x, y);
+        let chain = stack.chain_at(x, y);
         let depth = chain.len() as i32;
         let window = chain.first()?.clone();
         let node = ax::at_level(&chain, level)?.clone();
@@ -785,6 +850,86 @@ mod tests {
 
     fn rect(x: f64, y: f64, width: f64, height: f64) -> Rect {
         Rect { x, y, width, height }
+    }
+
+    fn win(id: u32, pid: i32, title: &str, bounds: Rect) -> crate::capture::WindowInfo {
+        crate::capture::WindowInfo {
+            id,
+            title: title.into(),
+            app_name: "App".into(),
+            bounds,
+            layer: 0,
+            pid,
+            full_screen: false,
+        }
+    }
+
+    #[test]
+    fn a_full_screen_window_cannot_be_pointed_at() {
+        // The phantom this outline died of once. A full-screen window is
+        // reported on screen even when it is on another Space, sits at layer
+        // 1000 above everything, and covers the display — so keeping it means
+        // every hit test answers with it, wherever the pointer is.
+        let full = crate::capture::WindowInfo {
+            full_screen: true,
+            layer: 1000,
+            ..win(1, 10, "Full", rect(0.0, 0.0, 1512.0, 982.0))
+        };
+        assert!(!is_pointable(&full, 999));
+        assert!(is_pointable(&win(2, 11, "Ordinary", rect(0.0, 0.0, 900.0, 600.0)), 999));
+    }
+
+    #[test]
+    fn our_own_windows_cannot_be_pointed_at() {
+        // The outline overlay is on screen, under the pointer, all session.
+        let ours = win(3, 42, "Outline", rect(0.0, 0.0, 1512.0, 982.0));
+        assert!(!is_pointable(&ours, 42));
+        assert!(is_pointable(&ours, 43));
+    }
+
+    #[test]
+    fn the_hit_test_takes_the_frontmost_window_over_the_point() {
+        // Front to back, as the window list arrives, and overlapping.
+        let stack = Stack(vec![
+            win(1, 10, "Front", rect(0.0, 0.0, 100.0, 100.0)),
+            win(2, 11, "Behind", rect(50.0, 50.0, 100.0, 100.0)),
+        ]);
+
+        // Inside both: the one in front wins.
+        assert_eq!(stack.hit(60.0, 60.0).unwrap().title, "Front");
+        // Inside only the one behind.
+        assert_eq!(stack.hit(120.0, 120.0).unwrap().title, "Behind");
+        // Outside both.
+        assert!(stack.hit(400.0, 400.0).is_none());
+    }
+
+    #[test]
+    fn the_hit_test_excludes_the_far_edges() {
+        let stack = Stack(vec![win(1, 10, "One", rect(0.0, 0.0, 100.0, 100.0))]);
+
+        // The near edges belong to the window; the far ones are the next pixel
+        // along, so two windows sharing an edge cannot both claim it.
+        assert!(stack.hit(0.0, 0.0).is_some());
+        assert!(stack.hit(99.9, 99.9).is_some());
+        assert!(stack.hit(100.0, 50.0).is_none());
+        assert!(stack.hit(50.0, 100.0).is_none());
+    }
+
+    #[test]
+    fn a_hit_window_carries_its_own_process_and_frame() {
+        // What `window_id_for` matches back on, so it has to survive the trip.
+        let stack = Stack(vec![win(7, 42, "Notes", rect(10.0, 20.0, 300.0, 400.0))]);
+        let node = stack.hit(50.0, 50.0).unwrap();
+
+        assert_eq!(node.pid, 42);
+        assert_eq!(node.rect, rect(10.0, 20.0, 300.0, 400.0));
+        assert!(node.window);
+    }
+
+    #[test]
+    fn an_untitled_window_is_named_after_its_app() {
+        let stack = Stack(vec![win(1, 10, "", rect(0.0, 0.0, 100.0, 100.0))]);
+        assert_eq!(stack.hit(10.0, 10.0).unwrap().title, "App");
     }
 
     #[test]

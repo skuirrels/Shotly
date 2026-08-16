@@ -127,7 +127,11 @@ pub trait CaptureBackend: Send + Sync {
     fn crop(&self, frame: &Frame, region: Rect) -> Result<Frame>;
 
     /// Interactive selection driven by the OS. Blocks; `None` means cancelled.
-    fn capture_interactive(&self) -> Result<Option<Frame>>;
+    ///
+    /// `window_mode` asks for the system's window picker — the camera cursor
+    /// that highlights whatever is under the pointer — rather than the
+    /// crosshair.
+    fn capture_interactive(&self, window_mode: bool) -> Result<Option<Frame>>;
 
     /// Capture a single window including its shadow and rounded corners.
     fn capture_window(&self, window_id: u32) -> Result<Frame>;

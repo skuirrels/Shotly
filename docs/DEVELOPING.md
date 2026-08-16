@@ -310,10 +310,9 @@ capture went through `WindowPicker` instead — a grid of windows with live
 thumbnails, captured by id — where a phantom shows itself for what it is
 because its picture matches nothing you recognise.
 
-The outline is back, from a source that can be trusted; see below. The warning
-that survives is about the *source*, not about outlines: `CGWindowListCopyWindowInfo`
-answers "which window claims this point", which is not the same question as
-"what would a click here land on", and only the second one is worth drawing.
+The outline is back, and — this is the correction — from the same window list
+it was taken from before. The window list was never the problem. Asking it
+without filtering it was. See below.
 
 Two things that cost an afternoon to learn, both worth keeping:
 
@@ -326,24 +325,53 @@ Two things that cost an afternoon to learn, both worth keeping:
   is active. Measured: centre alpha 0 against 255 for an ordinary window. The
   picker lists such windows and says so, rather than offering an empty frame.
 
-### The outline that does work: the accessibility API (`snap.rs`, `ax.rs`)
+### The outline that does work: a filtered window list (`snap.rs`)
 
-Snagit's snapping highlight comes from `AXUIElementCopyElementAtPosition`, not
-the window list, and so does Shotly's now. Measured on the same desktop that
-defeated the old outline:
+**How Snagit actually does it**, checked against the shipped binaries rather
+than guessed at. This section previously claimed the highlight came from
+`AXUIElementCopyElementAtPosition`. That was wrong, and it cost a release: it
+put window capture behind an Accessibility prompt it never needed, and users who
+declined got a grid of thumbnails instead of a highlight.
 
-- It returns the window the user can actually see, and **never** the phantom —
-  accessibility hit-testing follows what is really there, the way a click does.
-- It resolves *sub-elements* as well: probing a point inside a sidebar returned
-  a 393×29 row, not the whole window. That is where "snap to the thing under
-  the pointer" comes from, and it is what the scroll wheel steps through.
-- The enclosing window's frame comes from `kAXWindowAttribute` and matches
-  `CGWindowListCopyWindowInfo` exactly — which is what lets an outlined window
-  be matched back to a `CGWindowID` and captured from its own backing store.
+In `Snagit.app/Contents/Frameworks/SnagitCommon.framework/…/TSCRegionSelection`:
 
-The price is the Accessibility permission, a second TCC prompt on top of Screen
-Recording. Refusing it costs the outline and nothing else: window capture falls
-back to `WindowPicker`, which needs no such grant.
+- The window under the pointer is `getWindowInfoForPoint:`, `idOfWindowAtPoint:`
+  and `hitTestWindowInfo:atPoint:` on a `WindowInfo` class, over
+  `CGWindowListCopyWindowInfo` and `getShareableContentExcludingDesktopWindows:
+  onScreenWindowsOnly:` — the window list, hit-tested.
+- Phantoms are handled by filtering, not by changing source: `isIgnoredWindow`,
+  `isIgnoredWindow:`, `findOverlayWindows`.
+- The AX imports *are* there, but read the neighbours: `canScrollForScrollBarElement:`,
+  `getCurrentScrollableUIElementAtPoint:`, `scrollAreaForExcelWithElement:`,
+  `scrollAreaForWordWithElement:`, `scrollAreaForXcodeWithElement:`. That is
+  scrolling capture, plus an optional `disableSubWindowSelection` mode for
+  drilling inside a window. Not the highlight.
+
+`Snagit` itself imports only `AXIsProcessTrustedWithOptions`, and
+`TSCRegionSelection` uses the silent `AXIsProcessTrusted` — it checks, and
+carries on either way.
+
+So Shotly does the same. `Stack::take` snapshots the window list once per
+session (nothing can move while the tap holds the mouse) and keeps only what can
+be pointed at; `Stack::hit` returns the first window whose frame holds the
+point, the list already being ordered front to back. **No permission beyond
+Screen Recording.**
+
+The filter is the load-bearing part, and the entry that matters most is the one
+this feature died of twice: **drop full-screen windows.** A full-screen window
+sits at layer 1000 above everything, covers the display, and macOS reports it as
+on screen even when it is on another Space. Measured on this desktop — the
+window list's first entry was `layer=1000 0,0 1512x982 Claude`, on a Space that
+was not showing — so keeping it means every hit test answers with that window
+wherever the pointer goes. Note this is the *opposite* of what the picker wants,
+which is why the two filters differ: `is_target` keeps full-screen windows so the
+picker can list them and explain they cannot be captured by id, and
+`is_pointable` throws them away.
+
+Accessibility is now optional and buys exactly one thing: the levels *below* the
+window, which the scroll wheel steps through — a toolbar or a single row rather
+than the whole window. `Stack::chain_at` asks `ax::trusted()` and skips it in
+silence when it is not granted.
 
 **The property the whole design rests on.** A window that ignores mouse events
 is invisible to accessibility hit-testing; one that accepts them is not.
@@ -359,8 +387,10 @@ raw chain was 24 elements deep, 21 of which had an identical frame. `refine`
 drops anything that duplicates the frame outside it, is too small to aim at, or
 does not actually contain the pointer — leaving 6 levels worth scrolling
 through. The walk also could not reach `AXWindow` within 24 steps at all, which
-is why `chain_at` asks for the window directly and puts it at the front rather
-than hoping to arrive at it.
+is why `ax::chain_at` asks for the window directly and puts it at the front
+rather than hoping to arrive at it. `Stack::chain_at` now discards that window
+and uses the one from the list, so the outline and the captured `CGWindowID`
+cannot disagree — but the note stands for anyone tempted to walk upwards.
 
 **Two failures worth not repeating**, both of which made a working feature look
 like a broken Mac:

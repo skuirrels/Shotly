@@ -142,7 +142,6 @@ pub fn at_level(chain: &[Node], level: i32) -> Option<&Node> {
 mod imp {
     use super::{Node, Rect, MAX_WALK, MESSAGING_TIMEOUT};
     use core_foundation::base::{CFRelease, CFTypeRef, TCFType};
-    use core_foundation::dictionary::CFDictionary;
     use core_foundation::string::{CFString, CFStringRef};
     use std::ffi::c_void;
 
@@ -172,8 +171,6 @@ mod imp {
         fn AXUIElementSetMessagingTimeout(element: AXUIElementRef, timeout: f32) -> AXError;
         fn AXValueGetValue(value: CFTypeRef, the_type: u32, value_ptr: *mut c_void) -> u8;
         fn AXIsProcessTrusted() -> u8;
-        fn AXIsProcessTrustedWithOptions(options: *const c_void) -> u8;
-        static kAXTrustedCheckOptionPrompt: CFStringRef;
     }
 
     /// An owned `AXUIElementRef`.
@@ -298,38 +295,6 @@ mod imp {
         unsafe { AXIsProcessTrusted() != 0 }
     }
 
-    /// Ask for accessibility access, showing the system's own prompt.
-    ///
-    /// macOS only surfaces the dialog the first time; afterwards this is a
-    /// silent no. That is the whole reason it returns the answer rather than
-    /// assuming the prompt did something.
-    pub fn request_trust() -> bool {
-        // SAFETY: `kAXTrustedCheckOptionPrompt` is a framework constant, live
-        // for the process lifetime.
-        let key = unsafe { CFString::wrap_under_get_rule(kAXTrustedCheckOptionPrompt) };
-        let options = CFDictionary::from_CFType_pairs(&[(
-            key.as_CFType(),
-            core_foundation::boolean::CFBoolean::true_value().as_CFType(),
-        )]);
-        // SAFETY: the dictionary outlives the call.
-        unsafe { AXIsProcessTrustedWithOptions(options.as_CFTypeRef() as *const c_void) != 0 }
-    }
-
-    /// The window under the pointer — the fast path, and the default target.
-    ///
-    /// Two round trips rather than the whole ancestry, because this runs on
-    /// every tick of the tracker and the answer is what level 0 shows.
-    pub fn window_at(x: f64, y: f64) -> Option<Node> {
-        let element = hit(x, y)?;
-        // An element *is* sometimes the window: hitting the desktop background
-        // or a window's own frame comes back that way.
-        let window = match element.element_attribute("AXWindow") {
-            Some(w) => w,
-            None => element,
-        };
-        window.node(true)
-    }
-
     /// Every level between the window and the deepest element at a point.
     ///
     /// Built from the inside out — the API only walks upwards — and reversed,
@@ -401,7 +366,7 @@ mod imp {
     }
 }
 
-pub use imp::{chain_at, request_trust, trusted, window_at};
+pub use imp::{chain_at, trusted};
 
 #[cfg(test)]
 mod tests {

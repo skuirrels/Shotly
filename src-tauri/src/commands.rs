@@ -145,11 +145,24 @@ pub fn open_screen_recording_settings(app: AppHandle) -> CmdResult<()> {
 /// thread — blocking here would freeze the event loop, since the global
 /// shortcut handler calls it on the main thread.
 pub fn start_capture(app: &AppHandle, mode: CaptureMode) -> CmdResult<()> {
-    // Window capture is neither this crosshair nor the system's picker, and it
-    // is answered in one place so that the hotkey, the tray and the editor's
-    // own toolbar button cannot drift apart — which they had.
+    // Window capture is answered in one place so that the hotkey, the tray and
+    // the editor's own toolbar button cannot drift apart — which they had.
+    //
+    // It draws Shotly's own outline, which needs no permission this capture
+    // does not already need. If it cannot start at all, the system's own window
+    // picker is the fallback rather than an error: the camera cursor that
+    // lights up whatever is under the pointer. What used to be here instead was
+    // the thumbnail grid, which was the wrong answer twice over — it takes a
+    // picture of every open window before it can show you anything, and
+    // choosing from a contact sheet is not what anyone means by pointing at a
+    // window.
     if mode == CaptureMode::Window {
-        return crate::snap::capture_window(app);
+        match crate::snap::begin(app) {
+            Err(err) if err != "permission-denied" => {
+                eprintln!("[snap] outline unavailable ({err}); using the system picker");
+            }
+            other => return other,
+        }
     }
 
     if !cli::has_permission() {
@@ -166,7 +179,7 @@ pub fn start_capture(app: &AppHandle, mode: CaptureMode) -> CmdResult<()> {
     std::thread::spawn(move || {
         let outcome = {
             let state = handle.state::<AppState>();
-            state.backend.capture_interactive()
+            state.backend.capture_interactive(mode == CaptureMode::Window)
         };
 
         match outcome {
