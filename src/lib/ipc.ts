@@ -5,6 +5,7 @@ import type {
   HotkeyAction,
   HotkeyBinding,
   LibraryItem,
+  TextLine,
   WindowInfo,
 } from "./types";
 
@@ -125,3 +126,14 @@ export const hotkeysSet = (action: HotkeyAction, accelerator: string | null) =>
   invoke<void>("hotkeys_set", { action, accelerator });
 
 export const hotkeysReset = () => invoke<void>("hotkeys_reset");
+
+/**
+ * Read the text in a capture, or in one rectangle of it.
+ *
+ * `region` is in source-image pixels, so a cropped document has to add its
+ * own crop offset back on before calling.
+ */
+export const recognizeText = (
+  path: string,
+  region: { x: number; y: number; width: number; height: number } | null,
+) => invoke<TextLine[]>("recognize_text", { path, region });

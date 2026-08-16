@@ -122,6 +122,25 @@ export const IconEyedropper = (p: SVGProps<SVGSVGElement>) => (
 );
 
 /**
+ * Text being lifted out of a picture: the corner marks of a selection, with
+ * lines of prose caught inside them.
+ *
+ * Corner marks rather than a full rectangle, so it reads as "select this part
+ * of the image" and not as the rectangle-drawing tool two buttons along.
+ */
+export const IconTextGrab = (p: SVGProps<SVGSVGElement>) => (
+  <Icon {...p}>
+    <path d="M2 5.2V3.2A1.2 1.2 0 0 1 3.2 2h2" />
+    <path d="M10.8 2h2A1.2 1.2 0 0 1 14 3.2v2" />
+    <path d="M14 10.8v2a1.2 1.2 0 0 1-1.2 1.2h-2" />
+    <path d="M5.2 14h-2A1.2 1.2 0 0 1 2 12.8v-2" />
+    <path d="M5 6.2h6" />
+    <path d="M5 9h6" />
+    <path d="M5 11.5h3.5" />
+  </Icon>
+);
+
+/**
  * One picture laid over another: a back frame, and a front one carrying the
  * usual hill-and-sun shorthand so it reads as an image rather than a rectangle.
  */

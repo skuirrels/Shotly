@@ -81,6 +81,7 @@ export type ToolId =
   | "highlight"
   | "spotlight"
   | "pick"
+  | "grab"
   | "crop";
 
 /** Tools that produce a box-shaped annotation by dragging a rectangle. */
@@ -284,4 +285,13 @@ export interface HotkeyBinding {
   /** `null` when the user has switched this hotkey off. */
   accelerator: string | null;
   defaultAccelerator: string;
+}
+
+// ------------------------------------------------------------ recognition
+
+/** Mirrors `TextLine` in `src-tauri/src/ocr.rs`. */
+export interface TextLine {
+  text: string;
+  /** 0 to 1, as Vision reports it. */
+  confidence: number;
 }

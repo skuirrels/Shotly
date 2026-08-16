@@ -40,7 +40,8 @@ type Drag =
   | { kind: "create"; id: string; origin: Point }
   | { kind: "move"; ids: string[]; origin: Point; snapshot: Annotation[] }
   | { kind: "resize"; id: string; handle: HandleId; snapshot: Annotation }
-  | { kind: "crop"; origin: Point };
+  | { kind: "crop"; origin: Point }
+  | { kind: "grab"; origin: Point };
 
 const BOX_TOOLS: BoxKind[] = ["rect", "ellipse", "blur", "highlight", "spotlight", "callout"];
 
@@ -77,9 +78,18 @@ interface CanvasProps {
     copy: () => void;
     exportFlat: () => void;
   };
+  /**
+   * Read the text in this part of the capture, in document coordinates, or in
+   * the whole of it when the marquee was only a click.
+   *
+   * The editor shell owns it for the same reason as the actions above: the
+   * recognising happens in Rust and the result goes to the clipboard and into
+   * a panel, none of which is the canvas's business.
+   */
+  onGrabText?: (area: Rect | null) => void;
 }
 
-export function Canvas({ onNotify, actions }: CanvasProps) {
+export function Canvas({ onNotify, actions, onGrabText }: CanvasProps) {
   const doc = useEditor((s) => s.doc);
   const annotations = useEditor((s) => s.annotations);
   const selectedIds = useEditor((s) => s.selectedIds);
@@ -99,6 +109,8 @@ export function Canvas({ onNotify, actions }: CanvasProps) {
   const [altDown, setAltDown] = useState(false);
   /** The eyedropper's live readout: what is under the cursor right now. */
   const [swatch, setSwatch] = useState<{ x: number; y: number; hex: string } | null>(null);
+  /** The text-grab marquee while it is being dragged out. */
+  const [grabbing, setGrabbing] = useState<Rect | null>(null);
   /** Last pointer position in document space, for sampling without a move. */
   const pointer = useRef<Point | null>(null);
   /** Open right-click menu: where it is, and which shape it was opened on. */
@@ -286,6 +298,12 @@ export function Canvas({ onNotify, actions }: CanvasProps) {
       return;
     }
 
+    if (tool === "grab") {
+      drag.current = { kind: "grab", origin };
+      setGrabbing({ x: origin.x, y: origin.y, width: 0, height: 0 });
+      return;
+    }
+
     if (tool === "arrow" || tool === "line") {
       store.add({
         id,
@@ -442,6 +460,16 @@ export function Canvas({ onNotify, actions }: CanvasProps) {
         break;
       }
 
+      case "grab": {
+        setGrabbing({
+          x: Math.min(active.origin.x, point.x),
+          y: Math.min(active.origin.y, point.y),
+          width: Math.abs(point.x - active.origin.x),
+          height: Math.abs(point.y - active.origin.y),
+        });
+        break;
+      }
+
       case "create": {
         const target = store.annotations.find((a) => a.id === active.id);
         if (!target) break;
@@ -559,6 +587,17 @@ export function Canvas({ onNotify, actions }: CanvasProps) {
     if (!active) return;
 
     const store = useEditor.getState();
+
+    if (active.kind === "grab") {
+      // A click rather than a drag reads the whole capture. Dragging a box
+      // over one paragraph is the point of the tool, but "just read all of
+      // it" is the other half of the job and shouldn't need a careful drag
+      // from corner to corner.
+      const area = grabbing && grabbing.width > 4 && grabbing.height > 4 ? grabbing : null;
+      setGrabbing(null);
+      onGrabText?.(area);
+      return;
+    }
 
     if (active.kind === "create") {
       const created = store.annotations.find((a) => a.id === active.id);
@@ -770,6 +809,21 @@ export function Canvas({ onNotify, actions }: CanvasProps) {
           />
 
           {pendingCrop && <CropOverlay rect={pendingCrop} doc={doc} zoom={zoom} />}
+
+          {/* The text-grab marquee. Deliberately unlike the crop overlay:
+              nothing outside it is dimmed, because this box takes a copy of
+              what it covers rather than throwing the rest away. */}
+          {grabbing && grabbing.width > 0 && grabbing.height > 0 && (
+            <div
+              className="pointer-events-none absolute border border-accent bg-accent/10"
+              style={{
+                left: grabbing.x * zoom,
+                top: grabbing.y * zoom,
+                width: grabbing.width * zoom,
+                height: grabbing.height * zoom,
+              }}
+            />
+          )}
 
           {/* Follows the cursor rather than sitting in the toolbar: the whole
               job is telling you what is under the pointer *before* you commit

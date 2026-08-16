@@ -33,7 +33,8 @@ import { serialize as serializeMarkup } from "@/lib/markup";
 import { captureStem } from "@/lib/naming";
 import { overlayFromClipboard } from "@/lib/overlay";
 import { useUpdates } from "@/lib/updater";
-import type { CaptureMode, CaptureResult } from "@/lib/types";
+import type { CaptureMode, CaptureResult, Rect, TextLine } from "@/lib/types";
+import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { useEditor } from "@/state/editorStore";
 import { Canvas } from "./Canvas";
 import { CommandPalette } from "./CommandPalette";
@@ -41,6 +42,7 @@ import { EmptyLibrary, PermissionNotice } from "./EmptyState";
 import { Library } from "./Library";
 import { RecentStrip } from "./RecentStrip";
 import { ShortcutSheet } from "./ShortcutSheet";
+import { TextResult } from "./TextResult";
 import { Toolbar } from "./Toolbar";
 import { TopBar } from "./TopBar";
 import { UpdateNotice } from "./UpdateNotice";
@@ -69,6 +71,8 @@ export function EditorApp() {
   const doc = useEditor((s) => s.doc);
   const [palette, setPalette] = useState(false);
   const [sheet, setSheet] = useState(false);
+  /** Lines the recogniser found, shown until dismissed. */
+  const [scan, setScan] = useState<TextLine[] | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [toast, setToast] = useState<{ text: string; tone: "ok" | "error" } | null>(null);
   /** Path of the most recent save, so the toast can offer to reveal it. */
@@ -562,6 +566,47 @@ export function EditorApp() {
    * the canvas — the most expensive thing on screen — re-render on every
    * keystroke of a text annotation.
    */
+  /**
+   * Read the text in the capture, or in the box just dragged over it.
+   *
+   * Straight to the clipboard as well as onto the screen: the reason to lift
+   * text out of a screenshot is almost always to paste it somewhere, and
+   * making that a second gesture would be one too many.
+   */
+  const grabText = useCallback(
+    (area: Rect | null) => {
+      const current = useEditor.getState().doc;
+      if (!current) return;
+      const crop = current.crop;
+      const region = area
+        ? {
+            // Document coordinates are relative to the crop; Rust reads the
+            // file underneath it, which still has the whole capture in it.
+            x: Math.round(crop.x + area.x),
+            y: Math.round(crop.y + area.y),
+            width: Math.round(area.width),
+            height: Math.round(area.height),
+          }
+        : {
+            x: Math.round(crop.x),
+            y: Math.round(crop.y),
+            width: Math.round(crop.width),
+            height: Math.round(crop.height),
+          };
+
+      setBusy("text");
+      ipc
+        .recognizeText(current.path, region)
+        .then(async (lines) => {
+          if (lines.length > 0) await writeText(lines.map((l) => l.text).join("\n"));
+          setScan(lines);
+        })
+        .catch((err) => notify(`Text recognition failed: ${err}`, "error"))
+        .finally(() => setBusy(null));
+    },
+    [notify],
+  );
+
   const canvasActions = useMemo(
     () => ({
       pasteImage: () => void pasteOverlay(),
@@ -1080,7 +1125,7 @@ export function EditorApp() {
               onOpen={openRecent}
               onError={reportError}
             />
-            <Canvas onNotify={notify} actions={canvasActions} />
+            <Canvas onNotify={notify} actions={canvasActions} onGrabText={grabText} />
           </>
         ) : (
           // Clicking anywhere that isn't a capture clears the selection, the
@@ -1157,6 +1202,17 @@ export function EditorApp() {
 
       {palette && <CommandPalette commands={commands} onClose={() => setPalette(false)} />}
       {sheet && <ShortcutSheet commands={commands} onClose={() => setSheet(false)} />}
+
+      {scan && (
+        <TextResult
+          lines={scan}
+          onCopy={(text) => {
+            void writeText(text);
+            notify(text.includes("\n") ? "Text copied" : `Copied “${text}”`);
+          }}
+          onClose={() => setScan(null)}
+        />
+      )}
     </div>
   );
 }

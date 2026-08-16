@@ -5,6 +5,7 @@ mod commands;
 mod highlight;
 mod hotkeys;
 mod markup;
+mod ocr;
 mod platform;
 mod update;
 
@@ -117,6 +118,7 @@ pub fn run() {
             commands::hide_editor,
             update::check_for_updates,
             update::pending_update,
+            ocr::recognize_text,
             hotkeys::hotkeys_list,
             hotkeys::hotkeys_set,
             hotkeys::hotkeys_reset,
