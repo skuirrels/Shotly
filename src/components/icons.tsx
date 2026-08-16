@@ -182,6 +182,14 @@ export const IconZoomIn = (p: SVGProps<SVGSVGElement>) => (
   </Icon>
 );
 
+/** A plain magnifier — the zoom icons are the same shape carrying a sign. */
+export const IconSearch = (p: SVGProps<SVGSVGElement>) => (
+  <Icon {...p}>
+    <circle cx="7" cy="7" r="4.5" />
+    <path d="M10.4 10.4 14 14" />
+  </Icon>
+);
+
 export const IconZoomOut = (p: SVGProps<SVGSVGElement>) => (
   <Icon {...p}>
     <circle cx="7" cy="7" r="4.5" />

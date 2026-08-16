@@ -1,11 +1,14 @@
-import { type ReactNode, useCallback, useEffect, useRef, useState } from "react";
+import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import clsx from "clsx";
-import { IconCopy, IconFolder, IconImage, IconTrash } from "@/components/icons";
+import { IconClose, IconCopy, IconFolder, IconImage, IconSearch, IconTrash } from "@/components/icons";
 import { ContextMenu, type MenuEntry } from "@/components/ui/ContextMenu";
+import { Kbd } from "@/components/ui/Kbd";
 import { Tooltip } from "@/components/ui/Tooltip";
 import * as ipc from "@/lib/ipc";
 import type { LibraryItem } from "@/lib/types";
+import { type Scope, groupByDate, inScope, scopeExists } from "./dates";
 import { formatSize, formatWhen } from "./format";
+import { LibraryFilter } from "./LibraryFilter";
 import { useThumbnail } from "./thumbnails";
 
 interface Props {
@@ -45,6 +48,9 @@ export function Library({
   onItems,
 }: Props) {
   const [items, setItems] = useState<LibraryItem[] | null>(null);
+  const [scope, setScope] = useState<Scope>(null);
+  const [query, setQuery] = useState("");
+  const search = useRef<HTMLInputElement>(null);
   /** Where a Shift-range starts. Cleared by a plain click. */
   const anchor = useRef<string | null>(null);
   /** Ticket of the newest listing, so a slow earlier one can't win. */
@@ -82,11 +88,37 @@ export function Library({
     return () => window.removeEventListener("focus", reload);
   }, [reload]);
 
-  // Tell the parent what's on screen, and drop any selection that refers to a
-  // file which has since disappeared.
+  const groups = useMemo(() => groupByDate(items ?? []), [items]);
+
+  /**
+   * What the grid shows: the date scope first, then the search text.
+   *
+   * The text is matched against the filename, which for Shotly's own captures
+   * carries the date — so "08-15" finds a day, and the tree is left to handle
+   * the coarser question of which month you were in.
+   */
+  const visible = useMemo(() => {
+    const needle = query.trim().toLowerCase();
+    return (items ?? []).filter(
+      (item) =>
+        inScope(item, scope) && (needle === "" || item.name.toLowerCase().includes(needle)),
+    );
+  }, [items, scope, query]);
+
+  // A scope can outlive the captures that made it: delete the last shot of a
+  // month and its row disappears from the tree, leaving the grid filtered to
+  // nothing by a rule with nothing on screen to explain it.
+  useEffect(() => {
+    if (!scopeExists(scope, groups)) setScope(null);
+  }, [scope, groups]);
+
+  // Tell the parent what's on screen, and drop any selection that isn't. Both
+  // halves matter: a capture deleted in Finder, and one filtered out of view —
+  // ⌘C acting on captures you can no longer see would be the same surprise
+  // either way.
   useEffect(() => {
     if (!items) return;
-    const paths = items.map((i) => i.path);
+    const paths = visible.map((i) => i.path);
     onItems(paths);
 
     const surviving = selected.filter((p) => paths.includes(p));
@@ -94,7 +126,20 @@ export function Library({
     // `selected` is deliberately absent: this reconciles against a *new* list,
     // and re-running whenever the selection changes would fight the user.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [items, onItems, onSelect]);
+  }, [items, visible, onItems, onSelect]);
+
+  // ⌘F reaches the field wherever focus happens to be. Bound here rather than
+  // as a global command because the field only exists while this pane does.
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key !== "f" || !e.metaKey) return;
+      e.preventDefault();
+      search.current?.focus();
+      search.current?.select();
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, []);
 
   /**
    * The per-card trash button deletes straight away.
@@ -120,7 +165,9 @@ export function Library({
    * plain click replaces, ⌘ toggles one, ⇧ extends from the last anchor.
    */
   const choose = (item: LibraryItem, modifiers: { meta: boolean; shift: boolean }) => {
-    const paths = items?.map((i) => i.path) ?? [];
+    // Ranges run over what is on screen, so a Shift-click inside March can't
+    // quietly take in the captures a filter is hiding between the two ends.
+    const paths = visible.map((i) => i.path);
 
     if (modifiers.meta) {
       anchor.current = item.path;
@@ -195,49 +242,122 @@ export function Library({
 
   if (items.length === 0) return <>{empty}</>;
 
-  return (
-    <section className="w-full max-w-[1100px] px-1 pb-8">
-      <header className="mb-3 flex items-baseline justify-between">
-        <h2 className="text-[12px] font-semibold tracking-wider text-ink-4 uppercase">
-          Library
-          <span className="ml-2 font-sans text-[11px] tracking-normal normal-case text-ink-4">
-            {items.length} {items.length === 1 ? "capture" : "captures"}
-          </span>
-        </h2>
-        <p className="flex items-center font-sans text-[11px] text-ink-4">
-          {selected.length > 0 ? (
-            <>
-              {selected.length} selected
-              <span className="mx-1.5">·</span>
-              {/* An explicit control rather than relying on Escape, which this
-                  webview swallows before the page ever sees it. */}
-              <button
-                type="button"
-                onClick={() => onSelect([])}
-                className="rounded px-1 text-ink-3 underline decoration-dotted underline-offset-2 hover:text-ink"
-              >
-                Clear
-              </button>
-            </>
-          ) : (
-            "Click to select · double-click to open"
-          )}
-        </p>
-      </header>
+  const filtered = scope !== null || query.trim() !== "";
 
-      <ul className="grid grid-cols-[repeat(auto-fill,minmax(190px,1fr))] gap-3">
-        {items.map((item) => (
-          <LibraryCard
-            key={item.path}
-            item={item}
-            selected={selected.includes(item.path)}
-            onChoose={choose}
-            onOpen={onOpen}
-            onTrash={trash}
-            onMenu={openMenu}
-          />
-        ))}
-      </ul>
+  const clearFilters = () => {
+    setScope(null);
+    setQuery("");
+  };
+
+  return (
+    <section className="flex w-full max-w-[1292px] gap-6 px-1 pb-8">
+      {/* Sticky rather than in its own scroller: the pane scrolls as one
+          column, and the tree has to stay reachable from the foot of a long
+          library without turning the page into two competing scroll areas. */}
+      <aside className="sticky top-0 hidden w-[168px] shrink-0 self-start pt-1 md:block">
+        <LibraryFilter groups={groups} total={items.length} scope={scope} onScope={setScope} />
+      </aside>
+
+      <div className="min-w-0 flex-1">
+        <header className="mb-3 flex items-center justify-between gap-4">
+          <h2 className="shrink-0 text-[12px] font-semibold tracking-wider text-ink-4 uppercase">
+            Library
+            <span className="ml-2 font-sans text-[11px] tracking-normal normal-case text-ink-4">
+              {/* Under a filter, the total is the number worth knowing — "12 of
+                  164" answers both "what am I looking at" and "how much is
+                  hidden" in one line. */}
+              {filtered
+                ? `${visible.length} of ${items.length}`
+                : `${items.length} ${items.length === 1 ? "capture" : "captures"}`}
+            </span>
+          </h2>
+
+          <div className="flex min-w-0 items-center gap-3">
+            <p className="flex shrink-0 items-center font-sans text-[11px] text-ink-4">
+              {selected.length > 0 ? (
+                <>
+                  {selected.length} selected
+                  <span className="mx-1.5">·</span>
+                  {/* An explicit control rather than relying on Escape, which
+                      this webview swallows before the page ever sees it. */}
+                  <button
+                    type="button"
+                    onClick={() => onSelect([])}
+                    className="rounded px-1 text-ink-3 underline decoration-dotted underline-offset-2 hover:text-ink"
+                  >
+                    Clear
+                  </button>
+                </>
+              ) : (
+                "Click to select · double-click to open"
+              )}
+            </p>
+
+            <div className="relative w-[184px] shrink-0">
+              <IconSearch className="pointer-events-none absolute top-1/2 left-2 size-3.5 -translate-y-1/2 text-ink-4" />
+              <input
+                ref={search}
+                // Deliberately not type="search": macOS gives that one a menu
+                // of everything previously typed into it, which turns a filter
+                // box into a small history of what you went looking for.
+                type="text"
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                placeholder="Search"
+                aria-label="Search captures by name"
+                className="h-7 w-full rounded-lg border border-line bg-surface pr-9 pl-7 text-[12px] text-ink placeholder:text-ink-4 focus:border-accent focus:outline-none"
+              />
+              {/* The key that reaches the field, shown on the field itself —
+                  there is no command palette entry to carry it, because the
+                  field only exists while this pane does. */}
+              {query === "" ? (
+                <span className="pointer-events-none absolute top-1/2 right-2 -translate-y-1/2">
+                  <Kbd shortcut="Mod+F" muted />
+                </span>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setQuery("");
+                    search.current?.focus();
+                  }}
+                  aria-label="Clear search"
+                  className="absolute top-1/2 right-1.5 grid size-5 -translate-y-1/2 place-items-center rounded text-ink-4 hover:bg-hover hover:text-ink"
+                >
+                  <IconClose className="size-3" />
+                </button>
+              )}
+            </div>
+          </div>
+        </header>
+
+        {visible.length === 0 ? (
+          <p className="rounded-xl border border-dashed border-line py-10 text-center text-[12px] text-ink-4">
+            No captures match.
+            <button
+              type="button"
+              onClick={clearFilters}
+              className="ml-1.5 rounded px-1 text-ink-3 underline decoration-dotted underline-offset-2 hover:text-ink"
+            >
+              Show all
+            </button>
+          </p>
+        ) : (
+          <ul className="grid grid-cols-[repeat(auto-fill,minmax(190px,1fr))] gap-3">
+            {visible.map((item) => (
+              <LibraryCard
+                key={item.path}
+                item={item}
+                selected={selected.includes(item.path)}
+                onChoose={choose}
+                onOpen={onOpen}
+                onTrash={trash}
+                onMenu={openMenu}
+              />
+            ))}
+          </ul>
+        )}
+      </div>
 
       {menu && (
         <ContextMenu at={menu.at} items={menuItems(menu.targets)} onClose={() => setMenu(null)} />
@@ -310,7 +430,9 @@ function LibraryCard({
           <p className="truncate text-[12px] font-medium text-ink" title={item.name}>
             {item.name.replace(/\.(png|jpe?g)$/i, "")}
           </p>
-          <p className="mt-0.5 font-mono text-[10.5px] tabular-nums text-ink-4">
+          {/* Never wraps: the sidebar took width off the cards, and a metadata
+              line that folds onto a second row makes the grid ragged. */}
+          <p className="mt-0.5 truncate font-mono text-[10.5px] tabular-nums text-ink-4">
             {item.width} × {item.height}
             <span className="mx-1.5">·</span>
             {formatSize(item.size)}
