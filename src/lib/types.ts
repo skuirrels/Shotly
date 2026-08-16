@@ -71,23 +71,34 @@ export interface LibraryItem {
 
 // ------------------------------------------------------------- annotations
 
-export type ToolId =
-  | "select"
-  | "arrow"
-  | "rect"
-  | "ellipse"
-  | "line"
-  | "pen"
-  | "text"
-  | "step"
-  | "callout"
-  | "blur"
-  | "highlight"
-  | "spotlight"
-  | "pick"
-  | "grab"
-  | "measure"
-  | "crop";
+/**
+ * Every tool, as values rather than only as a type.
+ *
+ * The union is derived from this rather than written beside it, so that the
+ * one thing which needs to check a tool id at runtime — deciding whether a
+ * remembered tool still exists, in `editorStore` — cannot drift out of step
+ * with the type as tools come and go.
+ */
+export const TOOL_IDS = [
+  "select",
+  "arrow",
+  "rect",
+  "ellipse",
+  "line",
+  "pen",
+  "text",
+  "step",
+  "callout",
+  "blur",
+  "highlight",
+  "spotlight",
+  "pick",
+  "grab",
+  "measure",
+  "crop",
+] as const;
+
+export type ToolId = (typeof TOOL_IDS)[number];
 
 /** Tools that produce a box-shaped annotation by dragging a rectangle. */
 export type BoxKind =

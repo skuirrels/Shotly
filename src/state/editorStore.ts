@@ -8,6 +8,7 @@ import {
   type Rect,
   type Style,
   type ToolId,
+  TOOL_IDS,
   boundsOf,
   isBox,
   isLine,
@@ -130,6 +131,48 @@ const DEFAULT_CANVAS_FILL = "#FFFFFF";
 
 /** Tools that don't create geometry and so shouldn't be sticky after a drag. */
 const TRANSIENT_TOOLS: ToolId[] = ["crop"];
+
+const TOOL_KEY = "shotly.tool";
+
+/**
+ * Tools that are never remembered between sessions.
+ *
+ * Each is somewhere you go to do one thing and then leave, and two of the three
+ * are already modelled that way here: `crop` is transient after a drag, and
+ * `pick` keeps [`pickReturn`] so that one use puts the previous tool back.
+ * `grab` reads text out of the image rather than drawing on it. Opening Shotly
+ * into any of them would mean starting a session unable to draw and with
+ * nothing obviously wrong.
+ */
+const UNREMEMBERED_TOOLS: ToolId[] = ["crop", "pick", "grab"];
+
+/**
+ * The tool in hand when Shotly was last used.
+ *
+ * Guarded on both sides: reading storage can throw outright when the webview
+ * has it disabled, and this runs while the module is still initialising, where
+ * an exception would take the whole editor with it rather than one preference.
+ * A stored id that is no longer a tool is discarded too — otherwise removing a
+ * tool in some future version leaves a toolbar with nothing highlighted and a
+ * canvas that ignores the mouse.
+ */
+function storedTool(): ToolId {
+  try {
+    const saved = localStorage.getItem(TOOL_KEY);
+    return TOOL_IDS.includes(saved as ToolId) ? (saved as ToolId) : "select";
+  } catch {
+    return "select";
+  }
+}
+
+function rememberTool(tool: ToolId): void {
+  if (UNREMEMBERED_TOOLS.includes(tool)) return;
+  try {
+    localStorage.setItem(TOOL_KEY, tool);
+  } catch {
+    // Storage unavailable. Losing the preference is not worth a broken click.
+  }
+}
 
 interface HistoryEntry {
   annotations: Annotation[];
@@ -259,7 +302,7 @@ export const useEditor = create<EditorState>((set, get) => ({
   doc: null,
   annotations: [],
   selectedIds: [],
-  tool: "select",
+  tool: storedTool(),
   pickReturn: "select",
   style: DEFAULT_STYLE,
   calloutFontSize: DEFAULT_CALLOUT_FONT_SIZE,
@@ -278,7 +321,7 @@ export const useEditor = create<EditorState>((set, get) => ({
     // pixels rather than on a flattened copy of themselves.
     const restored = result.markup ? parseMarkup(result.markup) : null;
 
-    set({
+    set((s) => ({
       doc: {
         id: result.id,
         src,
@@ -304,10 +347,16 @@ export const useEditor = create<EditorState>((set, get) => ({
       future: [],
       fitToWindow: true,
       dirty: false,
-      // A fresh capture starts in select mode; the previous session's tool
-      // choice is rarely what you want for a new image.
-      tool: "select",
-    });
+      // The tool in hand carries over to a new capture. It used to reset to
+      // select here, on the reasoning that the last image's tool is rarely
+      // what a new one wants — but that also meant the tool could never
+      // survive anything, since every launch opens a capture. Someone who
+      // arrows one screenshot is usually about to arrow the next.
+      //
+      // Except the ones that were only ever a detour, which would otherwise
+      // reopen a colour picker or a crop over a brand new image.
+      tool: UNREMEMBERED_TOOLS.includes(s.tool) ? "select" : s.tool,
+    }));
   },
 
   setLibraryPath: (libraryPath) =>
@@ -317,7 +366,8 @@ export const useEditor = create<EditorState>((set, get) => ({
 
   reset: () => set({ doc: null, annotations: [], selectedIds: [], past: [], future: [] }),
 
-  setTool: (tool) =>
+  setTool: (tool) => {
+    rememberTool(tool);
     set((s) => ({
       tool,
       // The picker is a detour, not a destination: remember what was in hand so
@@ -328,7 +378,8 @@ export const useEditor = create<EditorState>((set, get) => ({
       // the new tool's defaults rather than the old shape's properties.
       selectedIds: tool === "select" ? s.selectedIds : [],
       pendingCrop: tool === "crop" ? s.pendingCrop : null,
-    })),
+    }));
+  },
 
   setStyle: (patch) => set((s) => ({ style: { ...s.style, ...patch }, ...restyleSelection(s, patch) })),
 

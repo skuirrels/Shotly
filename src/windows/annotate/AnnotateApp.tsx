@@ -359,6 +359,34 @@ const TOOLBAR_TOOLS: ToolButton[] = [
   ...TOOLS,
 ];
 
+const TOOL_KEY = "shotly.annotateTool";
+
+/**
+ * The tool this layer was last using.
+ *
+ * It matters more here than in the editor: this window is destroyed and rebuilt
+ * every time the layer is toggled, so without this the tool resets several
+ * times an hour rather than once a launch. Select is not remembered — reopening
+ * the layer unable to draw would look like it had failed to start.
+ */
+function storedTool(): Tool {
+  try {
+    const saved = localStorage.getItem(TOOL_KEY);
+    return TOOLS.some((t) => t.id === saved) ? (saved as Tool) : "pen";
+  } catch {
+    return "pen";
+  }
+}
+
+function rememberTool(tool: Tool): void {
+  if (tool === "select") return;
+  try {
+    localStorage.setItem(TOOL_KEY, tool);
+  } catch {
+    // Storage unavailable; the layer works, it just forgets.
+  }
+}
+
 export function AnnotateApp() {
   const [strokes, setStrokes] = useState<Stroke[]>([]);
   /**
@@ -370,9 +398,16 @@ export function AnnotateApp() {
    */
   const strokesRef = useRef(strokes);
   strokesRef.current = strokes;
-  const [tool, setTool] = useState<Tool>("pen");
+  const [tool, setTool] = useState<Tool>(storedTool);
   const [color, setColor] = useState(SWATCHES[0].value);
   const [width, setWidth] = useState(4);
+
+  // Written here rather than beside every `setTool` call: the tool changes from
+  // the toolbar, from a keyboard shortcut, and from finishing a text box, and
+  // only one of those would have been remembered otherwise.
+  useEffect(() => {
+    rememberTool(tool);
+  }, [tool]);
 
   const drawing = useRef<Stroke | null>(null);
   const gesture = useRef<Gesture | null>(null);
