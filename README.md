@@ -67,9 +67,17 @@ does the menu bar, which says *Stop Recording* while one is running.
 
 The movie lands in your Shotly folder as an ordinary `.mov` — no editor, no
 export step, nothing to convert — and appears in the library alongside your
-captures, with a still from the recording and its running time. Double-click it
-to play it in QuickTime Player. Picking a window records *that window*: it
-follows if you move it, and anything dropped in front of it stays out.
+captures, with a still from the recording and its running time. Picking a window
+records *that window*: it follows if you move it, and anything dropped in front
+of it stays out.
+
+Double-click it and it plays in Shotly, in a pane beside the editor and the
+library. <kbd>Space</kbd> plays and pauses, <kbd>←</kbd> and <kbd>→</kbd> jump
+five seconds (hold <kbd>⇧</kbd> for one), <kbd>Home</kbd> and <kbd>End</kbd> go
+to the ends, and there is a speed control and a loop for watching one moment
+again. <kbd>Esc</kbd> goes back to the library, and the Player tab holds your
+place while you are away. **Open in…** hands the file to QuickTime Player, for
+trimming or full screen.
 
 The panel does not appear in the recording, so you can leave it where it is.
 There is no audio: this records the screen, not the room.

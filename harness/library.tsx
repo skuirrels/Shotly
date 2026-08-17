@@ -15,6 +15,7 @@ function Harness() {
     <div className="h-screen bg-base text-ink">
       <Library
         onOpen={(p) => console.log("open in editor:", p)}
+        onPlay={(item) => console.log("play in Shotly:", item.path)}
         onCopy={() => {}}
         onDelete={() => {}}
         refreshKey={0}

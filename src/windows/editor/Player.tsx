@@ -1,0 +1,447 @@
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import clsx from "clsx";
+import {
+  IconFolder,
+  IconLoop,
+  IconMute,
+  IconPause,
+  IconPlay,
+  IconSkipBack,
+  IconSkipForward,
+  IconVolume,
+} from "@/components/icons";
+import { IconButton } from "@/components/ui/IconButton";
+import { Popover } from "@/components/ui/Popover";
+import { Tooltip } from "@/components/ui/Tooltip";
+import * as ipc from "@/lib/ipc";
+import { formatDuration } from "./format";
+import { useThumbnail } from "./thumbnails";
+
+/**
+ * What the player needs to know about a recording.
+ *
+ * A `LibraryItem` satisfies it, and so does the little that's known about a
+ * recording the moment it is saved — which is why this is its own shape rather
+ * than the full library row.
+ */
+export interface Movie {
+  path: string;
+  name: string;
+  modified: number;
+  /** Running time as Rust read it, used until the movie reports its own. */
+  seconds: number;
+}
+
+interface Props {
+  movie: Movie;
+  /** Where to pick the movie up, in seconds. Read once, when the pane opens. */
+  startAt?: number;
+  /** Where it got to, reported as the pane closes so the tab can hold a place. */
+  onLeave?: (seconds: number) => void;
+  /** Leave the player — Escape, ⌘W, or the Library tab. */
+  onClose: () => void;
+  onError: (message: string) => void;
+}
+
+/** What ← and → move by. ⇧ makes it one second, for finding an exact moment. */
+const STEP = 5;
+/** What the transport's two skip buttons move by. */
+const SKIP = 10;
+
+const RATES = [0.5, 1, 1.25, 1.5, 2] as const;
+
+/**
+ * Watch a recording without leaving Shotly.
+ *
+ * The file is streamed straight off disk through Tauri's asset protocol, which
+ * answers range requests — so a seven-minute, 300 MB recording starts playing
+ * at once instead of being read into memory first. That protocol is scoped to
+ * the capture folder in `tauri.conf.json`; a recording kept anywhere else will
+ * fail to load, which is what the fallback below is for.
+ */
+export function Player({ movie, startAt = 0, onLeave, onClose, onError }: Props) {
+  const video = useRef<HTMLVideoElement>(null);
+  const [playing, setPlaying] = useState(false);
+  const [time, setTime] = useState(0);
+  /** Seconds, once the movie itself says. `movie.seconds` until then. */
+  const [duration, setDuration] = useState(movie.seconds);
+  const [buffered, setBuffered] = useState(0);
+  const [muted, setMuted] = useState(false);
+  const [rate, setRate] = useState(1);
+  const [loop, setLoop] = useState(false);
+  /**
+   * Silent recordings are the norm — `screencapture -v` writes no audio track
+   * — so the mute control only appears when there is something to mute.
+   */
+  const [hasAudio, setHasAudio] = useState(false);
+  const [failed, setFailed] = useState(false);
+  /** True between pointer-down and pointer-up on the scrubber. */
+  const scrubbing = useRef(false);
+  /**
+   * The last position seen, kept in a ref so the unmount cleanup can report it
+   * after the element has gone. A movie watched to the end reports zero: the
+   * next visit wants the beginning, not four frames of the credits.
+   */
+  const at = useRef(0);
+
+  useEffect(
+    () => () => onLeave?.(at.current),
+    // Deliberately unconditional: this fires once, when the pane closes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [],
+  );
+
+  // The poster frame the library already made. It paints in the first frame
+  // rather than leaving a black rectangle while the movie's own first frame is
+  // decoded, which on a large recording is long enough to look broken.
+  const { url: poster } = useThumbnail(movie.path, movie.modified);
+  const src = useMemo(() => ipc.assetUrl(movie.path), [movie.path]);
+
+  const seek = useCallback((to: number) => {
+    const el = video.current;
+    if (!el) return;
+    const end = Number.isFinite(el.duration) ? el.duration : to;
+    const next = Math.max(0, Math.min(end, to));
+    el.currentTime = next;
+    setTime(next);
+  }, []);
+
+  const toggle = useCallback(() => {
+    const el = video.current;
+    if (!el) return;
+    // `play()` rejects if the movie can't be decoded; the error event has
+    // already put the fallback on screen, so there is nothing to say here.
+    if (el.paused) void el.play().catch(() => {});
+    else el.pause();
+  }, []);
+
+  // ------------------------------------------------------------- keyboard
+
+  /**
+   * The player owns the keyboard while it's on screen.
+   *
+   * The editor's keymap is switched off in this view (see `EditorApp`), so the
+   * handful of keys a player needs are bound here rather than being threaded
+   * through a command list where every entry would have to learn to stand
+   * aside. Escape and ⌘W come along because leaving is part of watching.
+   */
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const el = video.current;
+      if (!el || e.isComposing) return;
+
+      const handled = () => {
+        e.preventDefault();
+        e.stopPropagation();
+      };
+
+      if (e.metaKey) {
+        // ⌘W and ⌘L both mean "leave this". Everything else with ⌘ belongs to
+        // the menu bar, which the webview never sees.
+        if (e.key === "w" || e.key === "l") {
+          handled();
+          onClose();
+        }
+        return;
+      }
+
+      switch (e.key) {
+        case " ":
+        case "k":
+          handled();
+          toggle();
+          break;
+        case "ArrowLeft":
+          handled();
+          seek(el.currentTime - (e.shiftKey ? 1 : STEP));
+          break;
+        case "ArrowRight":
+          handled();
+          seek(el.currentTime + (e.shiftKey ? 1 : STEP));
+          break;
+        case "Home":
+          handled();
+          seek(0);
+          break;
+        case "End":
+          handled();
+          seek(Number.isFinite(el.duration) ? el.duration : 0);
+          break;
+        case "m":
+          handled();
+          el.muted = !el.muted;
+          setMuted(el.muted);
+          break;
+        case "Escape":
+          handled();
+          onClose();
+          break;
+      }
+    };
+
+    window.addEventListener("keydown", onKey, { capture: true });
+    return () => window.removeEventListener("keydown", onKey, { capture: true });
+  }, [onClose, seek, toggle]);
+
+  // Playback rate is a property, not an attribute — React can't set it.
+  useEffect(() => {
+    if (video.current) video.current.playbackRate = rate;
+  }, [rate]);
+
+  // --------------------------------------------------------------- render
+
+  const percent = (seconds: number) =>
+    duration > 0 ? `${Math.min(100, (seconds / duration) * 100)}%` : "0%";
+
+  return (
+    <div className="relative flex min-w-0 flex-1 flex-col bg-inset">
+      <div className="relative flex min-h-0 flex-1 items-center justify-center p-6 pb-24">
+        {failed ? (
+          <Unplayable movie={movie} onError={onError} />
+        ) : (
+          <video
+            ref={video}
+            src={src}
+            poster={poster ?? undefined}
+            // The double-click that opened this asked for it to play; wry
+            // leaves WKWebView's autoplay policy open, so it does.
+            autoPlay
+            playsInline
+            loop={loop}
+            controls={false}
+            className="max-h-full max-w-full rounded-xl bg-black shadow-[0_16px_48px_rgb(0_0_0/0.6)]"
+            onClick={toggle}
+            onPlay={() => setPlaying(true)}
+            onPause={() => setPlaying(false)}
+            onLoadedMetadata={(e) => {
+              const el = e.currentTarget as HTMLVideoElement & {
+                audioTracks?: { length: number };
+              };
+              if (Number.isFinite(el.duration)) setDuration(el.duration);
+              // Pick up where the last visit left off, unless that was the
+              // very end of the movie.
+              if (startAt > 0 && startAt < el.duration - 0.5) {
+                el.currentTime = startAt;
+                setTime(startAt);
+              }
+              // `audioTracks` is WebKit's, and this only ever runs in WebKit —
+              // but if it ever isn't there, showing a mute button for a silent
+              // movie is the harmless half of being wrong.
+              setHasAudio(el.audioTracks ? el.audioTracks.length > 0 : true);
+            }}
+            onTimeUpdate={(e) => {
+              const el = e.currentTarget;
+              at.current = el.currentTime >= el.duration - 0.5 ? 0 : el.currentTime;
+              if (!scrubbing.current) setTime(el.currentTime);
+            }}
+            onProgress={(e) => {
+              const ranges = e.currentTarget.buffered;
+              setBuffered(ranges.length > 0 ? ranges.end(ranges.length - 1) : 0);
+            }}
+            // Anything the movie can't do — a missing file, a codec WebKit
+            // won't touch, a path outside the asset protocol's scope — lands
+            // here, and the fallback offers the app that can.
+            onError={() => setFailed(true)}
+          />
+        )}
+
+        {/* A recording opens playing, so the big centre button is only there
+            when it isn't: it says "paused", and it's the easiest possible
+            target for starting again. */}
+        {!failed && !playing && (
+          <button
+            type="button"
+            onClick={toggle}
+            aria-label="Play"
+            className="animate-in-fade absolute inset-0 grid place-items-center"
+          >
+            <span className="grid size-16 place-items-center rounded-full bg-black/55 text-white shadow-[0_8px_32px_rgb(0_0_0/0.5)] backdrop-blur-[2px] transition-transform duration-100 hover:scale-105">
+              <IconPlay className="size-7" width={28} height={28} />
+            </span>
+          </button>
+        )}
+      </div>
+
+      {!failed && (
+        <div className="pointer-events-none absolute inset-x-0 bottom-5 z-40 flex justify-center px-6">
+          <div className="surface-float pointer-events-auto flex w-full max-w-[720px] items-center gap-1.5 rounded-2xl px-2.5 py-1.5">
+            <IconButton
+              icon={<IconSkipBack />}
+              label={`Back ${SKIP} seconds`}
+              shortcut="ArrowLeft"
+              tooltipSide="top"
+              onClick={() => seek((video.current?.currentTime ?? 0) - SKIP)}
+            />
+            <IconButton
+              icon={playing ? <IconPause /> : <IconPlay />}
+              label={playing ? "Pause" : "Play"}
+              shortcut="Space"
+              tooltipSide="top"
+              onClick={toggle}
+            />
+            <IconButton
+              icon={<IconSkipForward />}
+              label={`Forward ${SKIP} seconds`}
+              shortcut="ArrowRight"
+              tooltipSide="top"
+              onClick={() => seek((video.current?.currentTime ?? 0) + SKIP)}
+            />
+
+            <span className="ml-1 shrink-0 font-mono text-[11px] tabular-nums text-ink-2">
+              {formatDuration(time)}
+            </span>
+
+            {/* The bar is three stacked layers: what has been watched, what has
+                been fetched behind it, and a real range input on top — which is
+                what makes dragging, and the keyboard, work without reinventing
+                either. */}
+            <div className="relative mx-1 h-1.5 min-w-0 flex-1 rounded-full bg-white/10">
+              <div
+                className="absolute inset-y-0 left-0 rounded-full bg-white/15"
+                style={{ width: percent(buffered) }}
+              />
+              <div
+                className="absolute inset-y-0 left-0 rounded-full bg-accent"
+                style={{ width: percent(time) }}
+              />
+              <input
+                type="range"
+                min={0}
+                max={duration || 0}
+                step={0.05}
+                value={time}
+                aria-label="Seek"
+                onPointerDown={() => (scrubbing.current = true)}
+                onPointerUp={() => (scrubbing.current = false)}
+                onBlur={() => (scrubbing.current = false)}
+                onChange={(e) => seek(Number(e.target.value))}
+                className={clsx(
+                  "absolute inset-0 h-full w-full cursor-pointer appearance-none bg-transparent",
+                  "[&::-webkit-slider-thumb]:size-3 [&::-webkit-slider-thumb]:appearance-none",
+                  "[&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-white",
+                  "[&::-webkit-slider-thumb]:shadow-[0_1px_4px_rgb(0_0_0/0.5)]",
+                )}
+              />
+            </div>
+
+            <span className="shrink-0 font-mono text-[11px] tabular-nums text-ink-4">
+              {formatDuration(duration)}
+            </span>
+
+            <span className="mx-1 h-5 w-px shrink-0 bg-line" />
+
+            <Popover
+              align="center"
+              trigger={({ open, toggle: openMenu }) => (
+                <Tooltip label="Playback speed" side="top">
+                  <button
+                    type="button"
+                    onClick={openMenu}
+                    aria-expanded={open}
+                    className={clsx(
+                      "no-drag h-[30px] shrink-0 rounded-lg px-2 font-mono text-[11px] tabular-nums transition-colors",
+                      rate === 1
+                        ? "text-ink-2 hover:bg-hover hover:text-ink"
+                        : "bg-accent/18 text-accent",
+                      open && "bg-hover text-ink",
+                    )}
+                  >
+                    {rate}×
+                  </button>
+                </Tooltip>
+              )}
+            >
+              {({ close }) => (
+                <div className="w-[104px]">
+                  {RATES.map((r) => (
+                    <button
+                      key={r}
+                      type="button"
+                      aria-current={r === rate}
+                      onClick={() => {
+                        setRate(r);
+                        close();
+                      }}
+                      className={clsx(
+                        "flex w-full items-center justify-between rounded-lg px-2 py-1.5 text-left text-[12.5px] transition-colors hover:bg-hover",
+                        r === rate ? "text-accent" : "text-ink",
+                      )}
+                    >
+                      <span className="font-mono tabular-nums">{r}×</span>
+                      {r === 1 && <span className="text-[11px] text-ink-4">Normal</span>}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </Popover>
+
+            <IconButton
+              icon={<IconLoop />}
+              label="Loop"
+              active={loop}
+              tooltipSide="top"
+              onClick={() => setLoop((v) => !v)}
+            />
+
+            {hasAudio && (
+              <IconButton
+                icon={muted ? <IconMute /> : <IconVolume />}
+                label={muted ? "Unmute" : "Mute"}
+                shortcut="M"
+                active={muted}
+                tooltipSide="top"
+                onClick={() => {
+                  const el = video.current;
+                  if (!el) return;
+                  el.muted = !el.muted;
+                  setMuted(el.muted);
+                }}
+              />
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * What the pane shows when the movie won't load.
+ *
+ * Never a blank rectangle: the two things that can go wrong here — a file
+ * moved out from under the library, and a codec WebKit declines — both have
+ * the same answer, which is the app that does play it.
+ */
+function Unplayable({ movie, onError }: { movie: Movie; onError: (message: string) => void }) {
+  return (
+    <div className="max-w-[380px] text-center">
+      <p className="text-[13.5px] font-medium text-ink">Shotly can’t play this one</p>
+      <p className="mt-1.5 text-[12px] leading-relaxed text-ink-3">
+        The file may have moved, or it may be in a format this window can’t decode. It should
+        still open in whatever plays movies on this Mac.
+      </p>
+      <div className="mt-4 flex justify-center gap-2">
+        <button
+          type="button"
+          onClick={() =>
+            void ipc
+              .openExternally(movie.path)
+              .catch((e) => onError(`Could not open that recording: ${e}`))
+          }
+          className="flex h-8 items-center gap-1.5 rounded-lg bg-accent px-3 text-[12.5px] font-semibold text-accent-fg transition-colors hover:bg-accent-hi"
+        >
+          <IconPlay />
+          Open in the movie player
+        </button>
+        <button
+          type="button"
+          onClick={() => void ipc.revealInFinder(movie.path)}
+          className="flex h-8 items-center gap-1.5 rounded-lg bg-white/[0.07] px-3 text-[12.5px] font-medium text-ink transition-colors hover:bg-white/[0.11]"
+        >
+          <IconFolder />
+          Show in Finder
+        </button>
+      </div>
+    </div>
+  );
+}

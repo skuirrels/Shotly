@@ -22,6 +22,7 @@ import {
   IconPen,
   IconGear,
   IconPin,
+  IconPlay,
   IconRecord,
   IconRedo,
   IconRefresh,
@@ -45,6 +46,7 @@ import { Canvas } from "./Canvas";
 import { CommandPalette } from "./CommandPalette";
 import { EmptyLibrary, PermissionNotice } from "./EmptyState";
 import { Library } from "./Library";
+import { Player, type Movie } from "./Player";
 import { RecentStrip } from "./RecentStrip";
 import { Settings, type SettingsTab } from "./Settings";
 import { WindowPicker } from "./WindowPicker";
@@ -58,6 +60,9 @@ import type { View } from "./view";
 
 /** Consecutive nudges within this window collapse into one undo step. */
 const NUDGE_COALESCE_MS = 600;
+
+/** Whether a saved path is a recording, and so has a player to offer. */
+const isMovie = (path: string) => /\.(mov|mp4|m4v)$/i.test(path);
 
 /**
  * `name` inside the user's Downloads folder.
@@ -98,6 +103,16 @@ export function EditorApp() {
   /** Bumped whenever the library's contents change on disk. */
   const [libraryKey, setLibraryKey] = useState(0);
   const [view, setView] = useState<View>("library");
+  /**
+   * The recording the player is holding.
+   *
+   * Kept here rather than inside the player so that switching to the library
+   * and back doesn't reload the movie — and so the Player tab has something to
+   * offer at all.
+   */
+  const [movie, setMovie] = useState<Movie | null>(null);
+  /** How far into that recording you had got, so the Player tab holds a place. */
+  const resume = useRef<{ path: string; at: number } | null>(null);
   /** Library captures picked for a bulk action, by path. */
   const [picked, setPicked] = useState<string[]>([]);
   /**
@@ -315,10 +330,26 @@ export function EditorApp() {
    * Leaving the editor refreshes the library, because the capture on screen
    * has very likely just been saved into it.
    */
-  const showView = useCallback((next: View) => {
-    if (next === "editor" && !useEditor.getState().doc) return;
-    if (next === "library") setLibraryKey((k) => k + 1);
-    setView(next);
+  const showView = useCallback(
+    (next: View) => {
+      if (next === "editor" && !useEditor.getState().doc) return;
+      if (next === "player" && !movie) return;
+      if (next === "library") setLibraryKey((k) => k + 1);
+      setView(next);
+    },
+    [movie],
+  );
+
+  /**
+   * Watch a recording.
+   *
+   * The player is a pane like the editor, not a window: a recording is part of
+   * the same library as everything else, and sending it out to another app was
+   * a strange place for Shotly to stop.
+   */
+  const playMovie = useCallback((next: Movie) => {
+    setMovie(next);
+    setView("player");
   }, []);
 
   /** Load an image from disk — the same entry point for ⌘O and for drag-drop. */
@@ -465,6 +496,12 @@ export function EditorApp() {
         setPicked((prev) => prev.filter((p) => !paths.includes(p)));
         setRecentPicked((prev) => prev.filter((p) => !paths.includes(p)));
         setLibraryKey((k) => k + 1);
+        // The player can't go on showing a file that is now in the Trash —
+        // and the Player tab can't go on offering it.
+        if (movie && paths.includes(movie.path)) {
+          setMovie(null);
+          setView("library");
+        }
         notify(paths.length === 1 ? "Moved to Trash" : `Moved ${paths.length} captures to Trash`);
       } catch (e) {
         notify(`Delete failed: ${e}`, "error");
@@ -472,7 +509,7 @@ export function EditorApp() {
         setBusy(null);
       }
     },
-    [busy, notify],
+    [busy, notify, movie],
   );
 
   const copy = useCallback(async () => {
@@ -1323,18 +1360,34 @@ export function EditorApp() {
     updates.check,
   ]);
 
-  // Modals own the keyboard while they're up.
-  useKeymap(commands, !palette && !sheet && !settings);
-
   // The editor pane needs something to show; without a document the library is
-  // the only thing there is, whatever the last explicit choice was.
-  const activeView: View = doc ? view : "library";
+  // the only thing there is, whatever the last explicit choice was. Same rule
+  // for the player and its movie.
+  const activeView: View =
+    view === "player" ? (movie ? "player" : "library") : doc ? view : "library";
+
+  // Modals own the keyboard while they're up — and so does the player, which
+  // binds Space, the arrows and the rest of a transport for itself. Leaving
+  // the editor's map live underneath would mean an arrow key both seeking the
+  // movie and nudging an annotation in the pane behind it.
+  useKeymap(commands, !palette && !sheet && !settings && activeView !== "player");
 
   return (
     <div className="flex h-full flex-col bg-canvas">
       <TopBar
         view={activeView}
         canEdit={doc !== null}
+        player={
+          movie && {
+            name: movie.name,
+            onReveal: () => void ipc.revealInFinder(movie.path),
+            onExternal: () =>
+              void ipc
+                .openExternally(movie.path)
+                .catch((e) => notify(`Could not open that recording: ${e}`, "error")),
+            onDelete: () => void deleteCaptures([movie.path]),
+          }
+        }
         onView={showView}
         onCapture={startCapture}
         onOpenFile={() => void openFile()}
@@ -1361,6 +1414,14 @@ export function EditorApp() {
             />
             <Canvas onNotify={notify} actions={canvasActions} onScan={scanArea} />
           </>
+        ) : activeView === "player" && movie ? (
+          <Player
+            movie={movie}
+            startAt={resume.current?.path === movie.path ? resume.current.at : 0}
+            onLeave={(at) => (resume.current = { path: movie.path, at })}
+            onClose={() => showView("library")}
+            onError={reportError}
+          />
         ) : (
           // Clicking anywhere that isn't a capture clears the selection, the
           // way it does in Finder. On the whole pane rather than the grid, so
@@ -1384,6 +1445,7 @@ export function EditorApp() {
             <Library
               refreshKey={libraryKey}
               onOpen={openPath}
+              onPlay={playMovie}
               onCopy={(paths) => void copyPaths(paths)}
               onDelete={(paths) => void deleteCaptures(paths)}
               onError={reportError}
@@ -1421,6 +1483,26 @@ export function EditorApp() {
         >
           {toast.tone === "ok" && <IconCheck className="text-success" />}
           <span className="max-w-[420px]">{toast.text}</span>
+
+          {/* A recording that has just been filed is one you almost certainly
+              want to watch — that is what you stopped it for. */}
+          {toast.tone === "ok" && saved && isMovie(saved) && (
+            <button
+              type="button"
+              onClick={() =>
+                playMovie({
+                  path: saved,
+                  name: saved.split("/").pop() ?? "Recording",
+                  modified: Date.now(),
+                  seconds: 0,
+                })
+              }
+              className="ml-1 flex items-center gap-1 rounded-md bg-accent/20 px-2 py-0.5 text-[11.5px] text-accent hover:bg-accent/30"
+            >
+              <IconPlay />
+              Play
+            </button>
+          )}
 
           {toast.tone === "ok" && saved && (
             <button

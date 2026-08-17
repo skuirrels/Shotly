@@ -501,15 +501,47 @@ answer, both handled without a new dependency:
   if it overruns: it is somebody else's process, backed by a daemon, and a
   thumbnail is not worth waiting on for ever.
 
-Double-clicking a recording opens it in whatever plays movies
-(`commands::open_externally`). **Playing it inline would need two things it does
-not have**: a `media-src` in the CSP (`tauri.conf.json` lists only `img-src`, so
-an `asset:` video is refused), and `$DOCUMENT/**` in the asset protocol scope —
-the library lives there, and only `$TEMP` and friends are allowed today, which
-is why thumbnails resolve and the movie itself would not.
-
 The recents rail filters movies out. It sits beside the editor and every row in
 it is one click from being annotated; a row that cannot do that reads as broken.
+
+### Playing one (`Player.tsx`)
+
+Double-clicking a recording opens it in a third pane beside the editor and the
+library — a plain `<video>` element pointed at `convertFileSrc(path)`, so the
+file is streamed off disk by Tauri's asset protocol, which answers range
+requests in one-megabyte slices. A three-hundred-megabyte recording therefore
+starts at once and is never held in memory; nothing new was added to the Rust
+side for any of this.
+
+**Two lines in `tauri.conf.json` are what make it work, and both are easy to
+lose in a merge:**
+
+* `media-src 'self' asset: http://asset.localhost blob:` in the CSP. Without
+  it `default-src` applies, the movie is refused, and the element fires
+  `error` — which shows the "can't play this one" fallback rather than a black
+  rectangle, so the symptom is quiet.
+* `$DOCUMENT/Shotly/**` in `assetProtocol.scope`. The capture folder and
+  nothing else: `$DOCUMENT/**` would hand the webview every document on the
+  machine to satisfy one directory. The scope's first path component is
+  resolved against `document_dir()`, the same call `commands::library_dir`
+  makes, so the two cannot drift.
+
+Everything else is in the component:
+
+* The library's poster frame is the `poster` attribute, so the first frame is
+  on screen before the movie has decoded anything.
+* The mute button only appears when `audioTracks` is non-empty. Shotly's own
+  recordings are silent — `screencapture -v` without `-g` — and a mute button
+  for silence is a control that does nothing.
+* **The editor's keymap is switched off in this view** (`useKeymap(commands,
+  … && activeView !== "player")`) and the player binds its own keys. Space,
+  the arrows and Home/End all mean something in both maps; leaving both live
+  meant an arrow seeking the movie *and* nudging an annotation in the pane
+  behind it. Escape, ⌘W and ⌘L leave the player, which is why they are in its
+  handler too — nothing else is listening.
+* `harness/player.html` runs the whole pane in a browser against a generated
+  test clip. What it cannot reach is the asset protocol, which is exactly the
+  half that the two config lines above govern — check that in the app.
 
 ## Window level and Spaces — the rule for every overlay
 

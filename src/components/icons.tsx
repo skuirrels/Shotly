@@ -136,6 +136,54 @@ export const IconPlay = (p: SVGProps<SVGSVGElement>) => (
   </Icon>
 );
 
+/** Two solid bars — play's opposite, in the player's transport. */
+export const IconPause = (p: SVGProps<SVGSVGElement>) => (
+  <Icon {...p}>
+    <rect x="4.2" y="3.4" width="2.6" height="9.2" rx="0.8" fill="currentColor" stroke="none" />
+    <rect x="9.2" y="3.4" width="2.6" height="9.2" rx="0.8" fill="currentColor" stroke="none" />
+  </Icon>
+);
+
+/** An arrow curling anticlockwise: jump back a few seconds. */
+export const IconSkipBack = (p: SVGProps<SVGSVGElement>) => (
+  <Icon {...p}>
+    <path d="M2.8 8a5.2 5.2 0 1 1 1.6 3.8" />
+    <path d="M2.5 4.2v3.4h3.4" />
+  </Icon>
+);
+
+/** The same, mirrored: jump forward. */
+export const IconSkipForward = (p: SVGProps<SVGSVGElement>) => (
+  <Icon {...p}>
+    <path d="M13.2 8a5.2 5.2 0 1 0-1.6 3.8" />
+    <path d="M13.5 4.2v3.4h-3.4" />
+  </Icon>
+);
+
+/** A loop of track with an arrowhead on it: play this again at the end. */
+export const IconLoop = (p: SVGProps<SVGSVGElement>) => (
+  <Icon {...p}>
+    <path d="M4.5 4.5h7a2.5 2.5 0 0 1 2.5 2.5v.5M11.5 11.5h-7A2.5 2.5 0 0 1 2 9v-.5" />
+    <path d="M9.6 2.6 11.5 4.5 9.6 6.4M6.4 9.6 4.5 11.5l1.9 1.9" />
+  </Icon>
+);
+
+/** A speaker with sound coming out of it. */
+export const IconVolume = (p: SVGProps<SVGSVGElement>) => (
+  <Icon {...p}>
+    <path d="M8.5 2.8 5 5.8H2.5v4.4H5l3.5 3z" />
+    <path d="M11 5.8a3.2 3.2 0 0 1 0 4.4M13 3.8a6 6 0 0 1 0 8.4" />
+  </Icon>
+);
+
+/** The same speaker, crossed out. */
+export const IconMute = (p: SVGProps<SVGSVGElement>) => (
+  <Icon {...p}>
+    <path d="M8.5 2.8 5 5.8H2.5v4.4H5l3.5 3z" />
+    <path d="m11 6 3.5 4M14.5 6 11 10" />
+  </Icon>
+);
+
 /** The record button everyone knows: a filled dot in a ring. */
 export const IconRecord = (p: SVGProps<SVGSVGElement>) => (
   <Icon {...p}>
@@ -354,6 +402,14 @@ export const IconPen = (p: SVGProps<SVGSVGElement>) => (
 export const IconBack = (p: SVGProps<SVGSVGElement>) => (
   <Icon {...p}>
     <path d="M13 8H3.5M7 3.5 2.5 8 7 12.5" />
+  </Icon>
+);
+
+/** An arrow leaving a box: hand this to another app. */
+export const IconExternal = (p: SVGProps<SVGSVGElement>) => (
+  <Icon {...p}>
+    <path d="M12.5 9.2v3a1.5 1.5 0 0 1-1.5 1.5H3.8a1.5 1.5 0 0 1-1.5-1.5V5a1.5 1.5 0 0 1 1.5-1.5h3" />
+    <path d="M9.5 2.5h4v4M13.5 2.5 7.8 8.2" />
   </Icon>
 );
 

@@ -3,6 +3,7 @@ import clsx from "clsx";
 import {
   IconClose,
   IconCopy,
+  IconExternal,
   IconFolder,
   IconImage,
   IconCanvas,
@@ -23,6 +24,8 @@ import { useThumbnail } from "./thumbnails";
 
 interface Props {
   onOpen: (path: string) => void;
+  /** Watch a recording in Shotly's own player. */
+  onPlay: (item: LibraryItem) => void;
   /** Copy captures to the clipboard. Confirms nothing; see `onDelete`. */
   onCopy: (paths: string[]) => void;
   /** Move captures to the Trash. Asks first — this can act on a whole selection. */
@@ -52,6 +55,7 @@ interface Props {
  */
 export function Library({
   onOpen,
+  onPlay,
   onCopy,
   onDelete,
   refreshKey,
@@ -248,8 +252,18 @@ export function Library({
       !many && {
         label: allVideo ? "Play" : "Open",
         icon: allVideo ? <IconPlay /> : <IconImage />,
-        run: () =>
-          allVideo ? void ipc.openExternally(targets[0]) : onOpen(targets[0]),
+        run: () => {
+          const item = byPath.get(targets[0]);
+          if (allVideo && item) onPlay(item);
+          else onOpen(targets[0]);
+        },
+      },
+      // Shotly plays it in its own pane; this is for when you want the movie
+      // somewhere it can be trimmed, shared, or watched full screen.
+      !many && allVideo && {
+        label: "Open in the movie player",
+        icon: <IconExternal />,
+        run: () => void ipc.openExternally(targets[0]),
       },
       !anyVideo && {
         label: many ? `Copy ${targets.length} captures` : "Copy",
@@ -413,6 +427,7 @@ export function Library({
                 selected={selected.includes(item.path)}
                 onChoose={choose}
                 onOpen={onOpen}
+                onPlay={onPlay}
                 onTrash={trash}
                 onMenu={openMenu}
               />
@@ -433,6 +448,7 @@ function LibraryCard({
   selected,
   onChoose,
   onOpen,
+  onPlay,
   onTrash,
   onMenu,
 }: {
@@ -440,13 +456,14 @@ function LibraryCard({
   selected: boolean;
   onChoose: (item: LibraryItem, modifiers: { meta: boolean; shift: boolean }) => void;
   onOpen: (path: string) => void;
+  onPlay: (item: LibraryItem) => void;
   onTrash: (item: LibraryItem) => void;
   onMenu: (item: LibraryItem, at: { x: number; y: number }) => void;
 }) {
   const { url: thumb, failed } = useThumbnail(item.path, item.modified);
-  // A recording goes to whatever plays movies. Double-click means "open this"
-  // in both cases; what "open" means is the only thing that differs.
-  const open = () => (item.video ? void ipc.openExternally(item.path) : onOpen(item.path));
+  // Double-click means "open this" whichever kind it is; a still goes to the
+  // editor and a recording to the player, and neither leaves the app.
+  const open = () => (item.video ? onPlay(item) : onOpen(item.path));
 
   return (
     // Tagged so a click anywhere else in the pane can clear the selection.

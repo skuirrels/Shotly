@@ -5,10 +5,12 @@ import {
   IconChevronDown,
   IconCopy,
   IconDisplay,
+  IconExternal,
   IconFit,
   IconFolder,
   IconGrid,
   IconImage,
+  IconPlay,
   IconRedo,
   IconRegion,
   IconSave,
@@ -31,10 +33,20 @@ import type { CaptureMode } from "@/lib/types";
 import { useEditor } from "@/state/editorStore";
 import type { View } from "./view";
 
+/** What the bar shows in place of the editing controls while a movie is open. */
+export interface PlayerBar {
+  name: string;
+  onReveal: () => void;
+  onExternal: () => void;
+  onDelete: () => void;
+}
+
 interface Props {
   view: View;
   /** Whether there is a capture to switch back to. */
   canEdit: boolean;
+  /** The recording the player is holding, if there is one. */
+  player: PlayerBar | null;
   onView: (view: View) => void;
   onCapture: (mode: CaptureMode) => void;
   onOpenFile: () => void;
@@ -66,6 +78,7 @@ const MODES: { mode: CaptureMode; label: string; hint: string; shortcut: string;
 export function TopBar({
   view,
   canEdit,
+  player,
   onView,
   onCapture,
   onOpenFile,
@@ -87,6 +100,11 @@ export function TopBar({
   const canRedo = useEditor((s) => s.future.length > 0);
 
   const editing = view === "editor";
+  // Copy and Delete act on the library's selection, so they belong to the
+  // library and not merely to "not the editor" — the player has a selection of
+  // exactly one, and it is the movie on screen, which the player says itself.
+  const browsing = view === "library";
+  const watching = view === "player" && player !== null;
 
   return (
     // `data-tauri-drag-region` is what actually makes this a title bar: it
@@ -100,7 +118,7 @@ export function TopBar({
       data-tauri-drag-region
       className="titlebar-drag relative z-30 flex h-12 shrink-0 items-center gap-1 border-b border-line-subtle bg-surface pr-2.5 pl-[86px]"
     >
-      <ViewSwitch view={view} canEdit={canEdit} onView={onView} />
+      <ViewSwitch view={view} canEdit={canEdit} canPlay={player !== null} onView={onView} />
 
       {editing && (
         <>
@@ -129,12 +147,20 @@ export function TopBar({
           while a button says "Saving…" is the cheaper of the two. */}
       <div className="pointer-events-none flex min-w-0 flex-1 justify-center px-2">
         {editing && doc && <ResizePicker />}
+        {/* The player has no document, so the space the resize control would
+            occupy carries the one thing it can't show elsewhere: which
+            recording you are watching. */}
+        {watching && (
+          <p className="truncate text-[12.5px] font-medium text-ink-2" title={player.name}>
+            {player.name.replace(/\.(mov|mp4|m4v)$/i, "")}
+          </p>
+        )}
       </div>
 
       <div className="flex shrink-0 items-center gap-1">
         {/* Copying straight from the library skips a round trip through the
             editor when all you wanted was to paste a shot somewhere. */}
-        {!editing && (
+        {browsing && (
           <Tooltip
             label={pickedCount > 0 ? "Copy selected captures" : "Select a capture to copy"}
             shortcut="Mod+C"
@@ -157,7 +183,7 @@ export function TopBar({
         )}
 
         {/* Destructive, so it stays quiet until hovered and always asks first. */}
-        {!editing && (
+        {browsing && (
           <Tooltip
             label={pickedCount > 0 ? "Move selected captures to Trash" : "Select a capture to delete"}
             shortcut="Backspace"
@@ -172,6 +198,40 @@ export function TopBar({
               {busy === "delete" ? "Deleting…" : "Delete"}
             </button>
           </Tooltip>
+        )}
+
+        {/* Everything you might want to do to a recording that isn't playing
+            it. Trashing one you have just watched is the common case — that is
+            usually why you watched it — so it earns a button rather than a
+            trip back to the grid. */}
+        {watching && (
+          <>
+            <IconButton
+              icon={<IconFolder />}
+              label="Show in Finder"
+              onClick={player.onReveal}
+            />
+            <Tooltip label="Open in the system movie player">
+              <button
+                type="button"
+                onClick={player.onExternal}
+                className="no-drag mr-1 flex h-8 items-center gap-1.5 rounded-lg bg-white/[0.07] px-2.5 text-[12.5px] font-medium text-ink transition-colors hover:bg-white/[0.11] active:bg-white/[0.14]"
+              >
+                <IconExternal />
+                Open in…
+              </button>
+            </Tooltip>
+            <Tooltip label="Move this recording to the Trash">
+              <button
+                type="button"
+                onClick={player.onDelete}
+                className="no-drag mr-1 flex h-8 items-center gap-1.5 rounded-lg bg-white/[0.07] px-2.5 text-[12.5px] font-medium text-ink transition-colors hover:bg-danger/18 hover:text-danger active:bg-danger/25"
+              >
+                <IconTrash />
+                Delete
+              </button>
+            </Tooltip>
+          </>
         )}
 
         <CaptureMenu onCapture={onCapture} onOpenFile={onOpenFile} />
@@ -264,9 +324,25 @@ export function TopBar({
   );
 }
 
-/** Editor / Library, as a segmented control. */
-function ViewSwitch({ view, canEdit, onView }: { view: View; canEdit: boolean; onView: (v: View) => void }) {
-  const segment = (target: View, label: string, icon: ReactNode, shortcut: string, enabled: boolean) => (
+/** Editor / Library / Player, as a segmented control. */
+function ViewSwitch({
+  view,
+  canEdit,
+  canPlay,
+  onView,
+}: {
+  view: View;
+  canEdit: boolean;
+  canPlay: boolean;
+  onView: (v: View) => void;
+}) {
+  const segment = (
+    target: View,
+    label: string,
+    icon: ReactNode,
+    shortcut: string | undefined,
+    enabled: boolean,
+  ) => (
     <Tooltip label={label} shortcut={shortcut}>
       <button
         type="button"
@@ -294,6 +370,10 @@ function ViewSwitch({ view, canEdit, onView }: { view: View; canEdit: boolean; o
           a tab that switches to an empty pane is worse than one you can't press. */}
       {segment("editor", "Editor", <IconImage />, "Mod+L", canEdit)}
       {segment("library", "Library", <IconGrid />, "Mod+L", true)}
+      {/* Only while there is a recording to go back to. Unlike the editor tab
+          this one is absent rather than disabled: a permanently dead Player
+          tab would suggest the app plays nothing at all. */}
+      {canPlay && segment("player", "Player", <IconPlay />, undefined, true)}
     </div>
   );
 }

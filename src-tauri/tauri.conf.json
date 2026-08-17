@@ -30,10 +30,17 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self'; connect-src 'self' ipc: http://ipc.localhost; img-src 'self' asset: http://asset.localhost data: blob:; style-src 'self' 'unsafe-inline'; font-src 'self' data:",
+      "csp": "default-src 'self'; connect-src 'self' ipc: http://ipc.localhost; img-src 'self' asset: http://asset.localhost data: blob:; media-src 'self' asset: http://asset.localhost blob:; style-src 'self' 'unsafe-inline'; font-src 'self' data:",
       "assetProtocol": {
         "enable": true,
-        "scope": ["$TEMP/**", "$APPDATA/**", "$PICTURE/**", "$DESKTOP/**", "$DOWNLOAD/**"]
+        "scope": [
+          "$TEMP/**",
+          "$APPDATA/**",
+          "$PICTURE/**",
+          "$DESKTOP/**",
+          "$DOWNLOAD/**",
+          "$DOCUMENT/Shotly/**"
+        ]
       }
     }
   },
