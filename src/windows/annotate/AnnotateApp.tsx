@@ -22,6 +22,7 @@ import { captureStem } from "@/lib/naming";
 import { readColor, readNumber, readString, write } from "@/lib/prefs";
 import {
   arrowPolygon,
+  calloutBaselines,
   fontFor,
   measureText,
   neonBorderForFont,
@@ -30,7 +31,7 @@ import {
   polygonToPath,
   TEXT_PADDING,
 } from "@/lib/shapes";
-import { SWATCHES } from "@/windows/editor/tools";
+import { NEON_SWATCHES, SWATCHES } from "@/windows/editor/tools";
 
 /**
  * Live annotation over the desktop, for screen sharing.
@@ -1130,9 +1131,11 @@ export function AnnotateApp() {
       }
       if (e.metaKey || e.ctrlKey || e.altKey) return;
 
+      // Whichever row the toolbar is showing — see `inks` there.
+      const inks = tool === "callout" ? NEON_SWATCHES : SWATCHES;
       const digit = Number(e.key);
-      if (digit >= 1 && digit <= SWATCHES.length) {
-        applyColor(SWATCHES[digit - 1].value);
+      if (digit >= 1 && digit <= inks.length) {
+        applyColor(inks[digit - 1].value);
         return;
       }
 
@@ -1374,7 +1377,16 @@ function StrokeShape({ stroke, hitArea = false }: { stroke: Stroke; hitArea?: bo
     // laid on a capture are the same object. See `neonPaint`.
     const paint = neonPaint(color, neonBorderForFont(width));
     const radius = neonRadius(box.width, box.height);
-    const first = origin.y + box.pad + box.lineHeight * 0.8;
+    // Centred as a block, by the same call the editor makes. Doing it by hand
+    // from the padding was wrong twice over: `measureText` already carries
+    // TEXT_PADDING inside its height, so adding the callout's own padding to
+    // the top and starting a baseline from there hung the words above where
+    // they belonged.
+    const baselines = calloutBaselines(
+      { y: origin.y, height: box.height },
+      { lines: box.lines, lineHeight: box.lineHeight },
+      width,
+    );
 
     return (
       <g>
@@ -1396,12 +1408,13 @@ function StrokeShape({ stroke, hitArea = false }: { stroke: Stroke; hitArea?: bo
           }}
         />
         <text
-          x={origin.x + box.pad}
+          x={origin.x + box.width / 2}
+          textAnchor="middle"
           fill={paint.ink}
           style={{ font: fontFor(width), whiteSpace: "pre" }}
         >
           {box.lines.map((line, i) => (
-            <tspan key={i} x={origin.x + box.pad} y={first + i * box.lineHeight}>
+            <tspan key={i} x={origin.x + box.width / 2} y={baselines[i]}>
               {line || " "}
             </tspan>
           ))}
@@ -1557,7 +1570,7 @@ function TextBox({
   // which is the whole point of styling the box to match the shape.
   const neon = draft.tool === "callout";
   const paint = neonPaint(draft.color, neonBorderForFont(draft.size));
-  const pad = neon ? CALLOUT_PAD : TEXT_PADDING;
+  const pad = CALLOUT_PAD;
 
   return (
     <textarea
@@ -1582,7 +1595,11 @@ function TextBox({
         color: neon ? paint.ink : draft.color,
         font: fontFor(draft.size),
         lineHeight: 1.3,
-        padding: pad,
+        // `m` already carries TEXT_PADDING inside it, so the callout's own
+        // padding goes on top of that — which is exactly what `typedBox` adds
+        // to the shape this becomes.
+        padding: neon ? pad + TEXT_PADDING : TEXT_PADDING,
+        textAlign: neon ? "center" : "left",
         width: Math.max(m.width, draft.size * 3) + (neon ? pad * 2 : 0),
         height: m.height + (neon ? pad * 2 : 0),
         caretColor: neon ? paint.ink : draft.color,
@@ -1672,6 +1689,11 @@ function Toolbar({
   // Down the side, the bar runs the other way and drops its labels — a column
   // wide enough to read "Click through" would be a column covering the screen.
   const vertical = isVertical(dock.edge);
+  // The ink row follows the tool in hand. A neon callout wants the colours
+  // that survive being lit, and they are no use to a hairline arrow — showing
+  // both rows at once would put thirteen circles on a bar that has to sit on
+  // top of whatever is being demonstrated.
+  const inks = tool === "callout" ? NEON_SWATCHES : SWATCHES.slice(0, 6);
   const anchor = dockAnchor(dock);
 
   /**
@@ -1865,7 +1887,7 @@ function Toolbar({
 
         <Divider barVertical={vertical} />
 
-        {SWATCHES.slice(0, 6).map((s, i) => (
+        {inks.map((s, i) => (
           <button
             key={s.value}
             type="button"
