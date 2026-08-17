@@ -90,6 +90,15 @@ nobody who installs Shotly ever sees a Google Cloud console. It is **not in the
 repository**: it comes from the environment at compile time, through
 `option_env!` in `share/gauth.rs`.
 
+`npm run publish` will not proceed until Google itself confirms the client
+exists — `scripts/check-google-client.mjs` redeems a deliberately nonsense
+authorization code and requires the answer to be `invalid_grant` ("your code is
+rubbish") rather than `invalid_client` ("who are you?"). That check exists
+because **0.9.3 shipped with placeholder credentials**: they were the right
+shape, a format check passed them, and the release looked healthy until the
+first person pressed Copy link. Only Google can tell an invented client from a
+real one, so only Google is asked.
+
 Put them in `.env.release`, which `npm run release` and `npm run bundle` source
 and `.gitignore` excludes:
 
