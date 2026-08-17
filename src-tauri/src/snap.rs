@@ -55,7 +55,13 @@ use std::sync::Mutex;
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder};
 
-pub const LABEL: &str = "snap";
+/// Overlay windows are labelled `snap-0`, `snap-1`, one per display.
+///
+/// One window spanning the whole desktop was the obvious shape and the wrong
+/// one: macOS confines a window to a single display's Space, so it painted on
+/// whichever screen was active and left the others bare — the outline simply
+/// did not exist on the second monitor. The capability file matches `snap-*`.
+const LABEL_PREFIX: &str = "snap-";
 
 /// How often the outline reconsiders where it should be.
 ///
@@ -124,9 +130,13 @@ const VERDICT_CANCEL: u8 = 2;
 pub struct SnapState {
     pub last_beat: Mutex<Option<Instant>>,
     pub ready: Mutex<bool>,
-    /// The outline as last worked out, kept so that it can be handed to the
-    /// page the moment the page exists to receive it.
+    /// The outline as last worked out — in global points, not any one page's
+    /// coordinates — kept so it can be handed to a page the moment that page
+    /// exists to receive it.
     last: Mutex<Option<Highlight>>,
+    /// Every open overlay and the origin of the display it covers, which is
+    /// what turns a global rectangle into that page's own coordinates.
+    overlays: Mutex<Vec<(String, (f64, f64))>>,
 }
 
 /// Where the outline should be, in the overlay page's own coordinates.
@@ -247,59 +257,101 @@ pub fn begin(app: &AppHandle) -> Result<(), String> {
         *state.ready.lock().unwrap() = false;
     }
 
-    let origin = match open_overlay(app) {
-        Ok(origin) => origin,
-        Err(err) => {
-            ACTIVE.store(false, Ordering::SeqCst);
-            return Err(err);
-        }
-    };
+    if let Err(err) = open_overlays(app) {
+        ACTIVE.store(false, Ordering::SeqCst);
+        return Err(err);
+    }
 
     commands::conceal_for_capture(app);
 
     // No tap yet: `snap_ready` starts it, once there is an outline to see.
-    spawn_tracker(app.clone(), generation, origin);
+    spawn_tracker(app.clone(), generation);
     spawn_watchdog(app.clone(), generation);
 
     eprintln!("[snap] session {generation} open");
     Ok(())
 }
 
-/// The full-screen, permanently mouse-transparent window the outline is drawn
-/// in. Returns the origin of the virtual desktop, which is what the page's own
-/// coordinates are offset by.
-fn open_overlay(app: &AppHandle) -> Result<(f64, f64), String> {
+/// One transparent, permanently mouse-transparent overlay per display.
+///
+/// Returns nothing: where each one sits is recorded in `SnapState`, because
+/// every later emit needs it to turn a global rectangle into that page's own
+/// coordinates.
+fn open_overlays(app: &AppHandle) -> Result<(), String> {
     let displays = display::displays().map_err(|e| e.to_string())?;
-    let bounds = display::virtual_bounds(&displays).ok_or("no displays")?;
+    if displays.is_empty() {
+        return Err("no displays".into());
+    }
 
-    let window = WebviewWindowBuilder::new(app, LABEL, WebviewUrl::App("snap.html".into()))
-        .title("Shotly Window Capture")
-        .position(bounds.x, bounds.y)
-        .inner_size(bounds.width, bounds.height)
-        .decorations(false)
-        .transparent(true)
-        .always_on_top(true)
-        .shadow(false)
-        .resizable(false)
-        .skip_taskbar(true)
-        .focused(false)
-        .build()
-        .map_err(|e| e.to_string())?;
+    let mut opened: Vec<(String, (f64, f64))> = Vec::with_capacity(displays.len());
 
-    // The one property this whole design rests on, set before the window is
-    // ever composited and never turned off again: an overlay that accepts
-    // clicks is an overlay the outline would snap to instead of the target,
-    // and a desktop nobody can use if the page dies.
-    window.set_ignore_cursor_events(true).map_err(|e| e.to_string())?;
+    for (index, display) in displays.iter().enumerate() {
+        let label = format!("{LABEL_PREFIX}{index}");
+        let bounds = display.bounds;
 
-    crate::platform::elevate_overlay_window(&window)?;
+        let window = WebviewWindowBuilder::new(app, &label, WebviewUrl::App("snap.html".into()))
+            .title("Shotly Window Capture")
+            .position(bounds.x, bounds.y)
+            .inner_size(bounds.width, bounds.height)
+            .decorations(false)
+            .transparent(true)
+            .always_on_top(true)
+            .shadow(false)
+            .resizable(false)
+            .skip_taskbar(true)
+            .focused(false)
+            .build()
+            .map_err(|e| e.to_string())?;
 
-    // Deliberately *not* marked unsharable, though it would keep the outline
-    // out of the crop path's screenshot. It doesn't need to be: the overlay is
+        // The one property this whole design rests on, set before the window is
+        // ever composited and never turned off again: an overlay that accepts
+        // clicks is an overlay the outline would snap to instead of the target,
+        // and a desktop nobody can use if the page dies.
+        window.set_ignore_cursor_events(true).map_err(|e| e.to_string())?;
+
+        crate::platform::elevate_overlay_window(&window)?;
+
+        opened.push((label, (bounds.x, bounds.y)));
+    }
+
+    // Deliberately *not* marked unsharable, though it would keep the outline out
+    // of the crop path's screenshot. They don't need to be: the overlays are
     // closed before anything is photographed, and [`SETTLE`] is what makes that
-    // true. Marking it would also make the outline invisible to every other
+    // true. Marking them would also make the outline invisible to every other
     // recorder — no demo, no screen-share, no bug report could ever show it.
-    Ok((bounds.x, bounds.y))
+    *app.state::<SnapState>().overlays.lock().unwrap() = opened;
+    Ok(())
+}
+
+/// Draw this outline, or clear it, on every display.
+///
+/// The rectangle arrives in global points and each page is handed it in its
+/// own, so a window straddling two screens is drawn by both rather than clipped
+/// to one. The pages are unchanged by any of this: they still receive
+/// coordinates they can use directly, and still decide nothing.
+fn show(app: &AppHandle, target: Option<&Highlight>) {
+    let overlays = app.state::<SnapState>().overlays.lock().unwrap().clone();
+    for (label, (ox, oy)) in overlays {
+        let local = target.map(|h| {
+            let (x, y) = to_page(Rect { x: h.x, y: h.y, width: h.width, height: h.height }, (ox, oy));
+            Highlight { x, y, ..h.clone() }
+        });
+        let _ = app.emit_to(label.as_str(), "snap:target", local);
+    }
+}
+
+/// Say something to every overlay at once.
+fn tell_overlays(app: &AppHandle, event: &str) {
+    let overlays = app.state::<SnapState>().overlays.lock().unwrap().clone();
+    for (label, _) in overlays {
+        let _ = app.emit_to(label.as_str(), event, ());
+    }
+}
+
+/// Is any overlay still on screen?
+fn overlays_alive(app: &AppHandle) -> bool {
+    let overlays = app.state::<SnapState>().overlays.lock().unwrap().clone();
+    overlays.iter().any(|(label, _)| app.get_webview_window(label).is_some())
 }
 
 /// The page has painted, which is the moment the session becomes real.
@@ -326,7 +378,7 @@ pub fn snap_ready(app: AppHandle) {
         (already, current)
     };
 
-    let _ = app.emit_to(LABEL, "snap:target", current);
+    show(&app, current.as_ref());
 
     // Guard against a page that reports ready twice — a reload would otherwise
     // leave two taps fighting over the same click.
@@ -359,8 +411,11 @@ pub fn stop(app: &AppHandle, reason: &str) {
         *state.last.lock().unwrap() = None;
     }
 
-    if let Some(window) = app.get_webview_window(LABEL) {
-        let _ = window.close();
+    let overlays = std::mem::take(&mut *app.state::<SnapState>().overlays.lock().unwrap());
+    for (label, _) in overlays {
+        if let Some(window) = app.get_webview_window(&label) {
+            let _ = window.close();
+        }
     }
 }
 
@@ -546,7 +601,7 @@ fn spawn_tap(_generation: u64) {}
 // ---------------------------------------------------------------- the tracker
 
 /// Follow the pointer, and act on whatever the tap decided.
-fn spawn_tracker(app: AppHandle, generation: u64, origin: (f64, f64)) {
+fn spawn_tracker(app: AppHandle, generation: u64) {
     std::thread::spawn(move || {
         let stack = Stack::take();
         let mut shown: Option<Highlight> = None;
@@ -593,7 +648,7 @@ fn spawn_tracker(app: AppHandle, generation: u64, origin: (f64, f64)) {
                 // all, which reads as a broken feature rather than a locked one,
                 // so say so on the overlay and ask once the session is over.
                 if !ax::trusted() && !WANTED_AX.swap(true, Ordering::SeqCst) {
-                    let _ = app.emit_to(LABEL, "snap:needs-accessibility", ());
+                    tell_overlays(&app, "snap:needs-accessibility");
                 }
             }
 
@@ -618,7 +673,7 @@ fn spawn_tracker(app: AppHandle, generation: u64, origin: (f64, f64)) {
             }
             last = Some((x, y, level));
 
-            let found = resolve(&stack, x, y, level, origin, &mut anchor);
+            let found = resolve(&stack, x, y, level, &mut anchor);
             let (node, next) = match found {
                 Some((node, highlight)) => (Some(node), Some(highlight)),
                 None => (None, None),
@@ -630,7 +685,7 @@ fn spawn_tracker(app: AppHandle, generation: u64, origin: (f64, f64)) {
                 // Recorded before it is sent, so that a page which is not
                 // listening yet can be given it on `snap_ready`.
                 *app.state::<SnapState>().last.lock().unwrap() = next.clone();
-                let _ = app.emit_to(LABEL, "snap:target", next);
+                show(&app, next.as_ref());
             }
 
             std::thread::sleep(POLL);
@@ -745,7 +800,6 @@ fn resolve(
     x: f64,
     y: f64,
     level: i32,
-    origin: (f64, f64),
     anchor: &mut Option<Anchor>,
 ) -> Option<(ax::Node, Highlight)> {
     let (window, mut node, mut level, depth) = if level == 0 {
@@ -775,10 +829,11 @@ fn resolve(
         return None;
     }
 
-    let (x, y) = to_page(node.rect, origin);
+    // Global points. Each overlay is handed these in its own coordinates when
+    // they are drawn — see `show`.
     let highlight = Highlight {
-        x,
-        y,
+        x: node.rect.x,
+        y: node.rect.y,
         width: node.rect.width,
         height: node.rect.height,
         label: caption(&node),
@@ -793,9 +848,9 @@ fn resolve(
 
 /// Global point space to the overlay page's own coordinates.
 ///
-/// They differ by the origin of the virtual desktop, which is only zero when
-/// the primary display is the top-left one — a second screen placed above or to
-/// the left of it makes this negative.
+/// They differ by the origin of the display that page covers, which is zero
+/// only for a primary display at the top left — a screen placed above or to the
+/// left of it has a negative origin, and every overlay has its own.
 fn to_page(rect: Rect, origin: (f64, f64)) -> (f64, f64) {
     (rect.x - origin.0, rect.y - origin.1)
 }
@@ -921,7 +976,7 @@ fn spawn_watchdog(app: AppHandle, generation: u64) {
             }
 
             // Gone the ordinary way, with the tracker still tidying up.
-            if app.get_webview_window(LABEL).is_none() {
+            if !overlays_alive(&app) {
                 return;
             }
 
@@ -1066,11 +1121,16 @@ mod tests {
     }
 
     #[test]
-    fn the_outline_is_offset_by_the_virtual_desktops_origin() {
-        // A second display above and to the left of the primary one puts the
-        // overlay's origin in negative coordinates; a window on the primary
-        // display then sits at a *larger* offset inside the page.
-        assert_eq!(to_page(rect(0.0, 0.0, 100.0, 100.0), (-1920.0, -200.0)), (1920.0, 200.0));
+    fn each_overlay_is_handed_the_outline_in_its_own_coordinates() {
+        // One overlay per display, each offset by the display it covers. The
+        // same global rectangle therefore has a different position in each
+        // page, which is what lets a window straddling two screens be drawn by
+        // both instead of clipped to one.
+        let window = rect(-1000.0, -100.0, 900.0, 600.0);
+        // On a second display placed above and to the left of the primary.
+        assert_eq!(to_page(window, (-2048.0, -253.0)), (1048.0, 153.0));
+        // The primary display's own overlay sees it off to the left, negative.
+        assert_eq!(to_page(window, (0.0, 0.0)), (-1000.0, -100.0));
         // The ordinary single-screen case changes nothing.
         assert_eq!(to_page(rect(13.0, 51.0, 1484.0, 838.0), (0.0, 0.0)), (13.0, 51.0));
     }

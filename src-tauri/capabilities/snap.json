@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "snap",
-  "description": "Capabilities for the window-capture outline. It draws and reports a heartbeat, and never accepts a click — the session's input is owned by an event tap in Rust, not by this window.",
-  "windows": ["snap"],
+  "description": "Capabilities for the window-capture outline. One window per display, labelled snap-0, snap-1 and so on: macOS confines a window to one display's Space, so a single overlay spanning the desktop paints on one screen and leaves the others bare. Each draws and reports a heartbeat, and none ever accepts a click — the session's input is owned by an event tap in Rust, not by these windows.",
+  "windows": ["snap-*"],
   "permissions": ["core:default"]
 }

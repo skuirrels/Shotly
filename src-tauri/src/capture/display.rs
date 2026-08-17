@@ -213,22 +213,4 @@ mod imp {
 
 pub use imp::{displays, windows};
 
-/// The union of every display: the rect the selection overlay must cover.
-pub fn virtual_bounds(displays: &[DisplayInfo]) -> Option<Rect> {
-    let first = displays.first()?;
-    let mut min_x = first.bounds.x;
-    let mut min_y = first.bounds.y;
-    let mut max_x = first.bounds.x + first.bounds.width;
-    let mut max_y = first.bounds.y + first.bounds.height;
-
-    for d in displays.iter().skip(1) {
-        min_x = min_x.min(d.bounds.x);
-        min_y = min_y.min(d.bounds.y);
-        max_x = max_x.max(d.bounds.x + d.bounds.width);
-        max_y = max_y.max(d.bounds.y + d.bounds.height);
-    }
-
-    Some(Rect { x: min_x, y: min_y, width: max_x - min_x, height: max_y - min_y })
-}
-
 
