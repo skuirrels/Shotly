@@ -88,18 +88,51 @@ fn entry(key: &str) -> Result<keyring::Entry, String> {
     keyring::Entry::new(SERVICE, key).map_err(|e| format!("no keychain access: {e}"))
 }
 
+/// What the keychain has already been asked, so it is asked once per launch.
+///
+/// Not an optimisation — a keychain read is fast. It is about the *prompt*.
+/// macOS binds a keychain item to the app that made it, and when that app's
+/// signature no longer matches (a rebuild, an update, a repair install) every
+/// single read raises "Shotly wants to use your keychain". This module read on
+/// every call: `connected()` read one item, `client()` read another, and
+/// `share_providers` asks both of every provider — so merely *looking* at
+/// Settings was two dialogs, and a session's worth of looking was ten. Reading
+/// once per process turns the worst case into one dialog per item, and Always
+/// Allow into a decision that actually sticks.
+///
+/// A miss is cached too. "There is no refresh token" is an answer, and asking
+/// the keychain to confirm it repeatedly is what produced the pile of prompts.
+static CACHE: Mutex<Option<std::collections::HashMap<String, Option<String>>>> = Mutex::new(None);
+
 fn read(key: &str) -> Option<String> {
-    entry(key).ok()?.get_password().ok()
+    let mut cache = CACHE.lock().unwrap();
+    let known = cache.get_or_insert_with(Default::default);
+    if let Some(answer) = known.get(key) {
+        return answer.clone();
+    }
+    let answer = entry(key).ok().and_then(|e| e.get_password().ok());
+    known.insert(key.to_string(), answer.clone());
+    answer
 }
 
 fn write(key: &str, value: &str) -> Result<(), String> {
-    entry(key)?.set_password(value).map_err(|e| format!("could not use the keychain: {e}"))
+    entry(key)?.set_password(value).map_err(|e| format!("could not use the keychain: {e}"))?;
+    remember_secret(key, Some(value.to_string()));
+    Ok(())
 }
 
 fn forget(key: &str) {
     if let Ok(entry) = entry(key) {
         let _ = entry.delete_credential();
     }
+    remember_secret(key, None);
+}
+
+/// Keep the cache honest after a write or a delete, so nothing has to go back
+/// to the keychain — and so a disconnect is visible immediately.
+fn remember_secret(key: &str, value: Option<String>) {
+    let mut cache = CACHE.lock().unwrap();
+    cache.get_or_insert_with(Default::default).insert(key.to_string(), value);
 }
 
 pub fn client() -> Option<Client> {
@@ -237,33 +270,51 @@ struct TokenReply {
     expires_in: u64,
 }
 
-fn exchange(client: &Client, form: &[(&str, &str)]) -> Result<TokenReply, String> {
-    let reply = ureq::post(TOKEN_URL)
+/// What Google's refusal actually said.
+///
+/// Its errors are JSON with a machine-readable `error` and a sentence for
+/// people, and both matter: the sentence is what gets shown, and `token()`
+/// reads `invalid_grant` out of the same string to decide whether to give up on
+/// a stored refresh token.
+fn refusal(reply: &str) -> String {
+    #[derive(Deserialize)]
+    struct Failure {
+        error: String,
+        #[serde(default)]
+        error_description: String,
+    }
+    match serde_json::from_str::<Failure>(reply) {
+        Ok(f) if !f.error_description.is_empty() => {
+            format!("Google refused ({}): {}", f.error, f.error_description)
+        }
+        Ok(f) => format!("Google refused: {}", f.error),
+        Err(_) => {
+            format!("Google's reply made no sense: {}", reply.chars().take(200).collect::<String>())
+        }
+    }
+}
+
+fn exchange(form: &[(&str, &str)]) -> Result<TokenReply, String> {
+    // `http_status_as_error(false)` is the whole point of this call, not a
+    // detail. Every refusal from the token endpoint is a 4xx *carrying the
+    // reason in its body*, and ureq's default turns that into an `Err` before
+    // the body can be read — so this reported "could not reach Google: http
+    // status: 400" for a request that reached Google perfectly well and was
+    // told exactly what was wrong. Worse, `token()` decides whether to drop a
+    // dead refresh token by looking for `invalid_grant` in this message, so the
+    // one case that recovers by itself was the one case that could never be
+    // seen, and the app stayed stuck on the same 400 for ever.
+    let body = ureq::post(TOKEN_URL)
+        .config()
+        .http_status_as_error(false)
+        .build()
         .send_form(form.to_vec())
         .map_err(|e| format!("could not reach Google: {e}"))?
         .body_mut()
         .read_to_string()
         .map_err(|e| format!("could not read Google's reply: {e}"))?;
 
-    serde_json::from_str::<TokenReply>(&reply).map_err(|_| {
-        // Google's errors are JSON too, and the useful half is the description.
-        #[derive(Deserialize)]
-        struct Failure {
-            error: String,
-            #[serde(default)]
-            error_description: String,
-        }
-        match serde_json::from_str::<Failure>(&reply) {
-            Ok(f) if !f.error_description.is_empty() => {
-                format!("Google refused: {}", f.error_description)
-            }
-            Ok(f) => format!("Google refused: {}", f.error),
-            Err(_) => format!("Google's reply made no sense: {}", reply.chars().take(200).collect::<String>()),
-        }
-    })
-    .inspect(|_| {
-        let _ = client;
-    })
+    serde_json::from_str::<TokenReply>(&body).map_err(|_| refusal(&body))
 }
 
 /// Run the whole consent flow. Blocking — the caller is on a worker.
@@ -292,17 +343,14 @@ pub fn connect(open: impl FnOnce(&str) -> Result<(), String>) -> Result<(), Stri
     open(&url)?;
     let code = await_code(listener, &state)?;
 
-    let reply = exchange(
-        &client,
-        &[
+    let reply = exchange(&[
             ("client_id", client.id.as_str()),
             ("client_secret", client.secret.as_str()),
             ("code", code.as_str()),
             ("code_verifier", verifier.as_str()),
             ("grant_type", "authorization_code"),
             ("redirect_uri", redirect.as_str()),
-        ],
-    )?;
+    ])?;
 
     let refresh = reply.refresh_token.ok_or(
         "Google did not send a refresh token. Remove Shotly at myaccount.google.com/permissions and connect again.",
@@ -330,15 +378,12 @@ pub fn token() -> Result<String, String> {
     let client = client().ok_or("No Google OAuth client is set up.")?;
     let refresh = read(REFRESH_KEY).ok_or("Connect Google Drive in Settings first.")?;
 
-    let reply = exchange(
-        &client,
-        &[
-            ("client_id", client.id.as_str()),
-            ("client_secret", client.secret.as_str()),
-            ("refresh_token", refresh.as_str()),
-            ("grant_type", "refresh_token"),
-        ],
-    )
+    let reply = exchange(&[
+        ("client_id", client.id.as_str()),
+        ("client_secret", client.secret.as_str()),
+        ("refresh_token", refresh.as_str()),
+        ("grant_type", "refresh_token"),
+    ])
     .map_err(|e| {
         // A refresh token can be revoked from the Google account page, and once
         // it is, every retry says the same thing. Drop it so the next attempt
@@ -370,6 +415,60 @@ fn urlencode(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Google's refusals are 4xx replies with the reason in the body, and this
+    /// used to be dead code: ureq's default turned the status into an `Err`
+    /// before anything could read it, so the app showed "could not reach
+    /// Google: http status: 400" for a request that had reached Google and been
+    /// answered. The exchange now asks for the body regardless of status.
+    /// The prompt problem, as a test: two callers asking the same question must
+    /// not be two trips to the keychain. `remember_secret` seeds the cache the
+    /// way a successful write does, and a hit has to be served from it — a miss
+    /// here is a macOS dialog in front of the user.
+    #[test]
+    fn the_keychain_is_asked_once_and_then_remembered() {
+        let key = "test-only-never-a-real-item";
+        remember_secret(key, Some("value".into()));
+        assert_eq!(read(key), Some("value".into()));
+        assert_eq!(read(key), Some("value".into()));
+
+        // And a deletion is visible at once, rather than the old value being
+        // served until the process restarts.
+        remember_secret(key, None);
+        assert_eq!(read(key), None);
+
+        // A cached "nothing here" is an answer too. Re-asking the keychain to
+        // confirm an absence is what produced the pile of prompts.
+        let map = CACHE.lock().unwrap();
+        assert!(map.as_ref().expect("a cache").contains_key(key));
+    }
+
+    #[test]
+    fn a_refusal_is_read_out_of_the_body() {
+        let body = r#"{"error":"invalid_grant","error_description":"Token has been expired or revoked."}"#;
+        let message = refusal(body);
+        assert!(message.contains("Token has been expired or revoked."), "{message}");
+
+        // `token()` looks for this exact word to decide whether the stored
+        // refresh token is worth keeping, so it has to survive into the string.
+        assert!(message.contains("invalid_grant"), "{message}");
+    }
+
+    /// A description is not guaranteed, and the code alone still names the
+    /// problem — `invalid_client` is a different fix from `invalid_grant`.
+    #[test]
+    fn a_refusal_without_a_description_still_names_itself() {
+        assert_eq!(refusal(r#"{"error":"invalid_client"}"#), "Google refused: invalid_client");
+    }
+
+    /// A proxy or a captive portal answers with HTML, and quoting it beats
+    /// claiming Google said something it did not.
+    #[test]
+    fn a_reply_that_is_not_json_is_quoted_rather_than_guessed_at() {
+        let message = refusal("<html><body>Gateway Timeout</body></html>");
+        assert!(message.starts_with("Google's reply made no sense:"), "{message}");
+        assert!(message.contains("Gateway Timeout"), "{message}");
+    }
 
     /// The client has to arrive from the build environment, or a release ships
     /// with a Connect button that cannot connect to anything.
