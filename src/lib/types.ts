@@ -311,6 +311,7 @@ export type HotkeyAction =
   | "window"
   | "fullscreen"
   | "scroll"
+  | "record"
   | "annotate"
   | "interact";
 

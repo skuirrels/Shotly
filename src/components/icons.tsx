@@ -129,6 +129,14 @@ export const IconGear = (p: SVGProps<SVGSVGElement>) => (
   </Icon>
 );
 
+/** The record button everyone knows: a filled dot in a ring. */
+export const IconRecord = (p: SVGProps<SVGSVGElement>) => (
+  <Icon {...p}>
+    <circle cx="8" cy="8" r="6.2" />
+    <circle cx="8" cy="8" r="3" fill="currentColor" stroke="none" />
+  </Icon>
+);
+
 /** A keyboard: two rows of keys and a space bar under them. */
 export const IconKeyboard = (p: SVGProps<SVGSVGElement>) => (
   <Icon {...p}>

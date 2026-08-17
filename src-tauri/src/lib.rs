@@ -9,6 +9,7 @@ mod hotkeys;
 mod markup;
 mod ocr;
 mod pin;
+mod record;
 mod scroll;
 mod snap;
 mod platform;
@@ -87,6 +88,16 @@ pub fn run() {
                                 let _ = tauri::Emitter::emit(app, "capture:error", err);
                             }
                         }
+                        // One key both ways: it opens the picker, and it stops
+                        // whatever it started. A recording that can only be
+                        // stopped from a panel is a recording you lose if the
+                        // panel ends up on a Space you are not on.
+                        Action::Record => {
+                            if let Err(err) = record::record_begin(app.clone()) {
+                                eprintln!("[shotly] recording failed: {err}");
+                                let _ = tauri::Emitter::emit(app, "capture:error", err);
+                            }
+                        }
                         Action::Annotate => {
                             if let Err(err) = annotate::toggle(app) {
                                 eprintln!("[shotly] annotation toggle failed: {err}");
@@ -116,6 +127,7 @@ pub fn run() {
         .manage(hotkeys::HotkeyState::default())
         .manage(scroll::ScrollState::default())
         .manage(snap::SnapState::default())
+        .manage(record::RecordState::default())
         .invoke_handler(tauri::generate_handler![
             commands::capture_permission_status,
             commands::request_capture_permission,
@@ -166,6 +178,17 @@ pub fn run() {
             pin::pin_png,
             pin::pin_close,
             pin::pin_close_all,
+            record::record_begin,
+            record::record_ready,
+            record::record_beat,
+            record::record_layout,
+            record::record_windows,
+            record::record_region,
+            record::record_window,
+            record::record_screen,
+            record::record_stop,
+            record::record_cancel,
+            record::record_running,
             hotkeys::hotkeys_list,
             hotkeys::hotkeys_set,
             hotkeys::hotkeys_reset,
@@ -224,8 +247,16 @@ pub fn run() {
                 }
             }
         })
-        .run(tauri::generate_context!())
-        .expect("error while running Shotly");
+        .build(tauri::generate_context!())
+        .expect("error while running Shotly")
+        // Not `run(context)`, only so that quitting can be noticed: a recording
+        // in progress has to be interrupted and filed before the process goes,
+        // or it carries on writing to a temp file nobody owns.
+        .run(|app, event| {
+            if matches!(event, tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit) {
+                record::wrap_up(app);
+            }
+        });
 }
 
 /// Swap the About item for one that says which build is running, and put
@@ -300,6 +331,21 @@ fn tray_menu(app: &tauri::AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
         MenuItem::with_id(app, "screen", "Capture Screen", true, accel(Action::Fullscreen))?;
     let scroll =
         MenuItem::with_id(app, "scroll", "Scrolling Capture", true, accel(Action::Scroll))?;
+    // Recording. Two items, and only ever one of them: "Record…" opens the
+    // picker, and while a recording runs the same slot is the way to stop it —
+    // the menu bar is where someone looks for a recording they have lost track
+    // of, so it must say what is happening there rather than offer to start
+    // another one.
+    let recording = record::is_recording(app);
+    let record = MenuItem::with_id(
+        app,
+        "record",
+        if recording { "Stop Recording" } else { "Record Area or Window…" },
+        true,
+        accel(Action::Record),
+    )?;
+    let record_screen =
+        MenuItem::with_id(app, "record-screen", "Record Whole Screen", !recording, None::<&str>)?;
     let annotate =
         MenuItem::with_id(app, "annotate", "Annotate Screen", true, accel(Action::Annotate))?;
     let stop = MenuItem::with_id(app, "stop-annotate", "Exit Annotation Mode", true, None::<&str>)?;
@@ -326,7 +372,19 @@ fn tray_menu(app: &tauri::AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
     let quit = MenuItem::with_id(app, "quit", "Quit Shotly", true, Some("Cmd+Q"))?;
 
     let mut items: Vec<&dyn tauri::menu::IsMenuItem<tauri::Wry>> = vec![
-        &region, &window, &window_list, &screen, &scroll, &sep, &annotate, &stop, &unpin, &sep,
+        &region,
+        &window,
+        &window_list,
+        &screen,
+        &scroll,
+        &sep,
+        &record,
+        &record_screen,
+        &sep,
+        &annotate,
+        &stop,
+        &unpin,
+        &sep,
     ];
     if !crate::ax::trusted() {
         items.push(&accessibility);
@@ -392,6 +450,18 @@ fn build_tray(app: &tauri::AppHandle) -> tauri::Result<()> {
             "scroll" => {
                 if let Err(err) = scroll::scroll_begin(app.clone()) {
                     eprintln!("[shotly] scrolling capture failed: {err}");
+                    let _ = tauri::Emitter::emit(app, "capture:error", err);
+                }
+            }
+            "record" => {
+                if let Err(err) = record::record_begin(app.clone()) {
+                    eprintln!("[shotly] recording failed: {err}");
+                    let _ = tauri::Emitter::emit(app, "capture:error", err);
+                }
+            }
+            "record-screen" => {
+                if let Err(err) = record::record_screen(app.clone()) {
+                    eprintln!("[shotly] screen recording failed: {err}");
                     let _ = tauri::Emitter::emit(app, "capture:error", err);
                 }
             }

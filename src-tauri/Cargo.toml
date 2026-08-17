@@ -31,6 +31,10 @@ thiserror = "2"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 base64 = "0.23"
 tempfile = "3"
+# Two things the standard library has no word for: local time, and asking a
+# child process to stop rather than die. See `commands::stamped_stem` and
+# `record::interrupt`.
+libc = "0.2"
 arboard = { version = "3", features = ["image-data"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]

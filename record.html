@@ -1,0 +1,15 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Shotly Recording</title>
+  </head>
+  <!-- Transparent, like the scrolling-capture overlay: this window covers the
+       display while the user chooses what to record, and an opaque body would
+       mean choosing it on a black screen. -->
+  <body class="overlay-body">
+    <div id="root"></div>
+    <script type="module" src="/src/windows/record/main.tsx"></script>
+  </body>
+</html>

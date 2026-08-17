@@ -1,0 +1,12 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "record",
+  "description": "Capabilities for the screen-recording window: choosing what to record first, then the floating panel. It drags itself around and otherwise only invokes app commands.",
+  "windows": ["record"],
+  "permissions": [
+    "core:default",
+    "core:window:allow-close",
+    "core:window:allow-set-focus",
+    "core:window:allow-start-dragging"
+  ]
+}

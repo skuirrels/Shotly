@@ -30,6 +30,23 @@ export async function invoke<T>(cmd: string, args?: Record<string, unknown>): Pr
   }
   if (cmd === "open_keyboard_settings") return undefined as T;
 
+  // Screen recording. The overlay and the panel are pure UI over these; what
+  // they cannot exercise here is the recorder itself, which is a child process.
+  if (cmd === "record_ready" || cmd === "record_beat") return undefined as T;
+  if (cmd === "record_layout") return { x: 0, y: 0, width: 1440, height: 900 } as T;
+  if (cmd === "record_windows") {
+    return [
+      { id: 1, x: 80, y: 60, width: 520, height: 380 },
+      { id: 2, x: 420, y: 260, width: 600, height: 420 },
+    ] as T;
+  }
+  if (cmd === "record_running") return { what: "1280 × 720", seconds: 42 } as T;
+  if (cmd === "record_region" || cmd === "record_window" || cmd === "record_screen") {
+    (window as any).EMIT("record:phase", "hud");
+    return undefined as T;
+  }
+  if (cmd === "record_stop" || cmd === "record_cancel") return undefined as T;
+
   throw new Error(`harness has no stub for ${cmd}`);
 }
 

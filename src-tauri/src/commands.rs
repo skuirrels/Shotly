@@ -526,6 +526,41 @@ pub fn save_to_library(
 /// on its way out. Kept here because the naming rules — what a stem may
 /// contain, and how a collision is resolved — are the library's business.
 pub fn write_into_library(app: &AppHandle, bytes: &[u8], stem: &str) -> CmdResult<String> {
+    let target = free_name(app, stem, "png")?;
+    std::fs::write(&target, bytes).map_err(|e| e.to_string())?;
+
+    let path = target.to_string_lossy().into_owned();
+    crate::backup::mirror_one(app, &path);
+    Ok(path)
+}
+
+/// Move a finished file into the library under `stem`, without overwriting
+/// anything. For things too big to have been held in memory on the way here —
+/// a screen recording is the only one so far.
+pub fn move_into_library(
+    app: &AppHandle,
+    source: &std::path::Path,
+    stem: &str,
+    extension: &str,
+) -> CmdResult<String> {
+    let target = free_name(app, stem, extension)?;
+
+    // A rename is instant and a copy is not, but the scratch directory and the
+    // library are only usually on the same volume — `TMPDIR` can be moved, and
+    // a home directory can be on an external disk. Copy when the cheap move is
+    // refused rather than losing the recording to it.
+    if std::fs::rename(source, &target).is_err() {
+        std::fs::copy(source, &target).map_err(|e| e.to_string())?;
+        let _ = std::fs::remove_file(source);
+    }
+
+    let path = target.to_string_lossy().into_owned();
+    crate::backup::mirror_one(app, &path);
+    Ok(path)
+}
+
+/// A path in the library for `stem`.`extension` that nothing is using yet.
+fn free_name(app: &AppHandle, stem: &str, extension: &str) -> CmdResult<std::path::PathBuf> {
     let dir = library_dir(app)?;
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
 
@@ -538,18 +573,44 @@ pub fn write_into_library(app: &AppHandle, bytes: &[u8], stem: &str) -> CmdResul
     let safe = safe.trim().trim_matches('.').to_string();
     let safe = if safe.is_empty() { "Capture".to_string() } else { safe };
 
-    let mut target = dir.join(format!("{safe}.png"));
+    let mut target = dir.join(format!("{safe}.{extension}"));
     let mut n = 2;
     while target.exists() {
-        target = dir.join(format!("{safe} ({n}).png"));
+        target = dir.join(format!("{safe} ({n}).{extension}"));
         n += 1;
     }
+    Ok(target)
+}
 
-    std::fs::write(&target, bytes).map_err(|e| e.to_string())?;
+/// The name a capture is filed under: "Recording 2026-08-17 at 11.52.03".
+///
+/// The same shape as `captureStem` in `src/lib/naming.ts`, which names
+/// everything that arrives through the editor — macOS's own screenshot format,
+/// so a library sorted by name reads chronologically. Rust needs its own copy
+/// because a recording can be filed with no page left alive to ask.
+pub fn stamped_stem(prefix: &str) -> String {
+    let secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0) as libc::time_t;
 
-    let path = target.to_string_lossy().into_owned();
-    crate::backup::mirror_one(app, &path);
-    Ok(path)
+    let mut tm: libc::tm = unsafe { std::mem::zeroed() };
+    // SAFETY: `localtime_r` fills a caller-owned `tm` and touches nothing else;
+    // both pointers are to live stack values. The `_r` form is the one that can
+    // be called from any thread.
+    unsafe {
+        libc::localtime_r(&secs, &mut tm);
+    }
+
+    format!(
+        "{prefix} {:04}-{:02}-{:02} at {:02}.{:02}.{:02}",
+        tm.tm_year + 1900,
+        tm.tm_mon + 1,
+        tm.tm_mday,
+        tm.tm_hour,
+        tm.tm_min,
+        tm.tm_sec
+    )
 }
 
 // ---------------------------------------------------------------- library
@@ -935,6 +996,27 @@ pub fn hide_editor(app: AppHandle, window: WebviewWindow) -> CmdResult<()> {
     // Drop back to the menu bar so Shotly stops occupying the Dock and Cmd-Tab.
     platform::set_accessory_mode(&app, true);
     Ok(())
+}
+
+#[cfg(test)]
+mod naming_tests {
+    #[test]
+    fn a_stamped_stem_reads_the_way_a_screenshot_name_does() {
+        let stem = super::stamped_stem("Recording");
+
+        // "Recording 2026-08-17 at 11.52.03" — the shape `captureStem` in
+        // src/lib/naming.ts produces, so a library sorted by name stays in
+        // chronological order whatever put the file there.
+        let rest = stem.strip_prefix("Recording ").expect("prefix");
+        let (date, time) = rest.split_once(" at ").expect("date at time");
+
+        assert_eq!(date.len(), 10, "{date} is not YYYY-MM-DD");
+        assert_eq!(date.matches('-').count(), 2);
+        assert_eq!(time.len(), 8, "{time} is not HH.MM.SS");
+        assert_eq!(time.matches('.').count(), 2);
+        assert!(date.chars().all(|c| c.is_ascii_digit() || c == '-'));
+        assert!(time.chars().all(|c| c.is_ascii_digit() || c == '.'));
+    }
 }
 
 #[cfg(test)]

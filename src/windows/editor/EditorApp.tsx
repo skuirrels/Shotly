@@ -22,6 +22,7 @@ import {
   IconPen,
   IconGear,
   IconPin,
+  IconRecord,
   IconRedo,
   IconRefresh,
   IconSave,
@@ -233,11 +234,20 @@ export function EditorApp() {
       setSettings(event.payload ?? "hotkeys"),
     );
 
+    // A recording is filed straight in the library — there is nothing to open
+    // in an image editor — so the only thing owed to the user is the news, and
+    // a way to the file. The toast offers Show in Finder when `saved` is set.
+    const recordedUnlisten = listen<string>("record:saved", (event) => {
+      setSaved(event.payload);
+      notify("Recording saved to your Shotly folder", "ok", 5000);
+    });
+
     return () => {
       void openUnlisten.then((fn) => fn());
       void errorUnlisten.then((fn) => fn());
       void pickUnlisten.then((fn) => fn());
       void settingsUnlisten.then((fn) => fn());
+      void recordedUnlisten.then((fn) => fn());
     };
   }, [notify, describe]);
 
@@ -1146,6 +1156,26 @@ export function EditorApp() {
         shortcut: "Mod+Shift+3",
         icon: <IconCamera />,
         run: () => startCapture("fullscreen"),
+      },
+
+      {
+        id: "capture.record",
+        title: "Record area or window…",
+        group: "Capture",
+        shortcut: "Mod+Shift+R",
+        icon: <IconRecord />,
+        keywords: "video movie screen recording capture mov film",
+        run: () =>
+          void ipc.recordBegin().catch((err) => notify(describe(err), "error")),
+      },
+      {
+        id: "capture.recordScreen",
+        title: "Record whole screen",
+        group: "Capture",
+        icon: <IconRecord />,
+        keywords: "video movie screen recording display mov film",
+        run: () =>
+          void ipc.recordScreen().catch((err) => notify(describe(err), "error")),
       },
 
       {

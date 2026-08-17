@@ -162,9 +162,10 @@ src-tauri/src/
   markup.rs      the shTL PNG chunk that keeps a saved capture editable
   ocr.rs         text and QR/barcode recognition, via macOS Vision
   pin.rs         always-on-top pin windows
+  record.rs      screen recording: what to record, and the child that records it
   scroll.rs      scrolling capture: session loop and the row-signature stitcher
   combine.rs     several captures composed onto one sheet
-  platform.rs    AppKit escapes (window level, activation policy)
+  platform.rs    AppKit escapes (window level, activation policy, capture hiding)
   update.rs      the self-updater
   lib.rs         tray, menu, window lifecycle, hotkey dispatch
 
@@ -421,7 +422,47 @@ Related: the first target is routinely resolved before the page has finished
 loading, so the first `emit_to` goes nowhere. `snap_ready` re-sends the current
 outline for exactly that reason.
 
+## Screen recording (`record.rs`)
+
+`screencapture -v` does the recording, for the same reasons the stills go
+through the same binary — and one more: it needs no permission Shotly does not
+already hold, where a ScreenCaptureKit pipeline would mean owning an
+`AVAssetWriter`, a frame clock and every codec decision. The three targets are
+one flag each: `-R x,y,w,h` for an area, `-l <windowid>` for a window (it
+follows the window and excludes anything in front of it), `-D <n>` for a
+display.
+
+Three things about it are worth knowing before changing any of it.
+
+**SIGINT is how a recording ends, not how it is aborted.** `screencapture`
+catches it and writes the movie's index; a `SIGKILL` leaves a file with frames
+in it that nothing will play. `finish()` therefore interrupts, then waits up to
+twenty seconds. There is one test for this and it is `#[ignore]`d because it
+records the screen for two seconds — run it by hand after touching how the
+recorder is started or stopped:
+
+```bash
+cargo test --lib -- --ignored interrupting
+```
+
+**A dead panel saves the recording; it does not cancel it.** This is the one
+place the watchdog does the opposite of everywhere else in the app. Before the
+shutter opens, an overlay that stopped answering is a full-screen click target
+and gets removed. Once recording, the movie is being written by a process that
+does not care whether anyone is watching, and the panel is only a way to stop
+it — so silence means *save what you have*. The same reasoning covers quitting:
+`RunEvent::Exit` calls `record::wrap_up`, or the child outlives Shotly and
+records until the machine is turned off.
+
+**The panel is invisible to the recording**, via `NSWindowSharingNone` — see
+`platform::hide_from_capture`. That is what lets it sit over the display it is
+recording rather than having to dodge the region the way the scrolling-capture
+HUD does.
+
+Recordings are filed straight in the library folder as `.mov` and are not
+listed in the library grid, which reads images only.
+
 ## Not built yet
 
-Video and GIF recording. The capture layer is a trait, so a ScreenCaptureKit
-backend for video drops in behind it without touching the rest of the app.
+GIF recording, and audio — `screencapture -g`/`-G` can record an input device,
+which is a different feature with its own permission prompt.

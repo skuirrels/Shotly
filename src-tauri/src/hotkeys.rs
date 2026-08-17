@@ -26,14 +26,16 @@ pub enum Action {
     Scroll,
     Annotate,
     Interact,
+    Record,
 }
 
 /// In the order they are shown, which is the order they are reached for.
-pub const ACTIONS: [Action; 6] = [
+pub const ACTIONS: [Action; 7] = [
     Action::Region,
     Action::Window,
     Action::Fullscreen,
     Action::Scroll,
+    Action::Record,
     Action::Annotate,
     Action::Interact,
 ];
@@ -53,6 +55,7 @@ impl Action {
             // machine, and a hotkey the system answers with someone else's
             // window is no way back at all.
             Action::Interact => "Ctrl+Shift+D",
+            Action::Record => "Ctrl+Shift+R",
         }
     }
 
@@ -64,6 +67,7 @@ impl Action {
             Action::Scroll => "Scrolling capture",
             Action::Annotate => "Annotate the screen",
             Action::Interact => "Click through / back to drawing",
+            Action::Record => "Record / stop recording",
         }
     }
 
@@ -76,6 +80,7 @@ impl Action {
             Action::Scroll => "Pick a region, scroll the page yourself; Shotly stitches it.",
             Action::Annotate => "Draw over the live screen. Also the way out.",
             Action::Interact => "Hand the mouse back to the desktop, drawings and all.",
+            Action::Record => "Record an area, a window or the screen. Press again to stop.",
         }
     }
 
@@ -87,6 +92,7 @@ impl Action {
             Action::Scroll => "scroll",
             Action::Annotate => "annotate",
             Action::Interact => "interact",
+            Action::Record => "record",
         }
     }
 }

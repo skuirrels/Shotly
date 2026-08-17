@@ -44,6 +44,38 @@ pub fn elevate_overlay_window(_window: &tauri::WebviewWindow) -> Result<(), Stri
 }
 
 
+/// Keep a window out of screen recordings and screen sharing.
+///
+/// `NSWindowSharingNone` is the flag the window server itself honours: the
+/// window is composited for the person sitting there and left out of anything
+/// that reads the screen, `screencapture` included. It is what lets the
+/// recording panel sit over the display it is recording — a panel you have to
+/// hide before pressing stop is a panel that has to be somewhere else the
+/// moment you want it, and a stop button nobody can find is worse than a
+/// visible one.
+#[cfg(target_os = "macos")]
+pub fn hide_from_capture(window: &tauri::WebviewWindow) -> Result<(), String> {
+    use objc2_app_kit::{NSWindow, NSWindowSharingType};
+
+    let ptr = window.ns_window().map_err(|e| e.to_string())? as *mut NSWindow;
+    if ptr.is_null() {
+        return Err("window has no backing NSWindow".into());
+    }
+
+    // SAFETY: as `elevate_overlay_window` — a live NSWindow from Tauri, touched
+    // only from the main thread.
+    unsafe {
+        (*ptr).setSharingType(NSWindowSharingType::None);
+    }
+
+    Ok(())
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn hide_from_capture(_window: &tauri::WebviewWindow) -> Result<(), String> {
+    Ok(())
+}
+
 /// Let a window follow the user between Spaces.
 ///
 /// Shotly lives in the menu bar, which means it spends most of its life as an

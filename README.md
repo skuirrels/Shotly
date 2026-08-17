@@ -34,7 +34,7 @@ for Updates…** in the menu bar does it on demand.
 
 ## Taking a shot
 
-Four keys, and they work in any app:
+Five keys, and they work in any app:
 
 | | |
 |---|---|
@@ -42,6 +42,7 @@ Four keys, and they work in any app:
 | <kbd>⌃⇧5</kbd> | **Window** — pick from a grid of every open window, shown as it looks |
 | <kbd>⌃⇧3</kbd> | **Full screen** |
 | <kbd>⌃⇧6</kbd> | **Scrolling capture** — a whole page, taller than the screen |
+| <kbd>⌃⇧R</kbd> | **Record** — an area, a window or the screen, as a movie |
 
 They're on Control-Shift rather than Command-Shift because macOS already owns
 Command-Shift-3/4/5 for its own screenshot tools, and quietly stealing those
@@ -55,6 +56,21 @@ magnifier and pixel readout.
 thumbnail, filterable by app or title, arrow keys and <kbd>⏎</kbd> to take one.
 It reaches windows the pointer cannot — behind other windows, or fully covered —
 and because you choose by looking, you always get the window you meant.
+
+### Recording the screen
+
+<kbd>⌃⇧R</kbd>, then say what to record the same way you would frame a shot:
+drag out an area, click a window, or take the whole screen. A small panel
+appears at the bottom of the display with the elapsed time and the way out —
+**Stop and save**, or **Discard**. The same key stops the recording, and so
+does the menu bar, which says *Stop Recording* while one is running.
+
+The movie lands in your Shotly folder as an ordinary `.mov` — no editor, no
+export step, nothing to convert. Picking a window records *that window*: it
+follows if you move it, and anything dropped in front of it stays out.
+
+The panel does not appear in the recording, so you can leave it where it is.
+There is no audio: this records the screen, not the room.
 
 ### Capturing a whole page
 
@@ -227,8 +243,8 @@ Hotkeys tab that opens the right pane.
 ## All the keys
 
 **Anywhere:** <kbd>⌃⇧3</kbd>/<kbd>⌃⇧4</kbd>/<kbd>⌃⇧5</kbd> capture ·
-<kbd>⌃⇧6</kbd> scrolling capture · <kbd>⌃⇧A</kbd> draw on the screen ·
-<kbd>⌃⇧D</kbd> click through
+<kbd>⌃⇧6</kbd> scrolling capture · <kbd>⌃⇧R</kbd> record / stop recording ·
+<kbd>⌃⇧A</kbd> draw on the screen · <kbd>⌃⇧D</kbd> click through
 
 **Editor:** <kbd>⌘Z</kbd> undo · <kbd>⌘⇧Z</kbd> redo · <kbd>⌘D</kbd> duplicate ·
 <kbd>⌫</kbd> delete · <kbd>⌘A</kbd> select all · <kbd>⇥</kbd> next annotation ·

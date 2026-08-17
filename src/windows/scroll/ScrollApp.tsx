@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { SelectionOverlay, type Box } from "@/components/SelectionOverlay";
 
 /**
  * The scrolling-capture window, in its two lives.
@@ -30,13 +31,6 @@ import { listen } from "@tauri-apps/api/event";
  */
 
 const HEARTBEAT_MS = 1000;
-
-interface Box {
-  x: number;
-  y: number;
-  width: number;
-  height: number;
-}
 
 interface Progress {
   frames: number;
@@ -87,144 +81,53 @@ export function ScrollApp() {
 // ------------------------------------------------------------------ selection
 
 function Select() {
-  const [drag, setDrag] = useState<{ from: { x: number; y: number }; box: Box } | null>(null);
   /**
    * The windows this selection can snap to, front to back, in this page's own
    * coordinates. Fetched once: nothing can move while the overlay is up.
    */
-  const windows = useRef<Box[]>([]);
-  /** The window under the pointer, when there is one and nothing is being dragged. */
-  const [hover, setHover] = useState<Box | null>(null);
+  const [windows, setWindows] = useState<Box[]>([]);
 
   const cancel = useCallback(() => void invoke("scroll_cancel"), []);
 
   useEffect(() => {
     void invoke<Box[]>("scroll_windows")
-      .then((list) => (windows.current = list))
+      .then(setWindows)
       // Snapping is a convenience over the drag, not a precondition for it.
       .catch(() => {});
   }, []);
 
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") cancel();
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [cancel]);
-
-  const onPointerDown = (e: React.PointerEvent) => {
-    e.currentTarget.setPointerCapture(e.pointerId);
-    const from = { x: e.clientX, y: e.clientY };
-    setDrag({ from, box: { ...from, width: 0, height: 0 } });
-  };
-
-  const onPointerMove = (e: React.PointerEvent) => {
-    if (!drag) {
-      // Front to back, so the first window holding the pointer is the one a
-      // click would land on — the same rule the capture outline uses.
-      const under = windows.current.find(
-        (w) =>
-          e.clientX >= w.x &&
-          e.clientY >= w.y &&
-          e.clientX < w.x + w.width &&
-          e.clientY < w.y + w.height,
-      );
-      setHover(under ?? null);
-      return;
-    }
-    const box = {
-      x: Math.min(drag.from.x, e.clientX),
-      y: Math.min(drag.from.y, e.clientY),
-      width: Math.abs(e.clientX - drag.from.x),
-      height: Math.abs(e.clientY - drag.from.y),
-    };
-    setDrag({ from: drag.from, box });
-  };
-
-  const onPointerUp = async () => {
-    if (!drag) return;
-    const dragged = drag.box;
-    setDrag(null);
-
-    // A drag that never really moved is a click, and a click means "that one" —
-    // the window being offered under the pointer. Dragging past the threshold
-    // says the area wanted is not any window's, and wins.
-    const box =
-      dragged.width >= MIN_EDGE && dragged.height >= MIN_EDGE ? dragged : hover;
-    if (!box || box.width < MIN_EDGE || box.height < MIN_EDGE) return;
-
-    try {
-      // The drag happened in window coordinates; the capture needs global
-      // ones. The window covers exactly one display, so it is one offset.
-      const display = await invoke<Box>("scroll_layout");
-      await invoke("scroll_start", {
-        region: {
-          x: display.x + box.x,
-          y: display.y + box.y,
-          width: box.width,
-          height: box.height,
-        },
-      });
-    } catch (err) {
-      console.error("could not start the scrolling capture:", err);
-      cancel();
-    }
-  };
-
-  const box = drag?.box ?? hover;
-  const big = box && box.width >= MIN_EDGE && box.height >= MIN_EDGE;
+  const choose = useCallback(
+    async (box: Box) => {
+      try {
+        // The drag happened in window coordinates; the capture needs global
+        // ones. The window covers exactly one display, so it is one offset.
+        const display = await invoke<Box>("scroll_layout");
+        await invoke("scroll_start", {
+          region: {
+            x: display.x + box.x,
+            y: display.y + box.y,
+            width: box.width,
+            height: box.height,
+          },
+        });
+      } catch (err) {
+        console.error("could not start the scrolling capture:", err);
+        cancel();
+      }
+    },
+    [cancel],
+  );
 
   return (
-    <div
-      className="fixed inset-0 cursor-crosshair select-none"
-      onPointerDown={onPointerDown}
-      onPointerMove={onPointerMove}
-      onPointerUp={() => void onPointerUp()}
-    >
-      {/* Four shades around the selection rather than one sheet under it, so
-          the chosen area shows the desktop at full brightness. */}
-      {box ? (
-        <>
-          <Shade style={{ left: 0, top: 0, right: 0, height: box.y }} />
-          <Shade style={{ left: 0, top: box.y, width: box.x, height: box.height }} />
-          <Shade
-            style={{ left: box.x + box.width, top: box.y, right: 0, height: box.height }}
-          />
-          <Shade style={{ left: 0, top: box.y + box.height, right: 0, bottom: 0 }} />
-          <div
-            className="absolute border-2"
-            style={{
-              left: box.x,
-              top: box.y,
-              width: box.width,
-              height: box.height,
-              borderColor: big ? "var(--color-accent)" : "rgba(255,255,255,0.5)",
-            }}
-          >
-            <span className="absolute -bottom-7 left-0 rounded-md bg-black/70 px-2 py-0.5 font-mono text-[12px] whitespace-nowrap text-white tabular-nums">
-              {Math.round(box.width)} × {Math.round(box.height)}
-            </span>
-          </div>
-        </>
-      ) : (
-        <Shade style={{ inset: 0 }} />
-      )}
-
-      <div className="pointer-events-none absolute top-8 left-1/2 -translate-x-1/2 rounded-xl bg-black/75 px-4 py-2.5 text-center shadow-lg">
-        <p className="text-[13.5px] font-medium text-white">
-          Click a window, or drag out an area — then scroll the page yourself
-        </p>
-        <p className="mt-0.5 text-[11.5px] text-white/60">
-          Esc cancels · leave a strip free beside it for the progress panel
-        </p>
-      </div>
-    </div>
+    <SelectionOverlay
+      windows={windows}
+      minEdge={MIN_EDGE}
+      title="Click a window, or drag out an area — then scroll the page yourself"
+      hint="Esc cancels · leave a strip free beside it for the progress panel"
+      onChoose={({ box }) => void choose(box)}
+      onCancel={cancel}
+    />
   );
-}
-
-function Shade({ style }: { style: React.CSSProperties }) {
-  return <div className="absolute bg-black/40" style={style} />;
 }
 
 // ------------------------------------------------------------------------ hud

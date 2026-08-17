@@ -138,6 +138,17 @@ export const annotateToggle = () => invoke<void>("annotate_toggle");
  */
 export const scrollBegin = () => invoke<void>("scroll_begin");
 
+/**
+ * Record the screen: an area, a window, or a whole display.
+ *
+ * `recordBegin` opens the picker — and stops a running recording, so the one
+ * command answers the hotkey, the tray item and the button. The finished movie
+ * is filed in the Shotly folder and announced on `record:saved`.
+ */
+export const recordBegin = () => invoke<void>("record_begin");
+export const recordScreen = () => invoke<void>("record_screen");
+export const recordStop = () => invoke<void>("record_stop");
+
 /** The system-wide hotkeys, as they are registered right now. */
 export const hotkeysList = () => invoke<HotkeyBinding[]>("hotkeys_list");
 
