@@ -11,6 +11,7 @@ import type {
   Scan,
   ShareLink,
   ShareProvider,
+  Trimmed,
   WindowInfo,
 } from "./types";
 
@@ -246,6 +247,17 @@ export const combineCaptures = (
   layout: "row" | "column" | "grid",
   background: string,
 ) => invoke<void>("combine_captures", { paths, layout, background });
+
+/**
+ * Keep the part of a recording between two marks, and file it in the library.
+ *
+ * Both marks are in seconds. The original is never touched: the answer is a
+ * new capture beside it, which is what the player switches to. The cut is
+ * lossless and takes about as long as copying the file — see
+ * `src-tauri/src/trim.rs`.
+ */
+export const videoTrim = (path: string, start: number, end: number) =>
+  invoke<Trimmed>("video_trim", { path, start, end });
 
 /** Cloud sync folders this Mac has, to offer as one-click backup choices. */
 export const backupTargets = () => invoke<BackupTarget[]>("backup_targets");

@@ -99,6 +99,21 @@ export async function invoke<T>(cmd: string, args?: Record<string, unknown>): Pr
   }
   if (cmd === "record_stop" || cmd === "record_cancel") return undefined as T;
 
+  // Trimming. `avconvert` is the one part of it a browser cannot have, so the
+  // stub pauses for a beat and hands back the file it would have written —
+  // enough for the marks, the preview loop and the busy button to be tried.
+  if (cmd === "video_trim") {
+    const start = Number(args?.start ?? 0);
+    const end = Number(args?.end ?? 0);
+    await new Promise((done) => setTimeout(done, 900));
+    if (end - start < 0.2) throw new Error("that selection is too short to keep");
+    return {
+      path: "/lib/Recording 2026-08-17 at 13.58.12 trimmed.mov",
+      name: "Recording 2026-08-17 at 13.58.12 trimmed.mov",
+      seconds: end - start,
+    } as T;
+  }
+
   // The live annotation layer. Its watchdog and its screen list are Rust's;
   // everything the harness is for — the tools, the callout, the toolbar —
   // sits above them.

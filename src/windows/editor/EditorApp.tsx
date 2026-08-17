@@ -39,7 +39,7 @@ import { measureText } from "@/lib/shapes";
 import { captureStem } from "@/lib/naming";
 import { overlayFromClipboard } from "@/lib/overlay";
 import { useUpdates } from "@/lib/updater";
-import type { CaptureMode, CaptureResult, Rect, Scan } from "@/lib/types";
+import type { CaptureMode, CaptureResult, Rect, Scan, Trimmed } from "@/lib/types";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { MAX_STROKE, MIN_STROKE, useEditor } from "@/state/editorStore";
 import { Canvas } from "./Canvas";
@@ -47,6 +47,7 @@ import { CommandPalette } from "./CommandPalette";
 import { EmptyLibrary, PermissionNotice } from "./EmptyState";
 import { Library } from "./Library";
 import { Player, type Movie } from "./Player";
+import { formatDuration } from "./format";
 import { RecentStrip } from "./RecentStrip";
 import { Settings, type SettingsTab } from "./Settings";
 import { WindowPicker } from "./WindowPicker";
@@ -395,6 +396,30 @@ export function EditorApp() {
     setMovie(next);
     setView("player");
   }, []);
+
+  /**
+   * A trim landed. Watch the short one instead.
+   *
+   * The trim is a new capture beside the original rather than an edit of it
+   * (`src-tauri/src/trim.rs` says why), so there are two things to do: point
+   * the player at the file that was just written, and forget where the old one
+   * had got to — resuming a thirty-second recording at 0:28 in its eight-second
+   * trim would leave you looking at the end of it.
+   */
+  const onTrimmed = useCallback(
+    (trimmed: Trimmed) => {
+      resume.current = null;
+      setMovie({
+        path: trimmed.path,
+        name: trimmed.name,
+        modified: Date.now(),
+        seconds: trimmed.seconds,
+      });
+      setLibraryKey((k) => k + 1);
+      notify(`Trimmed to ${formatDuration(trimmed.seconds)}`);
+    },
+    [notify],
+  );
 
 
   /** Load an image from disk — the same entry point for ⌘O and for drag-drop. */
@@ -1475,6 +1500,7 @@ export function EditorApp() {
             startAt={resume.current?.path === movie.path ? resume.current.at : 0}
             onLeave={(at) => (resume.current = { path: movie.path, at })}
             onClose={() => showView("library")}
+            onTrimmed={onTrimmed}
             onError={reportError}
           />
         ) : (

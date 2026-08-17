@@ -8,14 +8,17 @@ import {
   IconPlay,
   IconSkipBack,
   IconSkipForward,
+  IconTrim,
   IconVolume,
 } from "@/components/icons";
 import { IconButton } from "@/components/ui/IconButton";
 import { Popover } from "@/components/ui/Popover";
 import { Tooltip } from "@/components/ui/Tooltip";
 import * as ipc from "@/lib/ipc";
+import type { Trimmed } from "@/lib/types";
 import { formatDuration } from "./format";
 import { useThumbnail } from "./thumbnails";
+import { MIN_SELECTION, TrimActions, TrimTrack, type Range } from "./TrimBar";
 
 /**
  * What the player needs to know about a recording.
@@ -51,6 +54,13 @@ interface Props {
   onLeave?: (seconds: number) => void;
   /** Leave the player — Escape, ⌘W, or the Library tab. */
   onClose: () => void;
+  /**
+   * A trim landed in the library as a new recording.
+   *
+   * The player does not switch to it itself: the editor owns which movie is
+   * open and has a library listing to refresh, so it is told and decides.
+   */
+  onTrimmed?: (trimmed: Trimmed) => void;
   onError: (message: string) => void;
 }
 
@@ -71,7 +81,7 @@ const RATES = [0.5, 1, 1.25, 1.5, 2] as const;
  * nothing else; a recording kept anywhere else will fail to load, which is what
  * the fallback below is for.
  */
-export function Player({ movie, startAt = 0, onLeave, onClose, onError }: Props) {
+export function Player({ movie, startAt = 0, onLeave, onClose, onTrimmed, onError }: Props) {
   const video = useRef<HTMLVideoElement>(null);
   const [playing, setPlaying] = useState(false);
   const [time, setTime] = useState(0);
@@ -87,6 +97,14 @@ export function Player({ movie, startAt = 0, onLeave, onClose, onError }: Props)
    */
   const [hasAudio, setHasAudio] = useState(false);
   const [failed, setFailed] = useState(false);
+  /**
+   * The two marks, while a trim is being set up. `null` the rest of the time,
+   * which is also what "not trimming" means — there is no second flag to keep
+   * in step with this one.
+   */
+  const [range, setRange] = useState<Range | null>(null);
+  /** True while Rust is writing the trimmed file out. */
+  const [trimming, setTrimming] = useState(false);
   /** True between pointer-down and pointer-up on the scrubber. */
   const scrubbing = useRef(false);
   /**
@@ -126,6 +144,48 @@ export function Player({ movie, startAt = 0, onLeave, onClose, onError }: Props)
     if (el.paused) void el.play().catch(() => {});
     else el.pause();
   }, []);
+
+  // ----------------------------------------------------------------- trim
+
+  /**
+   * Start marking a trim, with the marks at the two ends of the recording.
+   *
+   * Deliberately not a selection around the playhead: the recording is what
+   * you have, and every drag from here takes something off it. Starting from
+   * "keep everything" means one handle moved is one honest edit.
+   */
+  const startTrim = useCallback(() => {
+    const length = duration || movie.seconds;
+    if (length <= MIN_SELECTION) {
+      onError("That recording is too short to trim.");
+      return;
+    }
+    video.current?.pause();
+    setRange({ start: 0, end: length });
+  }, [duration, movie.seconds, onError]);
+
+  const cancelTrim = useCallback(() => setRange(null), []);
+
+  /**
+   * Cut the recording down to the marks.
+   *
+   * The result is a new file — the original is never overwritten, for the
+   * reason `trim.rs` gives — so the answer goes back to the editor, which
+   * switches the player onto it and re-reads the library.
+   */
+  const applyTrim = useCallback(async () => {
+    if (!range || trimming) return;
+    setTrimming(true);
+    try {
+      const trimmed = await ipc.videoTrim(movie.path, range.start, range.end);
+      setRange(null);
+      onTrimmed?.(trimmed);
+    } catch (err) {
+      onError(String(err));
+    } finally {
+      setTrimming(false);
+    }
+  }, [movie.path, onError, onTrimmed, range, trimming]);
 
   // ------------------------------------------------------------- keyboard
 
@@ -184,16 +244,38 @@ export function Player({ movie, startAt = 0, onLeave, onClose, onError }: Props)
           el.muted = !el.muted;
           setMuted(el.muted);
           break;
+        // In and out points, from every editor that has ever had them. They
+        // set a mark without moving the picture, which is what makes "play
+        // until it looks right, press o" work.
+        case "i":
+          if (!range) break;
+          handled();
+          setRange({
+            start: Math.min(el.currentTime, range.end - MIN_SELECTION),
+            end: range.end,
+          });
+          break;
+        case "o":
+          if (!range) break;
+          handled();
+          setRange({
+            start: range.start,
+            end: Math.max(el.currentTime, range.start + MIN_SELECTION),
+          });
+          break;
         case "Escape":
           handled();
-          onClose();
+          // Escape backs out of one thing at a time. Marking a trim and then
+          // losing the whole pane to a stray Escape would be the wrong trade.
+          if (range) setRange(null);
+          else onClose();
           break;
       }
     };
 
     window.addEventListener("keydown", onKey, { capture: true });
     return () => window.removeEventListener("keydown", onKey, { capture: true });
-  }, [onClose, seek, toggle]);
+  }, [onClose, range, seek, toggle]);
 
   // Playback rate is a property, not an attribute — React can't set it.
   useEffect(() => {
@@ -245,6 +327,17 @@ export function Player({ movie, startAt = 0, onLeave, onClose, onError }: Props)
               const el = e.currentTarget;
               at.current = el.currentTime >= el.duration - 0.5 ? 0 : el.currentTime;
               if (!scrubbing.current) setTime(el.currentTime);
+
+              // While marks are set, the selection *is* the movie: playing
+              // past the out point behaves the way reaching the end does, so
+              // pressing play reviews exactly what the Trim button will keep.
+              if (range && el.currentTime >= range.end) {
+                if (loop) el.currentTime = range.start;
+                else {
+                  el.pause();
+                  el.currentTime = range.end;
+                }
+              }
             }}
             onProgress={(e) => {
               const ranges = e.currentTarget.buffered;
@@ -276,138 +369,168 @@ export function Player({ movie, startAt = 0, onLeave, onClose, onError }: Props)
 
       {!failed && !movie.cloud && (
         <div className="pointer-events-none absolute inset-x-0 bottom-5 z-40 flex justify-center px-6">
-          <div className="surface-float pointer-events-auto flex w-full max-w-[720px] items-center gap-1.5 rounded-2xl px-2.5 py-1.5">
-            <IconButton
-              icon={<IconSkipBack />}
-              label={`Back ${SKIP} seconds`}
-              shortcut="ArrowLeft"
-              tooltipSide="top"
-              onClick={() => seek((video.current?.currentTime ?? 0) - SKIP)}
-            />
-            <IconButton
-              icon={playing ? <IconPause /> : <IconPlay />}
-              label={playing ? "Pause" : "Play"}
-              shortcut="Space"
-              tooltipSide="top"
-              onClick={toggle}
-            />
-            <IconButton
-              icon={<IconSkipForward />}
-              label={`Forward ${SKIP} seconds`}
-              shortcut="ArrowRight"
-              tooltipSide="top"
-              onClick={() => seek((video.current?.currentTime ?? 0) + SKIP)}
-            />
-
-            <span className="ml-1 shrink-0 font-mono text-[11px] tabular-nums text-ink-2">
-              {formatDuration(time)}
-            </span>
-
-            {/* The bar is three stacked layers: what has been watched, what has
-                been fetched behind it, and a real range input on top — which is
-                what makes dragging, and the keyboard, work without reinventing
-                either. */}
-            <div className="relative mx-1 h-1.5 min-w-0 flex-1 rounded-full bg-white/10">
-              <div
-                className="absolute inset-y-0 left-0 rounded-full bg-white/15"
-                style={{ width: percent(buffered) }}
+          <div className="surface-float pointer-events-auto flex w-full max-w-[720px] flex-col gap-1.5 rounded-2xl px-2.5 py-1.5">
+            <div className="flex items-center gap-1.5">
+              <IconButton
+                icon={<IconSkipBack />}
+                label={`Back ${SKIP} seconds`}
+                shortcut="ArrowLeft"
+                tooltipSide="top"
+                onClick={() => seek((video.current?.currentTime ?? 0) - SKIP)}
               />
-              <div
-                className="absolute inset-y-0 left-0 rounded-full bg-accent"
-                style={{ width: percent(time) }}
+              <IconButton
+                icon={playing ? <IconPause /> : <IconPlay />}
+                label={playing ? "Pause" : "Play"}
+                shortcut="Space"
+                tooltipSide="top"
+                onClick={toggle}
               />
-              <input
-                type="range"
-                min={0}
-                max={duration || 0}
-                step={0.05}
-                value={time}
-                aria-label="Seek"
-                onPointerDown={() => (scrubbing.current = true)}
-                onPointerUp={() => (scrubbing.current = false)}
-                onBlur={() => (scrubbing.current = false)}
-                onChange={(e) => seek(Number(e.target.value))}
-                className={clsx(
-                  "absolute inset-0 h-full w-full cursor-pointer appearance-none bg-transparent",
-                  "[&::-webkit-slider-thumb]:size-3 [&::-webkit-slider-thumb]:appearance-none",
-                  "[&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-white",
-                  "[&::-webkit-slider-thumb]:shadow-[0_1px_4px_rgb(0_0_0/0.5)]",
+              <IconButton
+                icon={<IconSkipForward />}
+                label={`Forward ${SKIP} seconds`}
+                shortcut="ArrowRight"
+                tooltipSide="top"
+                onClick={() => seek((video.current?.currentTime ?? 0) + SKIP)}
+              />
+
+              <span className="ml-1 shrink-0 font-mono text-[11px] tabular-nums text-ink-2">
+                {formatDuration(time)}
+              </span>
+
+              {/* Marking a trim takes the scrubber's place rather than sitting
+                  beside it. Both are the same timeline, and two of them would be
+                  two playheads to keep in step and twice the width to aim at. */}
+              {range ? (
+                <TrimTrack
+                  duration={duration}
+                  time={time}
+                  range={range}
+                  onRange={setRange}
+                  onSeek={seek}
+                />
+              ) : (
+                <div className="relative mx-1 h-1.5 min-w-0 flex-1 rounded-full bg-white/10">
+                  <div
+                    className="absolute inset-y-0 left-0 rounded-full bg-white/15"
+                    style={{ width: percent(buffered) }}
+                  />
+                  <div
+                    className="absolute inset-y-0 left-0 rounded-full bg-accent"
+                    style={{ width: percent(time) }}
+                  />
+                  <input
+                    type="range"
+                    min={0}
+                    max={duration || 0}
+                    step={0.05}
+                    value={time}
+                    aria-label="Seek"
+                    onPointerDown={() => (scrubbing.current = true)}
+                    onPointerUp={() => (scrubbing.current = false)}
+                    onBlur={() => (scrubbing.current = false)}
+                    onChange={(e) => seek(Number(e.target.value))}
+                    className={clsx(
+                      "absolute inset-0 h-full w-full cursor-pointer appearance-none bg-transparent",
+                      "[&::-webkit-slider-thumb]:size-3 [&::-webkit-slider-thumb]:appearance-none",
+                      "[&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-white",
+                      "[&::-webkit-slider-thumb]:shadow-[0_1px_4px_rgb(0_0_0/0.5)]",
+                    )}
+                  />
+                </div>
+              )}
+
+              <span className="shrink-0 font-mono text-[11px] tabular-nums text-ink-4">
+                {formatDuration(duration)}
+              </span>
+
+              <span className="mx-1 h-5 w-px shrink-0 bg-line" />
+
+              <Popover
+                align="center"
+                trigger={({ open, toggle: openMenu }) => (
+                  <Tooltip label="Playback speed" side="top">
+                    <button
+                      type="button"
+                      onClick={openMenu}
+                      aria-expanded={open}
+                      className={clsx(
+                        "no-drag h-[30px] shrink-0 rounded-lg px-2 font-mono text-[11px] tabular-nums transition-colors",
+                        rate === 1
+                          ? "text-ink-2 hover:bg-hover hover:text-ink"
+                          : "bg-accent/18 text-accent",
+                        open && "bg-hover text-ink",
+                      )}
+                    >
+                      {rate}×
+                    </button>
+                  </Tooltip>
                 )}
+              >
+                {({ close }) => (
+                  <div className="w-[104px]">
+                    {RATES.map((r) => (
+                      <button
+                        key={r}
+                        type="button"
+                        aria-current={r === rate}
+                        onClick={() => {
+                          setRate(r);
+                          close();
+                        }}
+                        className={clsx(
+                          "flex w-full items-center justify-between rounded-lg px-2 py-1.5 text-left text-[12.5px] transition-colors hover:bg-hover",
+                          r === rate ? "text-accent" : "text-ink",
+                        )}
+                      >
+                        <span className="font-mono tabular-nums">{r}×</span>
+                        {r === 1 && <span className="text-[11px] text-ink-4">Normal</span>}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </Popover>
+
+              <IconButton
+                icon={<IconLoop />}
+                label="Loop"
+                active={loop}
+                tooltipSide="top"
+                onClick={() => setLoop((v) => !v)}
+              />
+
+              {hasAudio && (
+                <IconButton
+                  icon={muted ? <IconMute /> : <IconVolume />}
+                  label={muted ? "Unmute" : "Mute"}
+                  shortcut="M"
+                  active={muted}
+                  tooltipSide="top"
+                  onClick={() => {
+                    const el = video.current;
+                    if (!el) return;
+                    el.muted = !el.muted;
+                    setMuted(el.muted);
+                  }}
+                />
+              )}
+
+              <IconButton
+                icon={<IconTrim />}
+                label={range ? "Stop trimming" : "Trim"}
+                active={Boolean(range)}
+                disabled={trimming}
+                tooltipSide="top"
+                onClick={range ? cancelTrim : startTrim}
               />
             </div>
 
-            <span className="shrink-0 font-mono text-[11px] tabular-nums text-ink-4">
-              {formatDuration(duration)}
-            </span>
-
-            <span className="mx-1 h-5 w-px shrink-0 bg-line" />
-
-            <Popover
-              align="center"
-              trigger={({ open, toggle: openMenu }) => (
-                <Tooltip label="Playback speed" side="top">
-                  <button
-                    type="button"
-                    onClick={openMenu}
-                    aria-expanded={open}
-                    className={clsx(
-                      "no-drag h-[30px] shrink-0 rounded-lg px-2 font-mono text-[11px] tabular-nums transition-colors",
-                      rate === 1
-                        ? "text-ink-2 hover:bg-hover hover:text-ink"
-                        : "bg-accent/18 text-accent",
-                      open && "bg-hover text-ink",
-                    )}
-                  >
-                    {rate}×
-                  </button>
-                </Tooltip>
-              )}
-            >
-              {({ close }) => (
-                <div className="w-[104px]">
-                  {RATES.map((r) => (
-                    <button
-                      key={r}
-                      type="button"
-                      aria-current={r === rate}
-                      onClick={() => {
-                        setRate(r);
-                        close();
-                      }}
-                      className={clsx(
-                        "flex w-full items-center justify-between rounded-lg px-2 py-1.5 text-left text-[12.5px] transition-colors hover:bg-hover",
-                        r === rate ? "text-accent" : "text-ink",
-                      )}
-                    >
-                      <span className="font-mono tabular-nums">{r}×</span>
-                      {r === 1 && <span className="text-[11px] text-ink-4">Normal</span>}
-                    </button>
-                  ))}
-                </div>
-              )}
-            </Popover>
-
-            <IconButton
-              icon={<IconLoop />}
-              label="Loop"
-              active={loop}
-              tooltipSide="top"
-              onClick={() => setLoop((v) => !v)}
-            />
-
-            {hasAudio && (
-              <IconButton
-                icon={muted ? <IconMute /> : <IconVolume />}
-                label={muted ? "Unmute" : "Mute"}
-                shortcut="M"
-                active={muted}
-                tooltipSide="top"
-                onClick={() => {
-                  const el = video.current;
-                  if (!el) return;
-                  el.muted = !el.muted;
-                  setMuted(el.muted);
-                }}
+            {range && (
+              <TrimActions
+                range={range}
+                duration={duration}
+                busy={trimming}
+                onCancel={cancelTrim}
+                onTrim={() => void applyTrim()}
               />
             )}
           </div>

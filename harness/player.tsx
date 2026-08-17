@@ -43,6 +43,10 @@ function Harness() {
             console.log("close");
             setOpen(false);
           }}
+          // The app switches the player onto the trimmed file; here there is
+          // only the one clip on disk, so the result is logged instead and the
+          // sample plays on.
+          onTrimmed={(t) => console.log("trimmed", t)}
           onError={(m) => console.error(m)}
         />
       ) : (

@@ -297,6 +297,18 @@ export const IconCrop = (p: SVGProps<SVGSVGElement>) => (
   </Icon>
 );
 
+/**
+ * Scissors — trimming a recording, as distinct from `IconCrop`'s corners,
+ * which mean cutting a rectangle out of a still.
+ */
+export const IconTrim = (p: SVGProps<SVGSVGElement>) => (
+  <Icon {...p}>
+    <circle cx="4" cy="12" r="2" />
+    <circle cx="12" cy="12" r="2" />
+    <path d="M5.4 10.6 12.5 2M10.6 10.6 3.5 2" />
+  </Icon>
+);
+
 export const IconUndo = (p: SVGProps<SVGSVGElement>) => (
   <Icon {...p}>
     <path d="M3 7h7a3.5 3.5 0 0 1 0 7H6" />

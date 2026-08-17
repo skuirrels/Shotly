@@ -81,6 +81,19 @@ export interface ShareProvider {
   connected: boolean;
 }
 
+/**
+ * A recording that has had its dead air cut off.
+ *
+ * A new capture rather than an edit in place — see `src-tauri/src/trim.rs` for
+ * why — so the player has a different file to switch to when the trim lands.
+ */
+export interface Trimmed {
+  path: string;
+  name: string;
+  /** Running time of the new file, which is the length of the selection. */
+  seconds: number;
+}
+
 export interface LibraryItem {
   path: string;
   name: string;

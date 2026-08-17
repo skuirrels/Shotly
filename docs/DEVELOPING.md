@@ -168,6 +168,7 @@ src-tauri/src/
     gauth.rs     signing in to Google — OAuth for the provider above
   media.rs       serving a recording to the player, off the main thread
   record.rs      screen recording: what to record, and the child that records it
+  trim.rs        cutting the dead air off a recording, losslessly
   scroll.rs      scrolling capture: session loop and the row-signature stitcher
   combine.rs     several captures composed onto one sheet
   platform.rs    AppKit escapes (window level, activation policy, capture hiding)
@@ -547,6 +548,52 @@ Everything else is in the component:
 * `harness/player.html` runs the whole pane in a browser against a generated
   test clip. What it cannot reach is the asset protocol, which is exactly the
   half that the two config lines above govern — check that in the app.
+
+### Trimming one (`trim.rs`, `TrimBar.tsx`)
+
+The scissors in the transport turns the scrubber into a selection: a green
+handle where the keeper starts, a red one where it ends, everything outside
+them dimmed. Snagit's shape, deliberately — it is a control people arrive
+already knowing, and the colours are half of why. `I` and `O` set a mark at the
+playhead without moving the picture; dragging a handle *does* move the picture,
+so you are always looking at the frame you are about to cut on.
+
+The cut is `/usr/bin/avconvert`, with `--start`, `--duration`, and
+`PresetPassthrough`:
+
+* **Passthrough copies the samples rather than re-encoding them**, so the trim
+  is lossless and costs about what copying the file costs — measured at two
+  seconds to take thirty seconds out of a 334 MB recording. Any other preset
+  re-encodes, which on a Retina capture means minutes of fan noise and a worse
+  file at the end of it.
+* **The cut is still frame-accurate.** Passthrough can only begin the copied
+  data at a sync sample, so `avconvert` writes an edit list that starts playback
+  at the requested instant inside it. Asking for 3.000s gives a file whose
+  duration is 3.000s, not "3-ish, to the nearest keyframe".
+* **The container is the source's**, because `avconvert` picks it from the
+  output name. A trimmed `.mov` must not come back a `.mp4`.
+
+Two things are worth knowing before changing any of it:
+
+* **The original is never overwritten.** The trim lands in the library as
+  `<name> trimmed` and the player switches onto it. A screenshot can be taken
+  again; thirty seconds of something happening on screen cannot, and an
+  overwrite that took the wrong two seconds off would be unrecoverable.
+  Trimming a trim gives `X trimmed (2)`, not `X trimmed trimmed`.
+* **There is no Cut Out.** Snagit's timeline also removes a middle section and
+  closes the gap; that is two exports and a join, and nothing on macOS joins two
+  movies from the command line. It needs an `AVMutableComposition` — the objc2
+  route this module exists to avoid — and it is much the rarer ask for a screen
+  recording. If it is ever wanted, grow `trim.rs`, and the composition is how.
+
+`plan()` holds every way a selection can be wrong (handles crossed, a selection
+of nothing, a selection that is the whole recording) and is tested without a
+file on disk. One test does need both the converter and a real movie:
+`a_trim_comes_back_as_a_movie_shotly_can_measure` trims the harness clip and
+reads the result back with `video::probe` — the same code the library and the
+player use. It is the only thing that can catch a trim that succeeds and
+produces a file Shotly can no longer measure, which would reach the library as a
+recording with no duration and no thumbnail.
 
 ## The main thread and files that are not really there
 

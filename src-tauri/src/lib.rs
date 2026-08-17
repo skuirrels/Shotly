@@ -15,6 +15,7 @@ mod scroll;
 mod share;
 mod snap;
 mod platform;
+mod trim;
 mod update;
 mod video;
 
@@ -236,6 +237,7 @@ pub fn run() {
             record::record_stop,
             record::record_cancel,
             record::record_running,
+            trim::video_trim,
             hotkeys::hotkeys_list,
             hotkeys::hotkeys_set,
             hotkeys::hotkeys_reset,
