@@ -34,7 +34,15 @@ pub const LABEL: &str = "annotate";
 /// How long the page may go silent before we assume it has died.
 const HEARTBEAT_GRACE: Duration = Duration::from_secs(3);
 /// How long it may take to paint before we give up on it.
-const READY_GRACE: Duration = Duration::from_secs(3);
+///
+/// Longer than the heartbeat's grace on purpose, and safe to be: a layer that
+/// has not painted is mouse-transparent, so waiting on it costs nothing and
+/// blocks nobody. Three seconds was measured to be plenty on an idle machine —
+/// the window is built in about 50ms and the page reports ready at about 225 —
+/// but it is not a budget worth cutting fine on a busy one, because missing it
+/// closes a layer the user asked for and the only symptom is that the feature
+/// "doesn't open".
+const READY_GRACE: Duration = Duration::from_secs(10);
 
 #[derive(Default)]
 pub struct AnnotateState {
@@ -49,6 +57,16 @@ pub struct AnnotateState {
     pub hot_rect: Mutex<Option<HotRect>>,
     /// Bumped to retire the running cursor watcher; see `set_pass_through`.
     pub watcher: Mutex<u64>,
+    /// When the current layer began opening, so the log says how long it took.
+    pub started: Mutex<Option<Instant>>,
+    /// Bumped by every start and every stop. A watchdog belonging to a retired
+    /// session finds its number stale and leaves the current one alone.
+    pub session: Mutex<u64>,
+    /// Set the moment teardown begins. `close` is asynchronous, so the window
+    /// can still be found for a while afterwards — and a page that finishes
+    /// loading in that window would otherwise be handed the mouse for a layer
+    /// that is on its way out, leaving a click-eating sheet nobody is guarding.
+    pub closing: Mutex<bool>,
 }
 
 /// A rectangle in the overlay page's own coordinates (CSS points from its
@@ -72,6 +90,8 @@ pub fn stop(app: &AppHandle) {
     hold_escape(app, false);
     {
         let state = app.state::<AnnotateState>();
+        *state.closing.lock().unwrap() = true;
+        *state.session.lock().unwrap() += 1;
         *state.last_beat.lock().unwrap() = None;
         *state.display.lock().unwrap() = None;
         *state.pass_through.lock().unwrap() = false;
@@ -195,6 +215,15 @@ fn pick_display(displays: &[DisplayInfo], preferred: Option<u32>) -> Option<&Dis
 }
 
 fn start(app: &AppHandle, preferred: Option<u32>) -> Result<(), String> {
+    let session = {
+        let state = app.state::<AnnotateState>();
+        *state.started.lock().unwrap() = Some(Instant::now());
+        *state.closing.lock().unwrap() = false;
+        let mut session = state.session.lock().unwrap();
+        *session += 1;
+        *session
+    };
+
     let displays = display::displays().map_err(|e| e.to_string())?;
 
     // Cover one display, not the whole virtual desktop.
@@ -234,14 +263,36 @@ fn start(app: &AppHandle, preferred: Option<u32>) -> Result<(), String> {
     // Clicks pass through until the page says it has drawn something.
     window.set_ignore_cursor_events(true).map_err(|e| e.to_string())?;
 
+    // And it opens where you are looking. Without this the layer can be created
+    // on a Space you are not on: invisible, and — once it reports ready — taking
+    // every click on the screen it did land on. That is indistinguishable from a
+    // machine that has seized, and pressing the key again only toggles the one
+    // you cannot see.
+    if let Err(err) = crate::platform::follow_active_space(&window) {
+        eprintln!("[annotate] the layer will not follow Spaces: {err}");
+    }
+
     eprintln!("[annotate] window is up and mouse-transparent; awaiting paint");
-    watch(app);
+    watch(app, session);
     Ok(())
 }
 
 /// The page has painted: hand it the mouse and the keyboard.
 pub fn mark_ready(app: &AppHandle) -> Result<(), String> {
-    eprintln!("[annotate] page reported ready");
+    let took = app.state::<AnnotateState>().started.lock().unwrap().map(|t| t.elapsed().as_millis());
+    eprintln!("[annotate] page reported ready after {took:?}ms");
+
+    // The one refusal that matters. `close` is asynchronous, so a window being
+    // torn down can still be found here — and a page that finished loading a
+    // moment too late would be handed the mouse for a layer that is leaving,
+    // with its watchdog already retired. The result is a full-screen sheet
+    // eating every click that nothing is left to take down: a bricked screen,
+    // and the exact shape of the failure this file's header warns about.
+    if *app.state::<AnnotateState>().closing.lock().unwrap() {
+        eprintln!("[annotate] page painted while the layer was closing; keeping the mouse away");
+        return Err("annotation layer is closing".into());
+    }
+
     let window = app.get_webview_window(LABEL).ok_or("annotation layer is not open")?;
 
     {
@@ -349,13 +400,22 @@ fn follow_cursor(app: &AppHandle, generation: u64) {
 /// Polls rather than trusting the page to report failure — a renderer that has
 /// hung cannot tell us it hung, and that is precisely the case that would
 /// otherwise leave a click-swallowing sheet over the whole screen.
-fn watch(app: &AppHandle) {
+fn watch(app: &AppHandle, session: u64) {
     let handle = app.clone();
     std::thread::spawn(move || {
         let opened = Instant::now();
 
         loop {
             std::thread::sleep(Duration::from_millis(500));
+
+            // A newer layer has taken over. Leaving without touching anything is
+            // the whole point: this watchdog was measuring a window that no
+            // longer exists, and its idea of "never painted" would otherwise
+            // close the layer that just opened — which is what made the feature
+            // seem to need three or four presses before it would stay up.
+            if *handle.state::<AnnotateState>().session.lock().unwrap() != session {
+                return;
+            }
 
             // Someone closed it; nothing left to guard.
             if handle.get_webview_window(LABEL).is_none() {
