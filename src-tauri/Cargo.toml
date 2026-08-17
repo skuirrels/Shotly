@@ -1,6 +1,6 @@
 [package]
 name = "shotly"
-version = "0.7.1"
+version = "0.7.2"
 description = "Capture, annotate, ship."
 authors = ["Ty Omidi"]
 edition = "2021"
