@@ -9,6 +9,7 @@ mod hotkeys;
 mod markup;
 mod ocr;
 mod pin;
+mod drive;
 mod media;
 mod record;
 mod scroll;
@@ -200,6 +201,7 @@ pub fn run() {
             backup::backup_settings,
             backup::backup_configure,
             backup::backup_now,
+            drive::drive_link,
             backup::launch_at_login,
             backup::set_launch_at_login,
             ocr::scan_image,

@@ -10,6 +10,7 @@ import {
   IconFolder,
   IconGrid,
   IconImage,
+  IconLink,
   IconPlay,
   IconRedo,
   IconRegion,
@@ -39,6 +40,8 @@ export interface PlayerBar {
   onReveal: () => void;
   onExternal: () => void;
   onDelete: () => void;
+  /** Copy a Drive link to this recording — the way to send a big one. */
+  onCopyLink: () => void;
 }
 
 interface Props {
@@ -211,6 +214,19 @@ export function TopBar({
               label="Show in Finder"
               onClick={player.onReveal}
             />
+            {/* A recording is far too big to send as a file, so the useful
+                verb here is not "share" but "copy the link to it". */}
+            <Tooltip label="Copy a Google Drive link to this recording">
+              <button
+                type="button"
+                onClick={player.onCopyLink}
+                disabled={busy !== null}
+                className="no-drag mr-1 flex h-8 items-center gap-1.5 rounded-lg bg-white/[0.07] px-2.5 text-[12.5px] font-medium text-ink transition-colors hover:bg-white/[0.11] active:bg-white/[0.14] disabled:opacity-40"
+              >
+                <IconLink />
+                {busy === "link" ? "Linking…" : "Copy link"}
+              </button>
+            </Tooltip>
             <Tooltip label="Open in the system movie player">
               <button
                 type="button"

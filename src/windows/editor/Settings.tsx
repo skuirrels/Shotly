@@ -335,6 +335,27 @@ function Backup() {
             New captures are copied as they are saved. Nothing is ever deleted from the backup
             — trashing a capture in Shotly leaves the copy where it is.
           </p>
+
+          {/* The one thing Shotly cannot do for you. Setting this per file
+              would need a Google account connected to the app; setting it once
+              on the folder needs nothing, and everything copied in afterwards
+              inherits it. */}
+          {settings?.destination?.includes("GoogleDrive") && (
+            <div className="mt-3 rounded-xl border border-line bg-surface p-3">
+              <p className="text-[12px] font-medium text-ink">Sending big files as a link</p>
+              <p className="mt-1 text-[11.5px] leading-relaxed text-ink-3">
+                <strong className="font-medium text-ink-2">Copy Drive link</strong> — in the
+                library's right-click menu, and on the player — puts a link to the backed-up copy
+                on your clipboard, which is how you send a recording without sending three hundred
+                megabytes.
+              </p>
+              <p className="mt-1.5 text-[11.5px] leading-relaxed text-ink-3">
+                For those links to open for anyone else, set the <strong className="font-medium text-ink-2">Shotly</strong>{" "}
+                folder in Google Drive to <em>Anyone with the link — Viewer</em>, once. Everything
+                copied into it after that inherits the setting.
+              </p>
+            </div>
+          )}
         </>
       )}
     </>

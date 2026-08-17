@@ -162,6 +162,7 @@ src-tauri/src/
   markup.rs      the shTL PNG chunk that keeps a saved capture editable
   ocr.rs         text and QR/barcode recognition, via macOS Vision
   pin.rs         always-on-top pin windows
+  drive.rs       a shareable Google Drive link, read out of Drive's own index
   media.rs       serving a recording to the player, off the main thread
   record.rs      screen recording: what to record, and the child that records it
   scroll.rs      scrolling capture: session loop and the row-signature stitcher
@@ -622,6 +623,41 @@ Worth knowing if you touch it:
   that claims the range it was given is an off-by-one nobody sees until seeking
   lands in the wrong place, which is why the range arithmetic has tests of its
   own.
+
+## Drive links without a Google API (`drive.rs`)
+
+The backup is a file copy — see the top of `backup.rs` for why that is the
+right shape and an API integration is not. What a copy cannot give you is the
+*link*: a file's Drive id is nowhere in its path.
+
+It is, though, already on the machine. Drive for desktop keeps a SQLite index at
+`~/Library/Application Support/Google/DriveFS/<account>/metadata_sqlite_db`, and
+its `items` table carries `id` beside `local_title`. One read-only query — 9ms
+against a real one, so it is not worth copying the file first — and there is the
+id. No OAuth, no tokens, nothing to sign into.
+
+Three things this has to get right:
+
+* **Which file.** A real Drive had *two* folders called `Shotly`, both directly
+  under My Drive, and the backup writes to one of them. So the query walks the
+  parent chain with a recursive CTE and matches it against the destination the
+  user actually chose. Two files that both fit returns **nothing**: a link to the
+  wrong recording is worse than no link.
+* **Escaping.** The `sqlite3` CLI takes a statement, not bound parameters, and
+  capture names are the user's. Quotes are doubled, which is SQL's own escape,
+  and there is a test with `'; drop table items; --` in it.
+* **Failing softly.** That index is Google's private store: undocumented, and
+  they can change its shape whenever they like. Every failure returns a sentence
+  worth showing — backup off, not copied yet, still uploading — and nothing in
+  the app depends on it working.
+
+Sharing itself stays with the user: they set the `Shotly` folder in Drive to
+"anyone with the link — Viewer" once, and everything copied in afterwards
+inherits it. Doing that per file is the one thing that would need the API.
+
+The query has a test that builds a Drive-shaped database and runs the real
+statement against it, because a renamed column would otherwise break every link
+in the app while all the Rust either side of it went on passing.
 
 ## Neon — one recipe, two renderers
 

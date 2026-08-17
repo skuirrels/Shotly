@@ -122,6 +122,14 @@ export const revealInFinder = (path: string) => invoke<void>("reveal_in_finder",
  */
 export const openExternally = (path: string) => invoke<void>("open_externally", { path });
 
+/**
+ * A shareable Google Drive link to the backed-up copy of a capture.
+ *
+ * Rejects with something worth showing the user: backup off, not copied yet,
+ * or Drive still uploading. See `src-tauri/src/drive.rs`.
+ */
+export const driveLink = (path: string) => invoke<string>("drive_link", { path });
+
 export const launchAtLogin = () => invoke<boolean>("launch_at_login");
 export const setLaunchAtLogin = (enabled: boolean) =>
   invoke<boolean>("set_launch_at_login", { enabled });

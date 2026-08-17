@@ -81,6 +81,13 @@ again. <kbd>Esc</kbd> goes back to the library, and the Player tab holds your
 place while you are away. **Open in…** hands the file to QuickTime Player, for
 trimming or full screen.
 
+**Sending one to someone** is a link, not an attachment — a few minutes of
+screen is hundreds of megabytes. With Backup pointed at Google Drive, **Copy
+Drive link** (in the library's right-click menu, and on the player) puts a link
+to the copy in your Drive on the clipboard. Set the `Shotly` folder in Drive to
+*Anyone with the link — Viewer* once, and those links open for whoever you send
+them to.
+
 The panel does not appear in the recording, so you can leave it where it is.
 There is no audio: this records the screen, not the room.
 

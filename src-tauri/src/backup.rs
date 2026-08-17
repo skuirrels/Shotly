@@ -19,7 +19,11 @@ use tauri::{AppHandle, Emitter, Manager};
 const CLOUD_STORAGE: &str = "Library/CloudStorage";
 
 /// The subfolder captures are copied into, inside whichever folder was chosen.
-const FOLDER: &str = "Shotly";
+///
+/// Public because `drive.rs` has to know where the copy landed to find its
+/// link, and a second copy of the name in that module is a second thing to
+/// change when this one moves.
+pub const FOLDER: &str = "Shotly";
 
 #[derive(Default, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

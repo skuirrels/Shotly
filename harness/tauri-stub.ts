@@ -32,6 +32,11 @@ export async function invoke<T>(cmd: string, args?: Record<string, unknown>): Pr
 
   // Start at login. Held in memory so the switch behaves as it does in the
   // app: set it, and the answer that comes back is what the system reports.
+  if (cmd === "drive_link") {
+    const name = String(args?.path ?? "").split("/").pop() ?? "";
+    if (!name.endsWith(".mov")) throw new Error("That capture hasn't been backed up yet.");
+    return "https://drive.google.com/file/d/HARNESSFILEID/view?usp=sharing" as T;
+  }
   if (cmd === "launch_at_login") return atLogin as T;
   if (cmd === "set_launch_at_login") {
     atLogin = Boolean(args?.enabled);

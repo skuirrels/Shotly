@@ -6,6 +6,7 @@ import {
   IconExternal,
   IconFolder,
   IconImage,
+  IconLink,
   IconCanvas,
   IconPin,
   IconPlay,
@@ -44,6 +45,8 @@ interface Props {
   onCombine: (paths: string[], layout: "row" | "column" | "grid") => void;
   /** Stick one capture to the front of the screen. */
   onPin: (path: string) => void;
+  /** Put a Google Drive link to this capture on the clipboard. */
+  onShareLink: (path: string) => void;
 }
 
 /**
@@ -66,6 +69,7 @@ export function Library({
   onItems,
   onPin,
   onCombine,
+  onShareLink,
 }: Props) {
   const [items, setItems] = useState<LibraryItem[] | null>(null);
   const [scope, setScope] = useState<Scope>(null);
@@ -301,6 +305,13 @@ export function Library({
         label: "Show in Finder",
         icon: <IconFolder />,
         run: () => void ipc.revealInFinder(targets[0]),
+      },
+      // The point of a link rather than the file itself: a recording is
+      // hundreds of megabytes, and nobody wants that in their inbox.
+      !many && {
+        label: "Copy Drive link",
+        icon: <IconLink />,
+        run: () => onShareLink(targets[0]),
       },
       "separator" as const,
       {

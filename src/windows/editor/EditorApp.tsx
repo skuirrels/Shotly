@@ -341,6 +341,31 @@ export function EditorApp() {
   );
 
   /**
+   * Put a Google Drive link to a capture on the clipboard.
+   *
+   * The point of it is the recordings: a seven-minute one is three hundred
+   * megabytes, which is a link's worth of thing and not an attachment's. It
+   * reads the id out of Drive's own index — no account to connect — and every
+   * way that can fail comes back as something worth reading. See
+   * `src-tauri/src/drive.rs`.
+   */
+  const shareLink = useCallback(
+    async (path: string) => {
+      setBusy("link");
+      try {
+        const url = await ipc.driveLink(path);
+        await writeText(url);
+        notify("Drive link copied — anyone with it can view", "ok", 4000);
+      } catch (e) {
+        notify(String(e), "error", 5200);
+      } finally {
+        setBusy(null);
+      }
+    },
+    [notify],
+  );
+
+  /**
    * Watch a recording.
    *
    * The player is a pane like the editor, not a window: a recording is part of
@@ -1396,6 +1421,7 @@ export function EditorApp() {
                 .openExternally(movie.path)
                 .catch((e) => notify(`Could not open that recording: ${e}`, "error")),
             onDelete: () => void deleteCaptures([movie.path]),
+            onCopyLink: () => void shareLink(movie.path),
           }
         }
         onView={showView}
@@ -1465,6 +1491,7 @@ export function EditorApp() {
               onItems={onLibraryItems}
               onPin={pinFile}
               onCombine={combineFiles}
+              onShareLink={(path) => void shareLink(path)}
             />
           </div>
         )}
