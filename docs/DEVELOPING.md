@@ -684,14 +684,19 @@ it readable, including ones taken later and never sent to anyone.
 * **`invalid_grant` disconnects.** A refresh token revoked from the Google
   account page fails identically for ever; dropping it means the next attempt
   offers to connect instead of failing the same way again.
-* **The scope is the wide `drive` one**, and it has to be: the files were
-  uploaded by Drive for desktop, not by this app, so `drive.file` — which only
-  covers an app's own files — cannot touch them. Google classes `drive` as
-  restricted. For one person on their own project that means adding themselves
-  as a test user and clicking past one "unverified app" screen. Shipping it to
-  other people would mean an annual third-party security assessment, which is
-  why there is **no client id in the binary**: the user brings their own, from
-  their own Cloud project, and the app is theirs.
+* **The scope is `drive.file`, and the app uploads what it shares.** This was
+  the wide `drive` scope for one release, so that it could share the copy
+  Drive-for-desktop had already synced and skip an upload. That was a bad trade
+  and worth recording as one: `drive` is a *restricted* scope, so a published
+  client needs an annual third-party security assessment, and the alternative —
+  every user creating their own Cloud project, consent screen and test-user
+  entry — is a ten-minute setup where Snagit's is ten seconds. `drive.file` is
+  non-sensitive: an ordinary consent screen, no assessment, and the client ships
+  inside the app like every other desktop application's.
+
+  It also gives away less. `drive.file` lets Shotly see only what Shotly
+  created — the folder it makes and the captures it uploads — where `drive` was
+  a grant over everything the user owns to touch one file.
 
 The command returns `{ url, shared }` rather than a bare string, because the
 difference between the two is the whole feature: an unshared link is correct

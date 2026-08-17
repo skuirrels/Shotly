@@ -24,7 +24,7 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Emitter, Manager};
 
 /// Where Drive for desktop keeps its index, under the home directory.
 const DRIVEFS: &str = "Library/Application Support/Google/DriveFS";
@@ -463,6 +463,197 @@ mod tests {
     }
 }
 
+// ------------------------------------------------------------- uploading
+
+/// The folder Shotly makes in your Drive, and everything it may ever touch.
+const UPLOAD_FOLDER: &str = "Shotly";
+
+/// How much is sent per request, and so how often progress moves.
+///
+/// Google requires resumable chunks to be a multiple of 256 KB. Eight megabytes
+/// is large enough that the per-request overhead disappears on a fast line and
+/// small enough that a 300 MB recording reports progress forty times rather
+/// than twice.
+const CHUNK: usize = 8 * 1024 * 1024;
+
+fn api(token: &str, method: &str, url: &str) -> ureq::RequestBuilder<ureq::typestate::WithBody> {
+    let request = match method {
+        "POST" => ureq::post(url),
+        "PATCH" => ureq::patch(url),
+        _ => ureq::put(url),
+    };
+    request.header("Authorization", &format!("Bearer {token}"))
+}
+
+/// The id of Shotly's folder, making it if this is the first time.
+///
+/// `drive.file` means the app can only see what it created, so this cannot
+/// accidentally find and fill up a folder of the user's called Shotly — the
+/// query is scoped to the app's own files by Google, not by us.
+fn folder(token: &str) -> Result<String, String> {
+    let query = urlencoding(&format!(
+        "mimeType = 'application/vnd.google-apps.folder' and name = '{UPLOAD_FOLDER}' \
+         and trashed = false"
+    ));
+    let found = ureq::get(&format!(
+        "https://www.googleapis.com/drive/v3/files?q={query}&fields=files(id)&pageSize=1"
+    ))
+    .header("Authorization", &format!("Bearer {token}"))
+    .call()
+    .map_err(|e| format!("could not ask Drive for the folder: {e}"))?
+    .body_mut()
+    .read_to_string()
+    .map_err(|e| e.to_string())?;
+
+    #[derive(serde::Deserialize)]
+    struct Listing {
+        #[serde(default)]
+        files: Vec<Entry>,
+    }
+    #[derive(serde::Deserialize)]
+    struct Entry {
+        id: String,
+    }
+
+    if let Some(entry) = serde_json::from_str::<Listing>(&found).ok().and_then(|l| l.files.into_iter().next())
+    {
+        return Ok(entry.id);
+    }
+
+    let made = api(token, "POST", "https://www.googleapis.com/drive/v3/files?fields=id")
+        .send_json(serde_json::json!({
+            "name": UPLOAD_FOLDER,
+            "mimeType": "application/vnd.google-apps.folder",
+        }))
+        .map_err(|e| format!("could not make the Shotly folder: {e}"))?
+        .body_mut()
+        .read_to_string()
+        .map_err(|e| e.to_string())?;
+
+    serde_json::from_str::<Entry>(&made)
+        .map(|e| e.id)
+        .map_err(|_| "Drive did not say what it made".to_string())
+}
+
+/// Send `path` to Drive in chunks, reporting how far it has got.
+///
+/// Resumable rather than a single POST, for the reason the whole feature
+/// exists: these are recordings, and a 300 MB upload that fails at 90% with no
+/// progress shown is the worst of both worlds.
+fn upload(
+    token: &str,
+    path: &Path,
+    parent: &str,
+    mut progress: impl FnMut(u64, u64),
+) -> Result<String, String> {
+    let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    let total = std::fs::metadata(path).map_err(|e| e.to_string())?.len();
+
+    let start = api(
+        token,
+        "POST",
+        "https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable&fields=id,webViewLink",
+    )
+    .send_json(serde_json::json!({ "name": name, "parents": [parent] }))
+    .map_err(|e| format!("could not start the upload: {e}"))?;
+
+    let session = start
+        .headers()
+        .get("location")
+        .and_then(|v| v.to_str().ok())
+        .ok_or("Drive did not offer somewhere to upload to")?
+        .to_string();
+
+    use std::io::{Read, Seek, SeekFrom};
+    let mut file = std::fs::File::open(path).map_err(|e| e.to_string())?;
+    let mut sent: u64 = 0;
+    let mut buffer = vec![0u8; CHUNK];
+
+    while sent < total {
+        let want = CHUNK.min((total - sent) as usize);
+        file.seek(SeekFrom::Start(sent)).map_err(|e| e.to_string())?;
+        file.read_exact(&mut buffer[..want]).map_err(|e| e.to_string())?;
+
+        let last = sent + want as u64 - 1;
+        let reply = ureq::put(&session)
+            .header("Content-Length", &want.to_string())
+            .header("Content-Range", &format!("bytes {sent}-{last}/{total}"))
+            .send(&buffer[..want]);
+
+        match reply {
+            // 200/201: the last chunk landed and Drive described the file.
+            Ok(mut done) => {
+                let body = done.body_mut().read_to_string().map_err(|e| e.to_string())?;
+                #[derive(serde::Deserialize)]
+                struct Made {
+                    id: String,
+                }
+                progress(total, total);
+                return serde_json::from_str::<Made>(&body)
+                    .map(|m| m.id)
+                    .map_err(|_| "Drive did not say what it stored".to_string());
+            }
+            // 308: this chunk landed, keep going. ureq reports it as an error
+            // because it is not 2xx, which it very much is not — it is Drive
+            // asking for the rest.
+            Err(ureq::Error::StatusCode(308)) => {
+                sent += want as u64;
+                progress(sent, total);
+            }
+            Err(e) => return Err(format!("the upload failed at {sent} of {total} bytes: {e}")),
+        }
+    }
+
+    Err("the upload finished without Drive confirming it".into())
+}
+
+/// Percent-encode a Drive query.
+fn urlencoding(value: &str) -> String {
+    value
+        .bytes()
+        .map(|b| match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                (b as char).to_string()
+            }
+            other => format!("%{other:02X}"),
+        })
+        .collect()
+}
+
+/// Upload a capture to Drive, share it, and hand back the link.
+///
+/// The whole of what "send this to someone" means, in one command: no backup
+/// required, no Drive for desktop required, and nothing of yours visible to
+/// Shotly but the file you chose to send.
+#[tauri::command]
+pub async fn drive_share(app: AppHandle, path: String) -> Result<Link, String> {
+    let source = PathBuf::from(&path);
+    if !source.is_file() {
+        return Err("That capture is not on this disk any more.".into());
+    }
+
+    let reporter = app.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let token = crate::gauth::token()?;
+        let parent = folder(&token)?;
+
+        let id = upload(&token, &source, &parent, |sent, total| {
+            let _ = reporter.emit(
+                "drive:progress",
+                serde_json::json!({ "sent": sent, "total": total }),
+            );
+        })?;
+
+        share(&id)?;
+        Ok(Link {
+            url: format!("https://drive.google.com/file/d/{id}/view?usp=sharing"),
+            shared: true,
+        })
+    })
+    .await
+    .map_err(|e| format!("the upload failed: {e}"))?
+}
+
 // ------------------------------------------------------------ the account
 
 /// Whether an OAuth client has been set up at all.
@@ -506,4 +697,10 @@ pub async fn drive_connect(app: AppHandle) -> Result<bool, String> {
 #[tauri::command]
 pub fn drive_disconnect() {
     crate::gauth::disconnect();
+}
+
+/// Whether this build carries its own OAuth client, and so needs no setting up.
+#[tauri::command]
+pub fn drive_built_in_client() -> bool {
+    crate::gauth::built_in()
 }

@@ -84,13 +84,15 @@ trimming or full screen.
 **Sending one to someone** is a link, not an attachment — a few minutes of
 screen is hundreds of megabytes. With Backup pointed at Google Drive, **Copy
 Drive link** (in the library's right-click menu, and on the player) puts a link
-to the copy in your Drive on the clipboard. A link only opens for someone
-else if the file allows it, and there are two ways to arrange that. Either
-connect a Google account in **Settings → Backup**, and Shotly sets *anyone with
-the link — Viewer* on each file as it copies the link — only the one you sent,
-nothing else in the folder. Or click *Open the Shotly folder in Drive* and share
-the whole folder once, which needs no account but makes every capture in it
-readable. Do neither and the person you send it to sees "You need access".
+to the copy in your Drive on the clipboard. Connect a Google account in
+**Settings → Backup** — one click, pick the account, done — and Shotly uploads
+the capture to a `Shotly` folder in your Drive, shares that one file, and puts
+the link on your clipboard. It can only see what it put there; the rest of your
+Drive stays invisible to it.
+
+Without an account it still copies a link to the backed-up copy, but that one
+opens for nobody until you share the folder yourself — the same pane has a
+button that takes you there.
 
 The panel does not appear in the recording, so you can leave it where it is.
 There is no audio: this records the screen, not the room.

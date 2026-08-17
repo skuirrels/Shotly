@@ -83,6 +83,39 @@ APPLE_SIGNING_IDENTITY="Developer ID Application: Your Name (TEAMID)" npm run re
 node scripts/publish.mjs --allow-identity-change --notes "..."
 ```
 
+## The Google client
+
+Sharing to Drive needs an OAuth client, and a release build carries one so that
+nobody who installs Shotly ever sees a Google Cloud console. It is **not in the
+repository**: it comes from the environment at compile time, through
+`option_env!` in `gauth.rs`.
+
+```bash
+export SHOTLY_GOOGLE_CLIENT_ID="....apps.googleusercontent.com"
+export SHOTLY_GOOGLE_CLIENT_SECRET="GOCSPX-..."
+npm run publish
+```
+
+A build without them still works: Settings offers to take a client the user
+supplies, which is what a build from source needs. `drive_built_in_client` is
+what the pane asks to decide which of the two it is looking at.
+
+The client is a **Desktop app** client, and the scope Shotly requests is
+`drive.file` — non-sensitive, so the consent screen is the ordinary one and the
+project needs no security assessment. Two things have to be true of it:
+
+* The consent screen is **published**, not in Testing. A client in Testing only
+  admits accounts on its test-user list, and everyone else gets
+  `Error 403: access_denied` — which is exactly what the wide-scope version of
+  this feature put every user through.
+* Brand details are filled in — app name, icon, homepage, privacy policy —
+  because that name and icon are what the consent screen shows the user.
+
+Rotating the client is a rebuild: the secret is compiled in. Anyone already
+connected stays connected until they disconnect, since their refresh token
+belongs to the old client and will fail on the next refresh with
+`invalid_grant`, which `gauth` handles by disconnecting them cleanly.
+
 ## What can go wrong
 
 **Publishing a version that is already out.** `publish.mjs` refuses to

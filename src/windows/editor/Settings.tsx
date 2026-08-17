@@ -231,7 +231,10 @@ function GoogleAccount() {
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState<{ text: string; bad?: boolean } | null>(null);
 
+  const [builtIn, setBuiltIn] = useState(false);
+
   const refresh = useCallback(async () => {
+    setBuiltIn(await ipc.driveBuiltInClient());
     setHasClient(await ipc.driveHasClient());
     setConnected(await ipc.driveConnected());
   }, []);
@@ -275,9 +278,9 @@ function GoogleAccount() {
         Or let Shotly share each link for you
       </p>
       <p className="mt-1 text-[11.5px] leading-relaxed text-ink-3">
-        Connect a Google account and Shotly sets <em>anyone with the link — Viewer</em> on the one
-        file you are sending, as it copies the link. Nothing else in the folder becomes readable,
-        which sharing the whole folder cannot say.
+        Connect a Google account and Shotly uploads the capture to a <strong className="font-medium text-ink-2">Shotly</strong>{" "}
+        folder in your Drive, shares that one file, and copies the link. It can only see what it
+        put there — not the rest of your Drive — and nothing else becomes readable.
       </p>
 
       {connected ? (
@@ -304,13 +307,17 @@ function GoogleAccount() {
           >
             {busy ? "Waiting for your browser…" : "Connect Google Drive"}
           </button>
-          <button
-            type="button"
-            onClick={() => setShowForm(true)}
-            className="rounded px-1 text-[11.5px] text-ink-3 underline decoration-dotted underline-offset-2 hover:text-ink"
-          >
-            Change the OAuth client
-          </button>
+          {/* Only worth offering on a build that has none of its own — on a
+              downloaded Shotly this is a way to break a working thing. */}
+          {!builtIn && (
+            <button
+              type="button"
+              onClick={() => setShowForm(true)}
+              className="rounded px-1 text-[11.5px] text-ink-3 underline decoration-dotted underline-offset-2 hover:text-ink"
+            >
+              Change the OAuth client
+            </button>
+          )}
         </div>
       ) : showForm ? null : (
         <button

@@ -25,12 +25,20 @@ use sha2::{Digest, Sha256};
 
 /// What Shotly asks Google for.
 ///
-/// The wide one, deliberately: the files being shared were uploaded by Drive
-/// for desktop, not by this app, so the narrow `drive.file` scope — which only
-/// covers files an app created itself — cannot touch them. Google classes this
-/// as restricted, which matters the day Shotly ships this to other people;
-/// `docs/DEVELOPING.md` spells out what that would take.
-const SCOPE: &str = "https://www.googleapis.com/auth/drive";
+/// The narrow one. `drive.file` covers only what this app itself creates: the
+/// Shotly folder it makes in your Drive and the captures it uploads there.
+/// Everything else you own stays invisible to it — Shotly cannot list, read or
+/// touch a single other file, and that is not a promise in a privacy policy but
+/// something Google enforces.
+///
+/// It is also what makes signing in take ten seconds. `drive.file` is a
+/// non-sensitive scope, so a published client needs no security assessment and
+/// shows no "unverified app" screen — which is exactly how Snagit and everyone
+/// else does this. The wide `drive` scope, which an earlier version of this
+/// asked for so it could share the copy Drive-for-desktop had already synced,
+/// is restricted: it obliges every user to make a Google Cloud project of their
+/// own. That was the wrong trade.
+const SCOPE: &str = "https://www.googleapis.com/auth/drive.file";
 
 const AUTH_URL: &str = "https://accounts.google.com/o/oauth2/v2/auth";
 const TOKEN_URL: &str = "https://oauth2.googleapis.com/token";
@@ -49,12 +57,24 @@ const CONSENT_TIMEOUT: Duration = Duration::from_secs(180);
 /// would otherwise spend a round trip refreshing one that was already valid.
 static TOKEN: Mutex<Option<(String, Instant)>> = Mutex::new(None);
 
-/// The OAuth client the user created in their own Google Cloud project.
+/// The OAuth client this build carries, if it was given one.
 ///
-/// Not baked into the binary, and that is a decision rather than an omission:
-/// a shipped client id ties every install to one Google project, and a
-/// restricted scope on a public client is exactly what Google's verification
-/// process exists to police. Ask for the user's own, and the app is theirs.
+/// Baked in at compile time from the release environment, never from the
+/// repository — a client secret in a public repo invites someone to spend your
+/// quota under your app's name. It is not a secret in the cryptographic sense
+/// and cannot be, which is what PKCE is for; keeping it out of git is about
+/// nuisance, not about confidentiality.
+///
+/// See `docs/RELEASING.md` for how a release build gets one.
+const BUILT_IN_ID: Option<&str> = option_env!("SHOTLY_GOOGLE_CLIENT_ID");
+const BUILT_IN_SECRET: Option<&str> = option_env!("SHOTLY_GOOGLE_CLIENT_SECRET");
+
+/// The OAuth client in use: the one built in, or one the user supplied.
+///
+/// Both exist because they answer different needs. A downloaded Shotly carries
+/// its own and asks the user for nothing — click, pick an account, done. A
+/// build from source has none, so it can still be pointed at a Cloud project
+/// the person building it owns.
 #[derive(Clone, serde::Serialize, Deserialize)]
 pub struct Client {
     pub id: String,
@@ -80,7 +100,20 @@ fn forget(key: &str) {
 }
 
 pub fn client() -> Option<Client> {
-    serde_json::from_str(&read(CLIENT_KEY)?).ok()
+    // A client the user set up wins: they went to the trouble for a reason,
+    // and on a build with none it is the only one there is.
+    if let Some(client) = read(CLIENT_KEY).and_then(|raw| serde_json::from_str(&raw).ok()) {
+        return Some(client);
+    }
+    Some(Client {
+        id: BUILT_IN_ID?.to_string(),
+        secret: BUILT_IN_SECRET?.to_string(),
+    })
+}
+
+/// Whether this build carries a client of its own, and so needs nothing set up.
+pub fn built_in() -> bool {
+    BUILT_IN_ID.is_some() && BUILT_IN_SECRET.is_some()
 }
 
 pub fn set_client(client: &Client) -> Result<(), String> {

@@ -111,6 +111,8 @@ export function EditorApp() {
    * offer at all.
    */
   const [movie, setMovie] = useState<Movie | null>(null);
+  /** How far an upload to Drive has got, while one is running. */
+  const [upload, setUpload] = useState<{ sent: number; total: number } | null>(null);
   /** How far into that recording you had got, so the Player tab holds a place. */
   const resume = useRef<{ path: string; at: number } | null>(null);
   /** Library captures picked for a bulk action, by path. */
@@ -252,6 +254,10 @@ export function EditorApp() {
     // A recording is filed straight in the library — there is nothing to open
     // in an image editor — so the only thing owed to the user is the news, and
     // a way to the file. The toast offers Show in Finder when `saved` is set.
+    const uploadUnlisten = listen<{ sent: number; total: number }>("drive:progress", (event) =>
+      setUpload(event.payload),
+    );
+
     const recordedUnlisten = listen<string>("record:saved", (event) => {
       setSaved(event.payload);
       notify("Recording saved to your Shotly folder", "ok", 5000);
@@ -263,6 +269,7 @@ export function EditorApp() {
       void pickUnlisten.then((fn) => fn());
       void settingsUnlisten.then((fn) => fn());
       void recordedUnlisten.then((fn) => fn());
+      void uploadUnlisten.then((fn) => fn());
     };
   }, [notify, describe]);
 
@@ -353,7 +360,13 @@ export function EditorApp() {
     async (path: string) => {
       setBusy("link");
       try {
-        const link = await ipc.driveLink(path);
+        // Two paths, and the connected one is the whole feature: Shotly
+        // uploads the capture to a Shotly folder in your Drive, shares that
+        // one file, and hands back a link that works. Without an account it
+        // falls back to naming the copy your backup already synced, which is
+        // correct but opens for nobody until the folder is shared by hand.
+        const connected = await ipc.driveConnected();
+        const link = connected ? await ipc.driveShare(path) : await ipc.driveLink(path);
         await writeText(link.url);
         setSaved(null);
         // Two different things, and the wording has to tell them apart. With an
@@ -372,6 +385,7 @@ export function EditorApp() {
         notify(String(e), "error", 5200);
       } finally {
         setBusy(null);
+        setUpload(null);
       }
     },
     [notify],
@@ -1520,6 +1534,25 @@ export function EditorApp() {
           </div>
         )}
       </main>
+
+      {/* A recording is hundreds of megabytes; an upload with no progress is
+          indistinguishable from one that has stalled. */}
+      {upload && upload.total > 0 && (
+        <div className="surface-pop fixed bottom-24 left-1/2 z-[9600] w-[280px] -translate-x-1/2 rounded-xl px-3.5 py-2.5">
+          <p className="flex items-center justify-between text-[12px] text-ink">
+            <span>Uploading to Drive…</span>
+            <span className="font-mono text-[11px] tabular-nums text-ink-3">
+              {Math.round((upload.sent / upload.total) * 100)}%
+            </span>
+          </p>
+          <div className="mt-1.5 h-1 overflow-hidden rounded-full bg-white/10">
+            <div
+              className="h-full rounded-full bg-accent transition-[width] duration-200"
+              style={{ width: `${Math.min(100, (upload.sent / upload.total) * 100)}%` }}
+            />
+          </div>
+        </div>
+      )}
 
       {toast && (
         <div

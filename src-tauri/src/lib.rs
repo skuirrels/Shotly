@@ -205,6 +205,8 @@ pub fn run() {
             drive::drive_link,
             drive::drive_folder_link,
             drive::drive_connected,
+            drive::drive_share,
+            drive::drive_built_in_client,
             drive::drive_connect,
             drive::drive_disconnect,
             drive::drive_set_client,

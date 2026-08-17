@@ -141,6 +141,14 @@ export const driveFolderLink = () => invoke<string>("drive_folder_link");
 
 /** Whether an OAuth client has been set up — Shotly ships without one. */
 export const driveHasClient = () => invoke<boolean>("drive_has_client");
+/** Whether this build ships its own client, so nothing needs setting up. */
+export const driveBuiltInClient = () => invoke<boolean>("drive_built_in_client");
+/**
+ * Upload a capture to your Drive and share it. The way to send a big one.
+ *
+ * Emits `drive:progress` as it goes — see `Shared` in `EditorApp`.
+ */
+export const driveShare = (path: string) => invoke<DriveLink>("drive_share", { path });
 export const driveSetClient = (id: string, secret: string) =>
   invoke<void>("drive_set_client", { id, secret });
 /** Whether an account is connected, so links can be made to work by themselves. */
