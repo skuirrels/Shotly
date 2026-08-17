@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import clsx from "clsx";
-import { IconChevronDown } from "@/components/icons";
+import { IconChevronDown, IconCopy, IconFolder, IconImage, IconTrash } from "@/components/icons";
+import { ContextMenu, type MenuEntry } from "@/components/ui/ContextMenu";
 import * as ipc from "@/lib/ipc";
 import type { LibraryItem } from "@/lib/types";
 import { formatWhen } from "./format";
@@ -20,7 +21,12 @@ interface Props {
   refreshKey: number;
   /** The capture on screen, so the rail can mark where you are. */
   currentPath?: string;
+  /** Paths picked for a bulk action, in the order they were listed. */
+  selected: string[];
+  onSelect: (paths: string[]) => void;
   onOpen: (path: string) => void;
+  onCopy: (paths: string[]) => void;
+  onDelete: (paths: string[]) => void;
   onError: (message: string) => void;
 }
 
@@ -29,7 +35,16 @@ const PAGE = 12;
 
 const COLLAPSED_KEY = "shotly.recentsCollapsed";
 
-export function RecentStrip({ refreshKey, currentPath, onOpen, onError }: Props) {
+export function RecentStrip({
+  refreshKey,
+  currentPath,
+  selected,
+  onSelect,
+  onOpen,
+  onCopy,
+  onDelete,
+  onError,
+}: Props) {
   const [items, setItems] = useState<LibraryItem[] | null>(null);
   const [shown, setShown] = useState(PAGE);
   const [collapsed, setCollapsed] = useState(
@@ -38,6 +53,11 @@ export function RecentStrip({ refreshKey, currentPath, onOpen, onError }: Props)
   /** Ticket of the newest listing, so a slow earlier one cannot win. */
   const request = useRef(0);
   const sentinel = useRef<HTMLDivElement>(null);
+  /** Where a Shift-range counts from. */
+  const anchor = useRef<string | null>(null);
+  const [menu, setMenu] = useState<{ at: { x: number; y: number }; targets: string[] } | null>(
+    null,
+  );
 
   const reload = useCallback(() => {
     const ticket = ++request.current;
@@ -112,6 +132,81 @@ export function RecentStrip({ refreshKey, currentPath, onOpen, onError }: Props)
     );
   }
 
+  /**
+   * Finder's selection model, the same one the library grid uses: a plain click
+   * replaces, ⌘ toggles one, ⇧ extends from the last anchor. Opening is the
+   * double-click, which is what the library says on its own header and what
+   * makes "these three" expressible at all — a rail where every click opened a
+   * capture could never hold a selection long enough to act on it.
+   */
+  const choose = (item: LibraryItem, modifiers: { meta: boolean; shift: boolean }) => {
+    const paths = (items ?? []).slice(0, shown).map((i) => i.path);
+
+    if (modifiers.meta) {
+      anchor.current = item.path;
+      onSelect(
+        selected.includes(item.path)
+          ? selected.filter((p) => p !== item.path)
+          : [...selected, item.path],
+      );
+      return;
+    }
+
+    if (modifiers.shift && anchor.current) {
+      const from = paths.indexOf(anchor.current);
+      const to = paths.indexOf(item.path);
+      if (from !== -1 && to !== -1) {
+        const [lo, hi] = from < to ? [from, to] : [to, from];
+        onSelect(paths.slice(lo, hi + 1));
+        return;
+      }
+    }
+
+    anchor.current = item.path;
+    onSelect([item.path]);
+  };
+
+  /**
+   * Right-click, with Finder's rule: a capture already in the selection opens a
+   * menu for the whole selection, one outside it takes over the selection
+   * first. Without that rule the right-click needed to reach the menu would
+   * throw away the very selection the menu is there to act on.
+   */
+  const openMenu = (item: LibraryItem, at: { x: number; y: number }) => {
+    const inSelection = selected.includes(item.path);
+    if (!inSelection) {
+      anchor.current = item.path;
+      onSelect([item.path]);
+    }
+    setMenu({ at, targets: inSelection ? selected : [item.path] });
+  };
+
+  const menuItems = (targets: string[]): (MenuEntry | false)[] => {
+    const many = targets.length > 1;
+    return [
+      // One editor pane, and revealing several would spray Finder windows
+      // across the screen — so both are single-capture actions.
+      !many && { label: "Open", icon: <IconImage />, run: () => onOpen(targets[0]) },
+      {
+        label: many ? `Copy ${targets.length} captures` : "Copy",
+        icon: <IconCopy />,
+        run: () => onCopy(targets),
+      },
+      !many && {
+        label: "Show in Finder",
+        icon: <IconFolder />,
+        run: () => void ipc.revealInFinder(targets[0]),
+      },
+      "separator" as const,
+      {
+        label: many ? `Move ${targets.length} captures to Trash` : "Move to Trash",
+        icon: <IconTrash />,
+        danger: true,
+        run: () => onDelete(targets),
+      },
+    ];
+  };
+
   // Nothing to show and nothing to say: an empty rail beside an open capture
   // would be chrome explaining that there is no chrome.
   if (items !== null && items.length === 0) return null;
@@ -138,12 +233,19 @@ export function RecentStrip({ refreshKey, currentPath, onOpen, onError }: Props)
               key={item.path}
               item={item}
               active={item.path === currentPath}
+              selected={selected.includes(item.path)}
+              onChoose={choose}
               onOpen={onOpen}
+              onMenu={openMenu}
             />
           ))}
         </ul>
         <div ref={sentinel} aria-hidden="true" className="h-px" />
       </div>
+
+      {menu && (
+        <ContextMenu at={menu.at} items={menuItems(menu.targets)} onClose={() => setMenu(null)} />
+      )}
     </aside>
   );
 }
@@ -151,11 +253,19 @@ export function RecentStrip({ refreshKey, currentPath, onOpen, onError }: Props)
 function RecentRow({
   item,
   active,
+  selected,
+  onChoose,
   onOpen,
+  onMenu,
 }: {
   item: LibraryItem;
+  /** The capture currently open in the editor. */
   active: boolean;
+  /** Picked for a bulk action, which is a different thing from being open. */
+  selected: boolean;
+  onChoose: (item: LibraryItem, modifiers: { meta: boolean; shift: boolean }) => void;
   onOpen: (path: string) => void;
+  onMenu: (item: LibraryItem, at: { x: number; y: number }) => void;
 }) {
   const { url, failed } = useThumbnail(item.path, item.modified);
   const row = useRef<HTMLButtonElement>(null);
@@ -172,13 +282,24 @@ function RecentRow({
         ref={row}
         type="button"
         aria-current={active}
-        onClick={() => onOpen(item.path)}
+        aria-selected={selected}
+        onClick={(e) => onChoose(item, { meta: e.metaKey, shift: e.shiftKey })}
+        onDoubleClick={() => onOpen(item.path)}
+        onContextMenu={(e) => {
+          e.preventDefault();
+          onMenu(item, { x: e.clientX, y: e.clientY });
+        }}
         title={item.name}
         className={clsx(
           "block w-full overflow-hidden rounded-lg border text-left transition-colors duration-100",
-          active
-            ? "border-accent bg-raised ring-1 ring-accent/50"
-            : "border-line hover:border-accent/50 hover:bg-raised",
+          // Selected and open are different states and have to look different:
+          // the open capture is where you are, a selection is what a delete
+          // would take. A ring says picked; the accent border says you are here.
+          selected
+            ? "border-accent bg-raised ring-2 ring-accent"
+            : active
+              ? "border-accent bg-raised ring-1 ring-accent/50"
+              : "border-line hover:border-accent/50 hover:bg-raised",
         )}
       >
         <div className="grid h-[86px] place-items-center overflow-hidden bg-inset">

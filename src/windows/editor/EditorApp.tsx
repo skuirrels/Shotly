@@ -98,6 +98,15 @@ export function EditorApp() {
   const [view, setView] = useState<View>("library");
   /** Library captures picked for a bulk action, by path. */
   const [picked, setPicked] = useState<string[]>([]);
+  /**
+   * The same thing for the recents rail, kept apart from `picked`.
+   *
+   * Two views, two selections: what is picked in the library grid has nothing
+   * to do with what is picked in the rail beside the editor, and sharing one
+   * list would mean a delete in one view acting on captures chosen in the
+   * other — while looking at neither.
+   */
+  const [recentPicked, setRecentPicked] = useState<string[]>([]);
   /** Everything the library is currently showing, for select-all. */
   const libraryPaths = useRef<string[]>([]);
   const onLibraryItems = useCallback((paths: string[]) => {
@@ -436,6 +445,7 @@ export function EditorApp() {
       try {
         await ipc.trashCaptures(paths);
         setPicked((prev) => prev.filter((p) => !paths.includes(p)));
+        setRecentPicked((prev) => prev.filter((p) => !paths.includes(p)));
         setLibraryKey((k) => k + 1);
         notify(paths.length === 1 ? "Moved to Trash" : `Moved ${paths.length} captures to Trash`);
       } catch (e) {
@@ -857,6 +867,20 @@ export function EditorApp() {
         run: () => (view === "library" ? void deleteCaptures(picked) : s().deleteSelection()),
       },
       {
+        id: "edit.trashPicked",
+        title: "Move picked captures to Trash",
+        group: "Edit",
+        // ⌘⌫ rather than the library's bare Backspace, because in the editor
+        // that key already belongs to the annotation you have selected. This is
+        // Finder's shortcut for the same act, on the rail's own selection.
+        shortcut: "Mod+Backspace",
+        altShortcut: "Mod+Delete",
+        icon: <IconTrash />,
+        enabled: () => (view === "library" ? picked.length > 0 : recentPicked.length > 0),
+        run: () =>
+          void deleteCaptures(view === "library" ? picked : recentPicked),
+      },
+      {
         id: "edit.duplicate",
         title: "Duplicate",
         group: "Edit",
@@ -1257,6 +1281,7 @@ export function EditorApp() {
     copyPicked,
     deleteCaptures,
     picked,
+    recentPicked,
     updates.check,
   ]);
 
@@ -1289,7 +1314,11 @@ export function EditorApp() {
             <RecentStrip
               refreshKey={libraryKey}
               currentPath={doc?.libraryPath}
+              selected={recentPicked}
+              onSelect={setRecentPicked}
               onOpen={openRecent}
+              onCopy={copyPaths}
+              onDelete={(paths) => void deleteCaptures(paths)}
               onError={reportError}
             />
             <Canvas onNotify={notify} actions={canvasActions} onScan={scanArea} />
