@@ -55,6 +55,8 @@ objc2-foundation = "0.3"
 objc2-vision = "0.3.2"
 
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
+# Opening at login, as a LaunchAgent pointing at the installed bundle.
+tauri-plugin-autostart = "2"
 tauri-plugin-global-shortcut = "2"
 tauri-plugin-updater = "2"
 

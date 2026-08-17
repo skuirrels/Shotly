@@ -122,6 +122,10 @@ export const revealInFinder = (path: string) => invoke<void>("reveal_in_finder",
  */
 export const openExternally = (path: string) => invoke<void>("open_externally", { path });
 
+export const launchAtLogin = () => invoke<boolean>("launch_at_login");
+export const setLaunchAtLogin = (enabled: boolean) =>
+  invoke<boolean>("set_launch_at_login", { enabled });
+
 export const listLibrary = () => invoke<LibraryItem[]>("list_library");
 
 export const libraryThumbnail = (path: string, max = 480) =>

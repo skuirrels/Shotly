@@ -27,10 +27,11 @@ import { GlobalHotkeys } from "./GlobalHotkeys";
  * a poor way to get at the screen for fixing keyboard shortcuts.
  */
 
-export type SettingsTab = "hotkeys" | "backup";
+export type SettingsTab = "hotkeys" | "general" | "backup";
 
 const TABS: { id: SettingsTab; label: string; icon: React.ReactNode }[] = [
   { id: "hotkeys", label: "Hotkeys", icon: <IconKeyboard /> },
+  { id: "general", label: "General", icon: <IconGear /> },
   { id: "backup", label: "Backup", icon: <IconFolder /> },
 ];
 
@@ -106,7 +107,13 @@ export function Settings({
         </div>
 
         <div className="overflow-y-auto p-4">
-          {tab === "hotkeys" ? <Hotkeys onRecording={setRecording} /> : <Backup />}
+          {tab === "hotkeys" ? (
+            <Hotkeys onRecording={setRecording} />
+          ) : tab === "general" ? (
+            <General />
+          ) : (
+            <Backup />
+          )}
         </div>
       </div>
     </div>
@@ -145,6 +152,62 @@ function Hotkeys({ onRecording }: { onRecording: (active: boolean) => void }) {
  * an upload to anybody's API. See `src-tauri/src/backup.rs` for why that is the
  * right trade and what it costs.
  */
+/**
+ * The things that are neither a key nor a folder.
+ *
+ * One switch today. It has a tab of its own rather than being tacked onto
+ * another because "open at login" is not a hotkey and is not a backup, and a
+ * setting filed under the wrong heading is a setting nobody finds.
+ */
+function General() {
+  const [atLogin, setAtLogin] = useState<boolean | null>(null);
+  const [note, setNote] = useState<string | null>(null);
+
+  useEffect(() => {
+    void ipc.launchAtLogin().then(setAtLogin).catch(() => setAtLogin(false));
+  }, []);
+
+  const toggle = useCallback(async (next: boolean) => {
+    setNote(null);
+    // Moved straight away rather than after the round trip: writing a login
+    // item is quick, and a switch that waits before it moves feels broken.
+    setAtLogin(next);
+    try {
+      setAtLogin(await ipc.setLaunchAtLogin(next));
+    } catch (e) {
+      setAtLogin(!next);
+      setNote(String(e));
+    }
+  }, []);
+
+  return (
+    <section>
+      <h3 className="mb-1 text-[11px] font-semibold tracking-wider text-ink-4 uppercase">
+        Starting up
+      </h3>
+
+      <label className="flex cursor-pointer items-start gap-3 rounded-xl border border-line bg-surface p-3">
+        <input
+          type="checkbox"
+          checked={atLogin ?? false}
+          disabled={atLogin === null}
+          onChange={(e) => void toggle(e.target.checked)}
+          className="mt-0.5 size-4 accent-[var(--color-accent)]"
+        />
+        <span className="min-w-0">
+          <span className="block text-[12.5px] font-medium text-ink">Open Shotly at login</span>
+          <span className="mt-0.5 block text-[11.5px] leading-relaxed text-ink-3">
+            It starts in the menu bar with no window, so the capture keys work from the moment you
+            log in.
+          </span>
+        </span>
+      </label>
+
+      {note && <p className="mt-2 text-[11.5px] text-danger">{note}</p>}
+    </section>
+  );
+}
+
 function Backup() {
   const [settings, setSettings] = useState<BackupSettings | null>(null);
   const [targets, setTargets] = useState<BackupTarget[]>([]);

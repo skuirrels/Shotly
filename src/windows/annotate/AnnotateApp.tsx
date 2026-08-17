@@ -12,6 +12,7 @@ import {
   IconRedo,
   IconRegion,
   IconSelect,
+  IconCallout,
   IconText,
   IconTrash,
   IconUndo,
@@ -19,7 +20,16 @@ import {
 import { Kbd } from "@/components/ui/Kbd";
 import { captureStem } from "@/lib/naming";
 import { readColor, readNumber, readString, write } from "@/lib/prefs";
-import { arrowPolygon, fontFor, measureText, polygonToPath, TEXT_PADDING } from "@/lib/shapes";
+import {
+  arrowPolygon,
+  fontFor,
+  measureText,
+  neonBorderForFont,
+  neonPaint,
+  neonRadius,
+  polygonToPath,
+  TEXT_PADDING,
+} from "@/lib/shapes";
 import { SWATCHES } from "@/windows/editor/tools";
 
 /**
@@ -35,7 +45,7 @@ import { SWATCHES } from "@/windows/editor/tools";
  *     A hung renderer cannot report that it hung, so silence is the signal.
  */
 
-type DrawTool = "pen" | "arrow" | "rect" | "ellipse" | "highlight" | "text";
+type DrawTool = "pen" | "arrow" | "rect" | "ellipse" | "highlight" | "text" | "callout";
 /** `select` draws nothing; it is the pointer, as in the editor. */
 type Tool = DrawTool | "select";
 
@@ -61,6 +71,27 @@ interface Stroke {
   text?: string;
 }
 
+/** Breathing room between a callout's words and its lit edge. */
+const CALLOUT_PAD = 14;
+
+/**
+ * The rectangle a typed stroke occupies.
+ *
+ * Bare text is exactly its glyphs; a callout is those glyphs plus the padding
+ * its box adds on every side. Selection, hit-testing and the box itself all
+ * read this, so they cannot disagree about where the shape is.
+ */
+function typedBox(s: { tool: DrawTool; text?: string; width: number }) {
+  const m = measureText(s.text ?? "", s.width);
+  const pad = s.tool === "callout" ? CALLOUT_PAD : 0;
+  return {
+    ...m,
+    width: m.width + pad * 2,
+    height: m.height + pad * 2,
+    pad,
+  };
+}
+
 /**
  * A text box being typed into.
  *
@@ -69,6 +100,8 @@ interface Stroke {
  */
 interface Draft {
   id: string;
+  /** Which typed tool this becomes: bare words, or words in a lit box. */
+  tool: "text" | "callout";
   at: Point;
   color: string;
   size: number;
@@ -110,9 +143,9 @@ function strokeBounds(s: Stroke): Bounds | null {
   const first = s.points[0];
   if (!first) return null;
 
-  if (s.tool === "text") {
-    const m = measureText(s.text ?? "", s.width);
-    return { x: first.x, y: first.y, width: m.width, height: m.height };
+  if (s.tool === "text" || s.tool === "callout") {
+    const box = typedBox(s);
+    return { x: first.x, y: first.y, width: box.width, height: box.height };
   }
 
   const pad = s.width / 2;
@@ -169,7 +202,7 @@ const scale = (s: Stroke, anchor: Point, sx: number, sy: number): Stroke => ({
   // *is* its geometry, so a corner drag has to scale the font. The geometric
   // mean keeps a diagonal pull proportional whichever way it leans.
   width:
-    s.tool === "text"
+    s.tool === "text" || s.tool === "callout"
       ? Math.max(MIN_FONT, s.width * Math.sqrt(Math.abs(sx * sy)))
       : s.width,
   points: s.points.map((p) => ({
@@ -336,6 +369,13 @@ const TOOLS: ToolButton[] = [
   { id: "rect", label: "Rectangle", key: "R", icon: () => <IconRect /> },
   { id: "ellipse", label: "Ellipse", key: "E", icon: () => <IconEllipse /> },
   { id: "highlight", label: "Highlighter", key: "H", icon: () => <IconHighlight /> },
+  {
+    id: "callout",
+    label: "Neon callout",
+    key: "O",
+    icon: () => <IconCallout />,
+    hint: "a lit box around your words — click to place, ⌘⏎ to finish",
+  },
   {
     id: "text",
     label: "Text",
@@ -761,7 +801,8 @@ export function AnnotateApp() {
                 ...(patch.width !== undefined && s.tool === "highlight"
                   ? { width: patch.width * HIGHLIGHT_SCALE }
                   : {}),
-                ...(patch.width !== undefined && s.tool === "text"
+                ...(patch.width !== undefined &&
+                (s.tool === "text" || s.tool === "callout")
                   ? { width: patch.width * TEXT_SCALE }
                   : {}),
               }
@@ -838,7 +879,7 @@ export function AnnotateApp() {
 
     const next: Stroke = {
       id: draft.id,
-      tool: "text",
+      tool: draft.tool,
       color: draft.color,
       width: draft.size,
       points: [draft.at],
@@ -863,7 +904,7 @@ export function AnnotateApp() {
     // This runs before the blur that commits, so the draft is still here.
     if (editing) return;
 
-    if (tool === "text") {
+    if (tool === "text" || tool === "callout") {
       // `preventDefault` is what makes the text tool work at all: without it
       // the browser moves focus to the SVG as this click finishes, blurring
       // the box we are about to mount — and a blurred empty box is discarded,
@@ -872,6 +913,7 @@ export function AnnotateApp() {
       e.preventDefault();
       editText({
         id: crypto.randomUUID(),
+        tool,
         at: { x: e.clientX, y: e.clientY },
         color,
         size: width * TEXT_SCALE,
@@ -1179,9 +1221,10 @@ export function AnnotateApp() {
               key={s.id}
               onPointerDown={(e) => grab(e, s.id)}
               onDoubleClick={() => {
-                if (s.tool !== "text") return;
+                if (s.tool !== "text" && s.tool !== "callout") return;
                 editText({
                   id: s.id,
+                  tool: s.tool,
                   at: s.points[0],
                   color: s.color,
                   size: s.width,
@@ -1315,6 +1358,57 @@ function StrokeShape({ stroke, hitArea = false }: { stroke: Stroke; hitArea?: bo
 
   const paint = hitArea ? "transparent" : color;
   const thickness = hitArea ? Math.max(width, HIT_WIDTH) : width;
+
+  if (tool === "callout") {
+    const origin = points[0];
+    const box = typedBox(stroke);
+
+    if (hitArea) {
+      return (
+        <rect x={origin.x} y={origin.y} width={box.width} height={box.height} fill="transparent" />
+      );
+    }
+
+    // The same four layers the editor draws, from the same recipe — scrim,
+    // tint, lit edge, glow — so a callout laid over the live screen and one
+    // laid on a capture are the same object. See `neonPaint`.
+    const paint = neonPaint(color, neonBorderForFont(width));
+    const radius = neonRadius(box.width, box.height);
+    const first = origin.y + box.pad + box.lineHeight * 0.8;
+
+    return (
+      <g>
+        <rect x={origin.x} y={origin.y} width={box.width} height={box.height} rx={radius} fill={paint.scrim} />
+        <rect x={origin.x} y={origin.y} width={box.width} height={box.height} rx={radius} fill={paint.tint} />
+        <rect
+          x={origin.x + paint.border / 2}
+          y={origin.y + paint.border / 2}
+          width={Math.max(0, box.width - paint.border)}
+          height={Math.max(0, box.height - paint.border)}
+          rx={Math.max(0, radius - paint.border / 2)}
+          fill="none"
+          stroke={color}
+          strokeWidth={paint.border}
+          style={{
+            filter:
+              `drop-shadow(0 0 ${paint.glow}px ${color}) ` +
+              `drop-shadow(0 0 ${paint.glow * 2}px ${color})`,
+          }}
+        />
+        <text
+          x={origin.x + box.pad}
+          fill={paint.ink}
+          style={{ font: fontFor(width), whiteSpace: "pre" }}
+        >
+          {box.lines.map((line, i) => (
+            <tspan key={i} x={origin.x + box.pad} y={first + i * box.lineHeight}>
+              {line || " "}
+            </tspan>
+          ))}
+        </text>
+      </g>
+    );
+  }
 
   if (tool === "text") {
     const origin = points[0];
@@ -1458,6 +1552,12 @@ function TextBox({
   };
 
   const m = measureText(draft.text, draft.size);
+  // Typing into a callout should look like the callout: white on the darkened
+  // tint, inside the lit edge. Committing then changes nothing you can see,
+  // which is the whole point of styling the box to match the shape.
+  const neon = draft.tool === "callout";
+  const paint = neonPaint(draft.color, neonBorderForFont(draft.size));
+  const pad = neon ? CALLOUT_PAD : TEXT_PADDING;
 
   return (
     <textarea
@@ -1475,19 +1575,24 @@ function TextBox({
           onCommit();
         }
       }}
-      className="absolute resize-none overflow-hidden border-none bg-transparent p-0 outline-none"
+      className="absolute resize-none overflow-hidden border-none p-0 outline-none"
       style={{
         left: draft.at.x,
         top: draft.at.y,
-        color: draft.color,
+        color: neon ? paint.ink : draft.color,
         font: fontFor(draft.size),
         lineHeight: 1.3,
-        padding: TEXT_PADDING,
-        width: Math.max(m.width, draft.size * 3),
-        height: m.height,
-        caretColor: draft.color,
-        textShadow: "0 1px 3px rgba(0,0,0,0.55)",
-        outline: "1px dashed var(--color-accent)",
+        padding: pad,
+        width: Math.max(m.width, draft.size * 3) + (neon ? pad * 2 : 0),
+        height: m.height + (neon ? pad * 2 : 0),
+        caretColor: neon ? paint.ink : draft.color,
+        background: neon ? paint.scrim : "transparent",
+        borderRadius: neon ? neonRadius(m.width + pad * 2, m.height + pad * 2) : undefined,
+        boxShadow: neon
+          ? `inset 0 0 0 ${paint.border}px ${draft.color}, 0 0 ${paint.glow}px ${draft.color}`
+          : undefined,
+        textShadow: neon ? undefined : "0 1px 3px rgba(0,0,0,0.55)",
+        outline: neon ? undefined : "1px dashed var(--color-accent)",
       }}
     />
   );

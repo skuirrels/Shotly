@@ -24,7 +24,8 @@ key.
    freshly started app.
 
 Shotly lives in the menu bar. Closing its window puts it away rather than
-quitting it, so the capture keys keep working.
+quitting it, so the capture keys keep working. **Settings → General** has
+*Open Shotly at login*, which starts it in the menu bar with no window.
 
 It updates itself: it checks shortly after launch and every six hours, installs
 quietly in the background, and offers you a relaunch when it's ready. **Check
@@ -136,6 +137,10 @@ The rail down the left holds your recent captures: **one click opens one**, and
 ⌘-click or ⇧-click picks several without opening anything, for a Copy or a
 Delete. The library grid keeps double-click-to-open, since there a click is how
 you choose what an action applies to.
+
+The live annotation layer (<kbd>⌃⇧A</kbd>) has the neon callout too — press
+<kbd>O</kbd>, click where you want it, and type. It draws the same lit box, over
+whatever is on the screen.
 
 <kbd>⌘K</kbd> opens a command palette if you'd rather search than remember, and
 <kbd>⌘/</kbd> shows every key in one sheet.

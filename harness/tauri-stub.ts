@@ -30,6 +30,14 @@ export async function invoke<T>(cmd: string, args?: Record<string, unknown>): Pr
   }
   if (cmd === "open_keyboard_settings") return undefined as T;
 
+  // Start at login. Held in memory so the switch behaves as it does in the
+  // app: set it, and the answer that comes back is what the system reports.
+  if (cmd === "launch_at_login") return atLogin as T;
+  if (cmd === "set_launch_at_login") {
+    atLogin = Boolean(args?.enabled);
+    return atLogin as T;
+  }
+
   // The library grid: one recording among the stills, so the play badge, the
   // running time and the actions a movie cannot do are all on screen at once.
   if (cmd === "library_thumbnail") return "/source.png" as T;
@@ -68,8 +76,24 @@ export async function invoke<T>(cmd: string, args?: Record<string, unknown>): Pr
   }
   if (cmd === "record_stop" || cmd === "record_cancel") return undefined as T;
 
+  // The live annotation layer. Its watchdog and its screen list are Rust's;
+  // everything the harness is for — the tools, the callout, the toolbar —
+  // sits above them.
+  if (cmd === "annotate_ready" || cmd === "annotate_beat") return undefined as T;
+  if (cmd === "annotate_stop" || cmd === "annotate_pass_through") return undefined as T;
+  if (cmd === "annotate_move") return undefined as T;
+  if (cmd === "annotate_layout") {
+    return { x: 0, y: 0, width: window.innerWidth, height: window.innerHeight } as T;
+  }
+  if (cmd === "annotate_screens") {
+    return [{ id: 1, label: "Screen 1", current: true }] as T;
+  }
+  if (cmd === "annotate_save") return "/tmp/annotated.png" as T;
+
   throw new Error(`harness has no stub for ${cmd}`);
 }
+
+let atLogin = false;
 
 const hotkeys = [
   ["region", "Capture region", "Drag out the part of the screen to keep.", "Ctrl+Shift+4"],

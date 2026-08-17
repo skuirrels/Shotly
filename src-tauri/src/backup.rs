@@ -250,3 +250,34 @@ pub fn backup_now(app: AppHandle) -> Result<Report, String> {
     let _ = app.emit("backup:done", &report);
     Ok(report)
 }
+
+// ------------------------------------------------------------ start at login
+
+/// Whether Shotly opens itself when you log in.
+///
+/// Kept in `backup.rs` only because this is where the app's few *settings*
+/// live; it has nothing to do with backups. The plugin writes a LaunchAgent
+/// pointing at this bundle, so enabling it from a debug build registers the
+/// debug build — which is the honest behaviour, and worth knowing when the
+/// switch appears to do nothing after you delete that build.
+#[cfg(desktop)]
+#[tauri::command]
+pub fn launch_at_login(app: AppHandle) -> bool {
+    use tauri_plugin_autostart::ManagerExt;
+    app.autolaunch().is_enabled().unwrap_or(false)
+}
+
+#[cfg(desktop)]
+#[tauri::command]
+pub fn set_launch_at_login(app: AppHandle, enabled: bool) -> Result<bool, String> {
+    use tauri_plugin_autostart::ManagerExt;
+    let manager = app.autolaunch();
+    if enabled {
+        manager.enable().map_err(|e| format!("could not add Shotly to your login items: {e}"))?;
+    } else {
+        manager.disable().map_err(|e| format!("could not remove the login item: {e}"))?;
+    }
+    // Report what the system says rather than what was asked for: the switch
+    // should show the truth even if macOS quietly declined.
+    Ok(manager.is_enabled().unwrap_or(enabled))
+}

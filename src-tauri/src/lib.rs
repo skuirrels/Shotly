@@ -43,6 +43,16 @@ fn dispatch(app: &tauri::AppHandle, mode: CaptureMode) {
     }
 }
 
+/// Where Shotly lives, shown in About and opened from the app menu.
+const WEBSITE: &str = "skuirrels.com/shotly";
+
+/// Passed by the login item, and by nothing else.
+///
+/// The plugin writes it into the LaunchAgent's argument list, so its presence
+/// is a reliable "macOS started me, the user did not".
+#[cfg(desktop)]
+const AUTOSTART_ARG: &str = "--opened-at-login";
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let mut builder = tauri::Builder::default()
@@ -73,6 +83,13 @@ pub fn run() {
     #[cfg(desktop)]
     {
         builder = builder.plugin(tauri_plugin_updater::Builder::new().build());
+        // Opening at login. The argument is how the app knows to start in the
+        // menu bar rather than throwing a window at someone who has just logged
+        // in — see `setup` below.
+        builder = builder.plugin(tauri_plugin_autostart::init(
+            tauri_plugin_autostart::MacosLauncher::LaunchAgent,
+            Some(vec![AUTOSTART_ARG]),
+        ));
         builder = builder.plugin(
             tauri_plugin_global_shortcut::Builder::new()
                 .with_handler(|app, shortcut, event| {
@@ -183,6 +200,8 @@ pub fn run() {
             backup::backup_settings,
             backup::backup_configure,
             backup::backup_now,
+            backup::launch_at_login,
+            backup::set_launch_at_login,
             ocr::scan_image,
             combine::combine_captures,
             scroll::scroll_begin,
@@ -253,6 +272,17 @@ pub fn run() {
                 if let Err(err) = platform::follow_active_space(&editor) {
                     eprintln!("[shotly] the editor will not follow Spaces: {err}");
                 }
+
+                // Unless this launch was the login item's doing, in which case
+                // the window is exactly what nobody wants: you log in, and an
+                // app you asked to start quietly puts a window in front of
+                // whatever you were about to do. Shotly goes to the menu bar
+                // and waits for a key, which is the whole reason to start it at
+                // login in the first place.
+                if std::env::args().any(|arg| arg == AUTOSTART_ARG) {
+                    let _ = editor.hide();
+                    platform::set_accessory_mode(&handle, true);
+                }
             }
 
 
@@ -302,8 +332,12 @@ fn build_menu(app: &tauri::AppHandle) -> tauri::Result<()> {
         // has focus, and this menu item claims the key for the whole app.
         let sep = PredefinedMenuItem::separator(app)?;
         let settings = MenuItem::with_id(app, "settings", "Settings…", true, Some("Cmd+,"))?;
-        app_menu.insert(&sep, 1)?;
-        app_menu.insert(&settings, 2)?;
+        // The address About can only print. Directly under it, so the two read
+        // as one thing: what this is, and where it comes from.
+        let website = MenuItem::with_id(app, "website", "Shotly on the Web", true, None::<&str>)?;
+        app_menu.insert(&website, 1)?;
+        app_menu.insert(&sep, 2)?;
+        app_menu.insert(&settings, 3)?;
     }
 
     app.set_menu(menu)?;
@@ -321,7 +355,12 @@ fn about_metadata(app: &tauri::AppHandle) -> AboutMetadata<'_> {
         name: Some("Shotly".into()),
         version: Some(app.package_info().version.to_string()),
         short_version: Some(build_info::PROFILE.into()),
-        credits: Some(build_info::summary(app)),
+        // The About panel macOS draws has no field for a website — the
+        // standard panel takes a name, a version, an icon, a copyright line
+        // and credits, and that is all — so the address goes in the credits,
+        // which is the only free-text it renders. The app menu carries a
+        // *clickable* version of the same thing, next to Check for Updates.
+        credits: Some(format!("{}\n\n{WEBSITE}", build_info::summary(app))),
         copyright: app.config().bundle.copyright.clone(),
         ..Default::default()
     }
@@ -503,6 +542,12 @@ fn build_tray(app: &tauri::AppHandle) -> tauri::Result<()> {
             "stop-annotate" => annotate::stop(app),
             "close-pins" => pin::close_all(app),
             "update" => update::check_from_tray(app),
+            "website" => {
+                use tauri_plugin_opener::OpenerExt;
+                if let Err(err) = app.opener().open_url(format!("https://{WEBSITE}"), None::<&str>) {
+                    eprintln!("[shotly] could not open {WEBSITE}: {err}");
+                }
+            }
             "quit" => app.exit(0),
             _ => {}
         })
