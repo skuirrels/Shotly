@@ -30,35 +30,31 @@ export async function invoke<T>(cmd: string, args?: Record<string, unknown>): Pr
   }
   if (cmd === "open_keyboard_settings") return undefined as T;
 
-  // Start at login. Held in memory so the switch behaves as it does in the
-  // app: set it, and the answer that comes back is what the system reports.
-  if (cmd === "drive_link") {
-    const name = String(args?.path ?? "").split("/").pop() ?? "";
-    if (!name.endsWith(".mov")) throw new Error("That capture hasn't been backed up yet.");
-    return {
-      url: "https://drive.google.com/file/d/HARNESSFILEID/view?usp=sharing",
-      shared: google.connected,
-    } as T;
+  // Sharing. One provider, the way the app has one, so Settings can be looked
+  // at with an account connected and without.
+  if (cmd === "share_providers") {
+    return [{ id: "google", name: "Google Drive", ...google }] as T;
   }
-  if (cmd === "drive_built_in_client") return google.builtIn as T;
-  if (cmd === "drive_share") {
-    // Report a few steps of progress, the way a real upload does.
-    const total = 12_000_000;
-    for (let sent = 0; sent <= total; sent += total / 4) {
-      setTimeout(() => (window as any).EMIT?.("drive:progress", { sent, total }), sent / 1000);
-    }
-    return { url: "https://drive.google.com/file/d/UPLOADED/view?usp=sharing", shared: true } as T;
-  }
-  if (cmd === "drive_connected") return google.connected as T;
-  if (cmd === "drive_connect") {
+  if (cmd === "share_connected") return google.connected as T;
+  if (cmd === "share_connect") {
     google.connected = true;
     return true as T;
   }
-  if (cmd === "drive_disconnect") {
+  if (cmd === "share_disconnect") {
     google.connected = false;
     return undefined as T;
   }
-  if (cmd === "drive_folder_link") return "https://drive.google.com/drive/folders/HARNESSFOLDER" as T;
+  if (cmd === "share_link") {
+    if (!google.connected) throw new Error("Connect a cloud account in Settings first.");
+    // Report a few steps of progress, the way a real upload does.
+    const total = 12_000_000;
+    for (let sent = 0; sent <= total; sent += total / 4) {
+      setTimeout(() => (window as any).EMIT?.("share:progress", { sent, total }), sent / 1000);
+    }
+    return { url: "https://drive.google.com/file/d/UPLOADED/view?usp=sharing", shared: true } as T;
+  }
+  // Start at login. Held in memory so the switch behaves as it does in the
+  // app: set it, and the answer that comes back is what the system reports.
   if (cmd === "launch_at_login") return atLogin as T;
   if (cmd === "set_launch_at_login") {
     atLogin = Boolean(args?.enabled);
@@ -121,7 +117,7 @@ export async function invoke<T>(cmd: string, args?: Record<string, unknown>): Pr
 }
 
 let atLogin = false;
-const google = { connected: false, builtIn: true };
+const google = { connected: false, available: true };
 
 /** Enabled and pointing at Drive, so the sharing panel is on screen. */
 const backup = {

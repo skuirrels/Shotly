@@ -20,9 +20,10 @@ const CLOUD_STORAGE: &str = "Library/CloudStorage";
 
 /// The subfolder captures are copied into, inside whichever folder was chosen.
 ///
-/// Public because `drive.rs` has to know where the copy landed to find its
-/// link, and a second copy of the name in that module is a second thing to
-/// change when this one moves.
+/// Not to be confused with `share::FOLDER`, which is where a capture goes when
+/// you deliberately send it to someone. Everything here is a second copy of
+/// everything you have taken; everything there has been handed out on purpose.
+/// A test asserts the two names differ.
 pub const FOLDER: &str = "Shotly";
 
 #[derive(Default, Clone, Serialize, Deserialize)]

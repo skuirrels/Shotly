@@ -88,7 +88,7 @@ node scripts/publish.mjs --allow-identity-change --notes "..."
 Sharing to Drive needs an OAuth client, and a release build carries one so that
 nobody who installs Shotly ever sees a Google Cloud console. It is **not in the
 repository**: it comes from the environment at compile time, through
-`option_env!` in `gauth.rs`.
+`option_env!` in `share/gauth.rs`.
 
 Put them in `.env.release`, which `npm run release` and `npm run bundle` source
 and `.gitignore` excludes:

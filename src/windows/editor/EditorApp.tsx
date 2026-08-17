@@ -111,7 +111,7 @@ export function EditorApp() {
    * offer at all.
    */
   const [movie, setMovie] = useState<Movie | null>(null);
-  /** How far an upload to Drive has got, while one is running. */
+  /** How far an upload to the cloud has got, while one is running. */
   const [upload, setUpload] = useState<{ sent: number; total: number } | null>(null);
   /** How far into that recording you had got, so the Player tab holds a place. */
   const resume = useRef<{ path: string; at: number } | null>(null);
@@ -254,7 +254,7 @@ export function EditorApp() {
     // A recording is filed straight in the library — there is nothing to open
     // in an image editor — so the only thing owed to the user is the news, and
     // a way to the file. The toast offers Show in Finder when `saved` is set.
-    const uploadUnlisten = listen<{ sent: number; total: number }>("drive:progress", (event) =>
+    const uploadUnlisten = listen<{ sent: number; total: number }>("share:progress", (event) =>
       setUpload(event.payload),
     );
 
@@ -348,37 +348,30 @@ export function EditorApp() {
   );
 
   /**
-   * Put a Google Drive link to a capture on the clipboard.
+   * Put a link to a capture on the clipboard.
    *
    * The point of it is the recordings: a seven-minute one is three hundred
-   * megabytes, which is a link's worth of thing and not an attachment's. It
-   * reads the id out of Drive's own index — no account to connect — and every
-   * way that can fail comes back as something worth reading. See
-   * `src-tauri/src/drive.rs`.
+   * megabytes, which is a link's worth of thing and not an attachment's. One
+   * path, whichever cloud is connected — the file goes up from wherever it sits
+   * in the library, and comes back as a link that already works. Every way that
+   * can fail comes back as something worth reading. See `src-tauri/src/share/`.
    */
   const shareLink = useCallback(
     async (path: string) => {
       setBusy("link");
       try {
-        // Two paths, and the connected one is the whole feature: Shotly
-        // uploads the capture to a Shotly folder in your Drive, shares that
-        // one file, and hands back a link that works. Without an account it
-        // falls back to naming the copy your backup already synced, which is
-        // correct but opens for nobody until the folder is shared by hand.
-        const connected = await ipc.driveConnected();
-        const link = connected ? await ipc.driveShare(path) : await ipc.driveLink(path);
+        const link = await ipc.shareLink(path);
         await writeText(link.url);
         setSaved(null);
-        // Two different things, and the wording has to tell them apart. With an
-        // account connected Shotly has just set anyone-with-the-link on this
-        // file, so the promise is real. Without one it cannot even see whether
-        // the folder is shared — Drive keeps that on its servers — so it says
-        // what it knows and no more.
+        // `shared` is not decoration: a link that is correct but opens for
+        // nobody looks like success on the clipboard and fails at the far end.
+        // Google sets the permission as part of the upload, so it is true
+        // there; a service that could not would have to be said out loud.
         notify(
           link.shared
-            ? "Drive link copied — anyone with it can view"
-            : "Drive link copied — it opens for others once the folder is shared",
-          "ok",
+            ? "Link copied — anyone with it can view"
+            : "Link copied — but it does not open for anyone else yet",
+          link.shared ? "ok" : "error",
           link.shared ? 4000 : 5200,
         );
       } catch (e) {

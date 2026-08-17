@@ -162,8 +162,10 @@ src-tauri/src/
   markup.rs      the shTL PNG chunk that keeps a saved capture editable
   ocr.rs         text and QR/barcode recognition, via macOS Vision
   pin.rs         always-on-top pin windows
-  drive.rs       a shareable Google Drive link, read out of Drive's own index
-  gauth.rs       signing in to Google, for the sharing the index cannot do
+  share/         sending one capture to someone, as a link
+    mod.rs       the Provider trait, the registry, and the commands
+    google.rs    Google Drive: find the folder, upload, set the permission
+    gauth.rs     signing in to Google — OAuth for the provider above
   media.rs       serving a recording to the player, off the main thread
   record.rs      screen recording: what to record, and the child that records it
   scroll.rs      scrolling capture: session loop and the row-signature stitcher
@@ -642,87 +644,95 @@ Worth knowing if you touch it:
   lands in the wrong place, which is why the range arithmetic has tests of its
   own.
 
-## Drive links without a Google API (`drive.rs`)
+## Share links (`share/`)
 
-The backup is a file copy — see the top of `backup.rs` for why that is the
-right shape and an API integration is not. What a copy cannot give you is the
-*link*: a file's Drive id is nowhere in its path.
+Sharing is one capture, on purpose, to one person. Right-click a capture, Copy
+share link, and Shotly uploads **that file** — from wherever it sits in the
+library, no backup and no synced folder involved — into a folder called
+`ShotlyShared`, marks that one file readable by anyone with the link, and puts
+the link on the clipboard. Nothing else in the library moves and nothing else
+becomes readable.
 
-It is, though, already on the machine. Drive for desktop keeps a SQLite index at
-`~/Library/Application Support/Google/DriveFS/<account>/metadata_sqlite_db`, and
-its `items` table carries `id` beside `local_title`. One read-only query — 9ms
-against a real one, so it is not worth copying the file first — and there is the
-id. No OAuth, no tokens, nothing to sign into.
+**The seam is a trait, and that is the load-bearing decision here.** Uploading a
+file, finding-or-making a folder, and turning a file id into a URL are the same
+three moves on every service; only the endpoints and the OAuth dance differ. So
+the app talks to `Provider` and never to Google:
 
-Three things this has to get right:
+```rust
+pub trait Provider: Sync {
+    fn id(&self) -> &'static str;
+    fn name(&self) -> &'static str;
+    fn available(&self) -> bool;   // this build has credentials for it
+    fn connected(&self) -> bool;   // this Mac has an account
+    fn connect(&self, open: &dyn Fn(&str) -> Result<(), String>) -> Result<(), String>;
+    fn disconnect(&self);
+    fn upload(&self, path: &Path, progress: &mut dyn FnMut(u64, u64)) -> Result<Link, String>;
+}
+```
 
-* **Which file.** A real Drive had *two* folders called `Shotly`, both directly
-  under My Drive, and the backup writes to one of them. So the query walks the
-  parent chain with a recursive CTE and matches it against the destination the
-  user actually chose. Two files that both fit returns **nothing**: a link to the
-  wrong recording is worse than no link.
-* **Escaping.** The `sqlite3` CLI takes a statement, not bound parameters, and
-  capture names are the user's. Quotes are doubled, which is SQL's own escape,
-  and there is a test with `'; drop table items; --` in it.
-* **Failing softly.** That index is Google's private store: undocumented, and
-  they can change its shape whenever they like. Every failure returns a sentence
-  worth showing — backup off, not copied yet, still uploading — and nothing in
-  the app depends on it working.
+`share_providers` hands the list to Settings, which renders whatever is in it
+without naming anything. Adding OneDrive or Dropbox is a new file implementing
+the trait and one line in `all()` — no frontend work, no new commands.
 
-**Sharing is the part this cannot do, and it is worth being exact about why.**
-The index carries names, ids, parents and checksums — and *no permissions at
-all*. Drive keeps sharing on its servers, so the app can neither set it nor read
-it: a link copied here opens for the person who owns the file and shows everyone
-else "You need access" until the folder is shared. So the app never claims
-otherwise — the toast says "it opens for others once the folder is shared" — and
-Settings offers a button that resolves the folder's own id and opens it in
-Drive, which is where the switch actually is. Setting it from the app is the one
-thing that would need OAuth.
+**What this replaced, and why it is worth recording.** Until 0.9.x an
+unconnected Shotly made links by reading Drive for desktop's private SQLite
+index at `~/Library/Application Support/Google/DriveFS/<account>/metadata_sqlite_db`
+to recover the id of a file the backup had already synced. It was a genuinely
+neat trick — one 9ms recursive CTE, no OAuth, no tokens — and it was the wrong
+shape:
 
-That folder is resolved *through a file*, not by name, for the same reason the
-file lookup walks its chain: there are two `Shotly` folders under My Drive here,
-and a capture that is definitely in the right one names its own parent.
+* It made sharing conditional on backing up **into Google Drive specifically**.
+  The capture in your own Shotly folder was never the thing being shared; a copy
+  of it was, if one existed and had finished uploading.
+* The index carries names, ids and parents and **no permissions at all**, so it
+  could produce a link but never make one work. Sharing meant sending the user
+  to the folder in Drive to set *anyone with the link* by hand — which shares
+  every capture in it, including ones taken later and never sent to anyone.
+* It depended on Google's undocumented private store, and it put the whole
+  feature inside the Backup screen, where it read as part of backing up.
 
-### Connecting an account (`gauth.rs`)
+All of it is gone. One code path, one provider interface, and the file on your
+disk is the file that gets sent.
 
-With a Google account connected, Shotly sets the sharing itself — per file, as
-the link is copied — and the folder switch above becomes unnecessary. Sharing
-one file is also the better default: sharing the folder makes every capture in
-it readable, including ones taken later and never sent to anyone.
+`ShotlyShared` is deliberately not the backup's `Shotly` folder: everything in
+one has been handed to someone on purpose and nothing in the other has, and a
+test asserts the two names differ.
 
+### The Google provider (`share/google.rs`, `share/gauth.rs`)
+
+* **The scope is `drive.file`.** Google shows the app only the files the app
+  itself created, so find-the-folder cannot stumble onto a folder of the user's
+  with the same name and a bug here cannot reach the rest of their Drive. That
+  limit is enforced on their side, which is the only kind worth relying on.
+
+  It was the wide `drive` scope for one release, so that it could share the copy
+  Drive-for-desktop had already synced and skip the upload. A bad trade, worth
+  recording as one: `drive` is *restricted*, so a published client needs an
+  annual third-party security assessment, and the alternative — every user
+  creating their own Cloud project, consent screen and test-user entry — is a
+  ten-minute setup where Snagit's is ten seconds. `drive.file` is
+  non-sensitive: an ordinary consent screen, no assessment, and the client ships
+  inside the app like every other desktop application's.
 * **The flow** is the one Google specifies for an installed app: loopback
   redirect on `127.0.0.1` with a port the OS hands out, plus PKCE. The client
-  secret proves nothing in an app anyone can unzip; the code verifier is what
-  does, and it never leaves the process.
+  secret proves nothing in an app anyone can unzip; the code verifier does, and
+  it never leaves the process.
 * **A refresh token goes in the login keychain**, not in a file beside the
-  settings — it is a long-lived credential for the user's whole Drive. Access
-  tokens live in memory for their hour, with a minute's headroom so one never
-  expires mid-request.
+  settings. Access tokens live in memory for their hour, with a minute's
+  headroom so one never expires mid-request.
 * **`invalid_grant` disconnects.** A refresh token revoked from the Google
   account page fails identically for ever; dropping it means the next attempt
   offers to connect instead of failing the same way again.
-* **The scope is `drive.file`, and the app uploads what it shares.** This was
-  the wide `drive` scope for one release, so that it could share the copy
-  Drive-for-desktop had already synced and skip an upload. That was a bad trade
-  and worth recording as one: `drive` is a *restricted* scope, so a published
-  client needs an annual third-party security assessment, and the alternative —
-  every user creating their own Cloud project, consent screen and test-user
-  entry — is a ten-minute setup where Snagit's is ten seconds. `drive.file` is
-  non-sensitive: an ordinary consent screen, no assessment, and the client ships
-  inside the app like every other desktop application's.
+* **The upload is resumable**, in 8 MB chunks, emitting `share:progress`. These
+  are recordings: a 300 MB upload that fails at 90% with no progress shown is
+  the worst of both worlds, and one with no progress at all is
+  indistinguishable from a hang.
 
-  It also gives away less. `drive.file` lets Shotly see only what Shotly
-  created — the folder it makes and the captures it uploads — where `drive` was
-  a grant over everything the user owns to touch one file.
-
-The command returns `{ url, shared }` rather than a bare string, because the
-difference between the two is the whole feature: an unshared link is correct
-and useless to whoever receives it, and the toast has to say which one it just
-put on the clipboard.
-
-The query has a test that builds a Drive-shaped database and runs the real
-statement against it, because a renamed column would otherwise break every link
-in the app while all the Rust either side of it went on passing.
+`upload` returns `{ url, shared }` rather than a bare string, because the
+difference is the whole feature: a link that is correct but opens for nobody
+looks like success on the clipboard and fails at the far end. Google sets the
+permission as part of the upload, so it is true there — a provider that could
+not would have to say so, and the toast words itself from that flag.
 
 ## Neon — one recipe, two renderers
 

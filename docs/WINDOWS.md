@@ -94,12 +94,13 @@ This is a real tax on Mac development and it should be accepted knowingly.
 The alternative — a freeze on Mac features until Windows catches up — is worse,
 because it makes the port's cost invisible while it is being paid.
 
-How fast the target moves is not hypothetical.
-[`drive.rs`](../src-tauri/src/drive.rs) — 322 lines, two macOS couplings — landed
-in `2c9dd12` during the afternoon this document was written, and is already an
-entry in the table below that did not exist when the estimate above was drafted.
-That is one feature in one afternoon. Over four months, unmanaged, the gap grows
-faster than one developer closes it.
+How fast the target moves is not hypothetical. `drive.rs` — 322 lines, two
+macOS couplings — landed in `2c9dd12` during the afternoon this document was
+written, and became an entry in the table below that had not existed when the
+estimate above was drafted. It was then deleted a fortnight later and replaced
+by [`share/`](../src-tauri/src/share/), which is portable. Both directions are
+the same lesson: over four months, unmanaged, the gap moves faster than one
+developer tracking it.
 
 ---
 
@@ -196,15 +197,18 @@ system.
 | Clipboard | ~150 | `CF_HDROP` + `CF_DIBV5`. | 3–5 d |
 | Video thumbnails | ~60 | `IShellItemImageFactory`. | 2–3 d |
 | Cloud-folder discovery | ~80 | `%USERPROFILE%\OneDrive`, Dropbox's `info.json`, the Drive letter. | 2 d |
-| Drive links | 322 | Same DriveFS database, at `%LOCALAPPDATA%\Google\DriveFS`. But **Windows ships no `sqlite3` binary**, so the two `Command::new("/usr/bin/sqlite3")` calls become a `rusqlite` dependency. | 3–4 d |
+| Share links | 0 | Nothing. `share/` is HTTP, OAuth and a file read — no platform calls at all. The loopback redirect opens a browser through `tauri-plugin-opener`, and the refresh token goes to the keychain through `keyring`, which has a Windows Credential Manager backend already. | — |
 | Trash and reveal | ~40 | `IFileOperation::DeleteItem`; `explorer /select,`. | 1 d |
 
-Drive links are worth a second look, because they are the one case where the
-port improves the Mac side rather than merely matching it. Adopting `rusqlite`
-removes the shell-out on *both* platforms, leaves `drive.rs` with one
-implementation and a per-platform path constant, and drops a dependency on a
-system binary whose presence was never guaranteed. Do it once, for both, rather
-than adding a second code path.
+Share links are worth a second look, because the estimate for them went to
+**zero** — and not by being deferred. The original `drive.rs` read Drive for
+desktop's SQLite index through `/usr/bin/sqlite3`, which is two macOS couplings
+and a system binary Windows does not ship; it was costed at 3–4 days. Replacing
+it with an upload through Drive's own API was done for a product reason (a link
+that works when it is copied, from any capture, without a synced folder) and
+happened to delete the platform coupling entirely. The general point is worth
+keeping: a feature built on somebody's private local file is nearly always
+costed as a port, and the API it was avoiding is nearly always portable.
 
 ### Recording is the one to worry about
 

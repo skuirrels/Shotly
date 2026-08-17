@@ -60,10 +60,25 @@ export interface CaptureResult {
   markup?: string;
 }
 
-/** A Google Drive link, and whether Shotly could make it open for others. */
-export interface DriveLink {
+/** A link to a shared capture, and whether it was made to open for others. */
+export interface ShareLink {
   url: string;
   shared: boolean;
+}
+
+/**
+ * A cloud a capture can be sent to.
+ *
+ * `available` is about the build — a Shotly compiled without a service's client
+ * credentials has nothing to connect to — and `connected` is about this Mac.
+ * Google Drive is the only one today; the list is what makes the second one an
+ * addition rather than a rewrite. See `src-tauri/src/share/mod.rs`.
+ */
+export interface ShareProvider {
+  id: string;
+  name: string;
+  available: boolean;
+  connected: boolean;
 }
 
 export interface LibraryItem {

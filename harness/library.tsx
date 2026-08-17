@@ -25,7 +25,7 @@ function Harness() {
         onSelect={setSelected}
         onItems={() => {}}
         onCombine={() => {}}
-        onShareLink={(path) => console.log("drive link for:", path)}
+        onShareLink={(path) => console.log("share link for:", path)}
         onPin={() => {}}
       />
     </div>

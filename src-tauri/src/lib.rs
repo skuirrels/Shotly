@@ -9,11 +9,10 @@ mod hotkeys;
 mod markup;
 mod ocr;
 mod pin;
-mod drive;
-mod gauth;
 mod media;
 mod record;
 mod scroll;
+mod share;
 mod snap;
 mod platform;
 mod update;
@@ -202,13 +201,11 @@ pub fn run() {
             backup::backup_settings,
             backup::backup_configure,
             backup::backup_now,
-            drive::drive_link,
-            drive::drive_folder_link,
-            drive::drive_connected,
-            drive::drive_share,
-            drive::drive_built_in_client,
-            drive::drive_connect,
-            drive::drive_disconnect,
+            share::share_link,
+            share::share_providers,
+            share::share_connected,
+            share::share_connect,
+            share::share_disconnect,
             backup::launch_at_login,
             backup::set_launch_at_login,
             ocr::scan_image,

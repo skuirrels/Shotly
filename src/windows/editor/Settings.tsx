@@ -4,14 +4,14 @@ import clsx from "clsx";
 import {
   IconCheck,
   IconClose,
-  IconExternal,
   IconFolder,
   IconGear,
   IconKeyboard,
+  IconLink,
 } from "@/components/icons";
 import { IconButton } from "@/components/ui/IconButton";
 import * as ipc from "@/lib/ipc";
-import type { BackupSettings, BackupTarget } from "@/lib/types";
+import type { BackupSettings, BackupTarget, ShareProvider } from "@/lib/types";
 import { GlobalHotkeys } from "./GlobalHotkeys";
 
 /**
@@ -28,11 +28,12 @@ import { GlobalHotkeys } from "./GlobalHotkeys";
  * a poor way to get at the screen for fixing keyboard shortcuts.
  */
 
-export type SettingsTab = "hotkeys" | "general" | "backup";
+export type SettingsTab = "hotkeys" | "general" | "sharing" | "backup";
 
 const TABS: { id: SettingsTab; label: string; icon: React.ReactNode }[] = [
   { id: "hotkeys", label: "Hotkeys", icon: <IconKeyboard /> },
   { id: "general", label: "General", icon: <IconGear /> },
+  { id: "sharing", label: "Sharing", icon: <IconLink /> },
   { id: "backup", label: "Backup", icon: <IconFolder /> },
 ];
 
@@ -112,6 +113,8 @@ export function Settings({
             <Hotkeys onRecording={setRecording} />
           ) : tab === "general" ? (
             <General />
+          ) : tab === "sharing" ? (
+            <Sharing />
           ) : (
             <Backup />
           )}
@@ -146,13 +149,8 @@ function Hotkeys({ onRecording }: { onRecording: (active: boolean) => void }) {
   );
 }
 
-// --------------------------------------------------------------------- backup
+// -------------------------------------------------------------------- general
 
-/**
- * Backing up is a copy into a folder something else already syncs, rather than
- * an upload to anybody's API. See `src-tauri/src/backup.rs` for why that is the
- * right trade and what it costs.
- */
 /**
  * The things that are neither a key nor a folder.
  *
@@ -209,105 +207,124 @@ function General() {
   );
 }
 
-/**
- * Connecting a Google account, so Shotly can set the sharing itself.
- *
- * The alternative to the folder switch above, and strictly better when it is
- * set up: each link is made to work as it is copied, and only the file you sent
- * becomes readable — sharing the whole folder makes every capture in it public,
- * including ones you take later and never send to anyone.
- *
- * Shotly ships with no OAuth client of its own. That is deliberate: this needs
- * Google's wide Drive scope, and a client baked into a downloadable app is
- * exactly what their verification process exists to police. So it asks for the
- * user's own, from their own Google Cloud project, and the app is theirs.
- */
-function GoogleAccount() {
-  const [ready, setReady] = useState<boolean | null>(null);
-  const [connected, setConnected] = useState(false);
-  const [busy, setBusy] = useState(false);
-  const [note, setNote] = useState<{ text: string; bad?: boolean } | null>(null);
+// -------------------------------------------------------------------- sharing
 
-  const refresh = useCallback(async () => {
-    setReady(await ipc.driveBuiltInClient());
-    setConnected(await ipc.driveConnected());
-  }, []);
+/**
+ * Where "Copy share link" sends a capture.
+ *
+ * Its own section, and that placement is the point. Sharing used to live inside
+ * Backup, shown only once you had pointed the backup at a Google Drive folder —
+ * which made it look as though a link required a synced copy in Drive. It never
+ * needed one. Shotly uploads the single capture you asked to share, from the
+ * Shotly folder on this Mac, into a `ShotlyShared` folder of its own; the
+ * backup is a separate idea about keeping second copies of everything.
+ *
+ * Nothing here names Google except the row Google fills in. The list comes from
+ * the backend, so a second service appears here the day one is implemented.
+ */
+function Sharing() {
+  const [providers, setProviders] = useState<ShareProvider[] | null>(null);
+  const [busy, setBusy] = useState<string | null>(null);
+  const [note, setNote] = useState<string | null>(null);
+
+  const refresh = useCallback(async () => setProviders(await ipc.shareProviders()), []);
 
   useEffect(() => {
     void refresh();
   }, [refresh]);
 
-  const connect = useCallback(async () => {
-    setBusy(true);
-    setNote(null);
-    try {
-      await ipc.driveConnect();
-      await refresh();
-    } catch (e) {
-      setNote({ text: String(e), bad: true });
-    } finally {
-      setBusy(false);
-    }
-  }, [refresh]);
-
-  if (ready === null) return null;
+  const connect = useCallback(
+    async (id: string) => {
+      setBusy(id);
+      setNote(null);
+      try {
+        await ipc.shareConnect(id);
+        await refresh();
+      } catch (e) {
+        setNote(String(e));
+      } finally {
+        setBusy(null);
+      }
+    },
+    [refresh],
+  );
 
   return (
-    <div className="mt-3 border-t border-white/8 pt-3">
-      <p className="text-[12px] font-medium text-ink">Or let Shotly share it for you</p>
-      <p className="mt-1 text-[11.5px] leading-relaxed text-ink-3">
-        Connect a Google account and Shotly uploads the capture to a{" "}
-        <strong className="font-medium text-ink-2">Shotly</strong> folder in your Drive, shares that
-        one file, and copies the link. It can only see what it put there — not the rest of your
-        Drive.
+    <>
+      <h3 className="mb-1.5 text-[11px] font-semibold tracking-wider text-ink-4 uppercase">
+        Sharing
+      </h3>
+      <p className="mb-3 text-[11.5px] leading-relaxed text-ink-4">
+        <strong className="font-medium text-ink-2">Copy share link</strong> — in the library's
+        right-click menu and on the player — uploads that one capture and puts a working link on
+        your clipboard. It is how you send a recording without sending three hundred megabytes.
+        Connect an account below and everything else is automatic.
       </p>
 
-      {connected ? (
-        <div className="mt-2.5 flex items-center gap-2">
-          <span className="flex items-center gap-1.5 text-[12px] text-success">
-            <IconCheck />
-            Google Drive connected
-          </span>
-          <button
-            type="button"
-            onClick={() => void ipc.driveDisconnect().then(refresh)}
-            className="rounded px-1 text-[11.5px] text-ink-3 underline decoration-dotted underline-offset-2 hover:text-ink"
-          >
-            Disconnect
-          </button>
+      {providers === null ? null : (
+        <div className="space-y-1.5">
+          {providers.map((provider) => (
+            <div
+              key={provider.id}
+              className="flex items-center gap-2.5 rounded-lg bg-white/[0.04] px-3 py-2.5"
+            >
+              <span className="flex-1 text-[12.5px] text-ink">{provider.name}</span>
+
+              {provider.connected ? (
+                <>
+                  <span className="flex items-center gap-1.5 text-[12px] text-success">
+                    <IconCheck />
+                    Connected
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => void ipc.shareDisconnect(provider.id).then(refresh)}
+                    className="rounded px-1 text-[11.5px] text-ink-3 underline decoration-dotted underline-offset-2 hover:text-ink"
+                  >
+                    Disconnect
+                  </button>
+                </>
+              ) : provider.available ? (
+                <button
+                  type="button"
+                  onClick={() => void connect(provider.id)}
+                  disabled={busy !== null}
+                  className="flex h-7 items-center rounded-lg bg-accent px-2.5 text-[12px] font-semibold text-accent-fg transition-colors hover:bg-accent-hi disabled:opacity-40"
+                >
+                  {busy === provider.id ? "Waiting for your browser…" : "Connect"}
+                </button>
+              ) : (
+                // A build from source carries no client credentials — see
+                // docs/RELEASING.md. Saying so is better than a dead button.
+                <span className="text-[11.5px] text-ink-4">Not in this build</span>
+              )}
+            </div>
+          ))}
         </div>
-      ) : ready ? (
-        <button
-          type="button"
-          onClick={() => void connect()}
-          disabled={busy}
-          className="mt-2.5 flex h-8 items-center gap-1.5 rounded-lg bg-accent px-2.5 text-[12px] font-semibold text-accent-fg transition-colors hover:bg-accent-hi disabled:opacity-40"
-        >
-          {busy ? "Waiting for your browser…" : "Connect Google Drive"}
-        </button>
-      ) : (
-        // A build from source carries no OAuth client — see docs/RELEASING.md.
-        // Saying so is better than offering a form nobody downloading Shotly
-        // should ever have to fill in.
-        <p className="mt-2.5 text-[11.5px] text-ink-4">
-          This build has no Google client compiled into it, so there is nothing to connect to.
-          Released builds of Shotly do.
-        </p>
       )}
 
-      {note && (
-        <p className={clsx("mt-2 text-[11.5px]", note.bad ? "text-danger" : "text-ink-3")}>
-          {note.text}
-        </p>
-      )}
-    </div>
+      {note && <p className="mt-2.5 text-[11.5px] text-danger">{note}</p>}
+
+      <p className="mt-3 border-t border-white/8 pt-2.5 text-[11px] leading-relaxed text-ink-4">
+        Only the captures you choose to send are uploaded, into a folder called{" "}
+        <strong className="font-medium text-ink-3">ShotlyShared</strong>. Shotly is given access to
+        what it puts there and to nothing else in your account — that limit is the service's, not a
+        promise of ours. Each link is set to <em>anyone with the link — viewer</em> as it is copied.
+      </p>
+    </>
   );
 }
 
+// --------------------------------------------------------------------- backup
+
+/**
+ * Backing up is a copy into a folder something else already syncs, rather than
+ * an upload to anybody's API. See `src-tauri/src/backup.rs` for why that is the
+ * right trade and what it costs — and `Sharing` above for the thing it is
+ * often confused with, which uploads one chosen capture and nothing else.
+ */
 function Backup() {
   const [settings, setSettings] = useState<BackupSettings | null>(null);
-  const [folderBusy, setFolderBusy] = useState(false);
-  const [folderNote, setFolderNote] = useState<string | null>(null);
   const [targets, setTargets] = useState<BackupTarget[]>([]);
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState<{ text: string; bad?: boolean } | null>(null);
@@ -323,19 +340,6 @@ function Backup() {
       setSettings(await ipc.backupConfigure(enabled, destination));
     } catch (e) {
       setNote({ text: String(e), bad: true });
-    }
-  }, []);
-
-  /** Take them to the folder in Drive, where the sharing switch actually is. */
-  const openFolder = useCallback(async () => {
-    setFolderBusy(true);
-    setFolderNote(null);
-    try {
-      await ipc.openExternally(await ipc.driveFolderLink());
-    } catch (e) {
-      setFolderNote(String(e));
-    } finally {
-      setFolderBusy(false);
     }
   }, []);
 
@@ -446,45 +450,6 @@ function Backup() {
             New captures are copied as they are saved. Nothing is ever deleted from the backup
             — trashing a capture in Shotly leaves the copy where it is.
           </p>
-
-          {/* The one thing Shotly cannot do for you. Setting this per file
-              would need a Google account connected to the app; setting it once
-              on the folder needs nothing, and everything copied in afterwards
-              inherits it. */}
-          {settings?.destination?.includes("GoogleDrive") && (
-            <div className="mt-3 rounded-xl border border-line bg-surface p-3">
-              <p className="text-[12px] font-medium text-ink">Sending big files as a link</p>
-              <p className="mt-1 text-[11.5px] leading-relaxed text-ink-3">
-                <strong className="font-medium text-ink-2">Copy Drive link</strong> — in the
-                library's right-click menu, and on the player — puts a link to the backed-up copy
-                on your clipboard, which is how you send a recording without sending three hundred
-                megabytes.
-              </p>
-              <p className="mt-1.5 text-[11.5px] leading-relaxed text-ink-3">
-                A link only opens for someone else once the folder allows it. Open the{" "}
-                <strong className="font-medium text-ink-2">Shotly</strong> folder in Drive, and set
-                its sharing to <em>Anyone with the link — Viewer</em>. Once. Everything copied into
-                it afterwards inherits that, including every recording.
-              </p>
-              <p className="mt-1.5 text-[11.5px] leading-relaxed text-ink-4">
-                Shotly can't do that part for you, and can't tell whether you have: Google keeps
-                sharing on its servers, not on this Mac. Setting it from here would mean connecting
-                your Google account to the app.
-              </p>
-              <button
-                type="button"
-                onClick={() => void openFolder()}
-                disabled={folderBusy}
-                className="mt-2.5 flex h-8 items-center gap-1.5 rounded-lg bg-white/[0.07] px-2.5 text-[12px] font-medium text-ink transition-colors hover:bg-white/[0.11] disabled:opacity-40"
-              >
-                <IconExternal />
-                {folderBusy ? "Finding it…" : "Open the Shotly folder in Drive"}
-              </button>
-              {folderNote && <p className="mt-2 text-[11.5px] text-danger">{folderNote}</p>}
-
-              <GoogleAccount />
-            </div>
-          )}
         </>
       )}
     </>

@@ -46,7 +46,7 @@ interface Props {
   onCombine: (paths: string[], layout: "row" | "column" | "grid") => void;
   /** Stick one capture to the front of the screen. */
   onPin: (path: string) => void;
-  /** Put a Google Drive link to this capture on the clipboard. */
+  /** Upload this capture to the connected cloud and copy the link. */
   onShareLink: (path: string) => void;
 }
 
@@ -310,7 +310,7 @@ export function Library({
       // The point of a link rather than the file itself: a recording is
       // hundreds of megabytes, and nobody wants that in their inbox.
       !many && {
-        label: "Copy Drive link",
+        label: "Copy share link",
         icon: <IconLink />,
         run: () => onShareLink(targets[0]),
       },

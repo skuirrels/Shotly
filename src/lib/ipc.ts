@@ -7,9 +7,10 @@ import type {
   CaptureResult,
   HotkeyAction,
   HotkeyBinding,
-  DriveLink,
   LibraryItem,
   Scan,
+  ShareLink,
+  ShareProvider,
   WindowInfo,
 } from "./types";
 
@@ -124,37 +125,23 @@ export const revealInFinder = (path: string) => invoke<void>("reveal_in_finder",
 export const openExternally = (path: string) => invoke<void>("open_externally", { path });
 
 /**
- * A shareable Google Drive link to the backed-up copy of a capture.
+ * Upload one capture to the connected cloud, share it, and hand back the link.
  *
- * Rejects with something worth showing the user: backup off, not copied yet,
- * or Drive still uploading. See `src-tauri/src/drive.rs`.
+ * The way to send a recording: a seven-minute one is three hundred megabytes,
+ * which is a link's worth of thing and not an attachment's. It sends the file
+ * where it actually is — the Shotly folder — and nothing else goes with it.
+ *
+ * Emits `share:progress` as it goes; rejects with something worth showing when
+ * nothing is connected. See `src-tauri/src/share/`.
  */
-export const driveLink = (path: string) => invoke<DriveLink>("drive_link", { path });
+export const shareLink = (path: string) => invoke<ShareLink>("share_link", { path });
 
-/**
- * A link to the Drive folder the backup writes into.
- *
- * Where you go to set "anyone with the link can view" — the one part of this
- * Shotly cannot do for you without a connected Google account.
- */
-export const driveFolderLink = () => invoke<string>("drive_folder_link");
-
-/** Whether an OAuth client has been set up — Shotly ships without one. */
-export const driveHasClient = () => invoke<boolean>("drive_has_client");
-/** Whether this build ships its own client, so nothing needs setting up. */
-export const driveBuiltInClient = () => invoke<boolean>("drive_built_in_client");
-/**
- * Upload a capture to your Drive and share it. The way to send a big one.
- *
- * Emits `drive:progress` as it goes — see `Shared` in `EditorApp`.
- */
-export const driveShare = (path: string) => invoke<DriveLink>("drive_share", { path });
-export const driveSetClient = (id: string, secret: string) =>
-  invoke<void>("drive_set_client", { id, secret });
-/** Whether an account is connected, so links can be made to work by themselves. */
-export const driveConnected = () => invoke<boolean>("drive_connected");
-export const driveConnect = () => invoke<boolean>("drive_connect");
-export const driveDisconnect = () => invoke<void>("drive_disconnect");
+/** Where a capture can be sent, and what is connected right now. */
+export const shareProviders = () => invoke<ShareProvider[]>("share_providers");
+/** Whether anything at all is connected — what the share button asks. */
+export const shareConnected = () => invoke<boolean>("share_connected");
+export const shareConnect = (id: string) => invoke<boolean>("share_connect", { id });
+export const shareDisconnect = (id: string) => invoke<void>("share_disconnect", { id });
 
 export const launchAtLogin = () => invoke<boolean>("launch_at_login");
 export const setLaunchAtLogin = (enabled: boolean) =>

@@ -40,7 +40,7 @@ export interface PlayerBar {
   onReveal: () => void;
   onExternal: () => void;
   onDelete: () => void;
-  /** Copy a Drive link to this recording — the way to send a big one. */
+  /** Copy a share link to this recording — the way to send a big one. */
   onCopyLink: () => void;
 }
 
@@ -216,7 +216,7 @@ export function TopBar({
             />
             {/* A recording is far too big to send as a file, so the useful
                 verb here is not "share" but "copy the link to it". */}
-            <Tooltip label="Copy a Google Drive link to this recording">
+            <Tooltip label="Upload this recording and copy a link to it">
               <button
                 type="button"
                 onClick={player.onCopyLink}

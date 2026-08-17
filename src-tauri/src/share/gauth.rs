@@ -1,8 +1,9 @@
-//! Signing in to Google, for the one thing a file copy cannot do.
+//! Signing in to Google, so `google.rs` has a token to work with.
 //!
-//! `drive.rs` can find a capture's Drive id without any of this. What it cannot
-//! do is *share* it — permissions live on Google's servers, and only the API
-//! can set them. So this module exists to get an access token and nothing else.
+//! Google-specific by nature — every provider's OAuth differs in its endpoints,
+//! its scopes and what it calls things — which is why it sits beside the
+//! provider that needs it rather than above the whole `share` module. A second
+//! provider brings its own.
 //!
 //! The flow is the one Google specifies for an installed app: a loopback
 //! redirect with PKCE. No client secret is trusted to keep anything (it cannot,
@@ -26,7 +27,8 @@ use sha2::{Digest, Sha256};
 /// What Shotly asks Google for.
 ///
 /// The narrow one. `drive.file` covers only what this app itself creates: the
-/// Shotly folder it makes in your Drive and the captures it uploads there.
+/// `ShotlyShared` folder it makes in your Drive and the captures it uploads
+/// there.
 /// Everything else you own stays invisible to it — Shotly cannot list, read or
 /// touch a single other file, and that is not a promise in a privacy policy but
 /// something Google enforces.
