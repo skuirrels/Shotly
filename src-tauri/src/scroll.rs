@@ -579,6 +579,16 @@ pub fn scroll_begin(app: AppHandle) -> Result<(), String> {
     // used straight through, rather than one that swallows every click.
     window.set_ignore_cursor_events(true).map_err(|e| e.to_string())?;
 
+    // Where the user is, not where the app happens to have been. Without this
+    // a scrolling capture started from a full-screen window — which is most of
+    // them, since the pages worth capturing whole are read full screen — opens
+    // on the desktop Space: nothing visible, clicks going to the app behind,
+    // and a WebView macOS never composites and therefore suspends. Only the
+    // Space, not the window level: see `platform::show_on_every_space`.
+    if let Err(err) = crate::platform::show_on_every_space(&window) {
+        eprintln!("[shotly] the scrolling-capture overlay may open on another Space: {err}");
+    }
+
     let _ = window.set_focus();
     watch(&app);
     Ok(())

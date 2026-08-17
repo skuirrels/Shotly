@@ -166,10 +166,12 @@ pub fn record_begin(app: AppHandle) -> Result<(), String> {
     // Clicks fall through until the page confirms it has drawn something.
     window.set_ignore_cursor_events(true).map_err(|e| e.to_string())?;
 
-    // The panel this becomes sits over the screen being recorded, so it must
-    // not be *in* the recording. Asked for here rather than at the handover:
-    // the flag belongs to the window, and setting it once is one thing that
-    // cannot be forgotten halfway through.
+    // Space membership only, while this is still a full-screen sheet. It is
+    // raised above everything else when — and only when — it shrinks into the
+    // panel. See `platform::show_on_every_space`.
+    if let Err(err) = crate::platform::show_on_every_space(&window) {
+        eprintln!("[shotly] the recording overlay may open on another Space: {err}");
+    }
     if let Err(err) = crate::platform::hide_from_capture(&window) {
         eprintln!("[shotly] the recording panel may appear in the recording: {err}");
     }
@@ -270,27 +272,31 @@ pub fn record_window(app: AppHandle, window_id: u32) -> Result<(), String> {
 /// cursor when there is no overlay (the tray's way in).
 #[tauri::command]
 pub fn record_screen(app: AppHandle) -> Result<(), String> {
-    let index = match current_display(&app) {
-        Ok((_, index)) => index,
-        Err(_) => {
-            if !cli::has_permission() {
-                cli::request_permission();
-                return Err("permission-denied".into());
-            }
-            let displays = display::displays().map_err(|e| e.to_string())?;
-            let target = crate::annotate::display_under_cursor(&displays).ok_or("no displays")?;
-            let index = displays
-                .iter()
-                .position(|d| d.id == target.id)
-                .map(|i| i as u32 + 1)
-                .unwrap_or(1);
-            // The HUD needs somewhere to be. Opening the overlay first would
-            // put a dimmed sheet over the display for a frame or two, so the
-            // panel is opened where it belongs and nothing else is.
-            crate::commands::conceal_for_capture(&app);
-            open_hud(&app, target.bounds)?;
-            index
+    // Whether a panel has to be opened is a question about the *window*, not
+    // about the state beside it. Asking `current_display` — which answers from
+    // a field that outlives the window it describes — meant that the second
+    // whole-screen recording of a session opened no panel at all and then
+    // failed looking for one.
+    let index = if app.get_webview_window(LABEL).is_some() {
+        current_display(&app)?.1
+    } else {
+        if !cli::has_permission() {
+            cli::request_permission();
+            return Err("permission-denied".into());
         }
+        let displays = display::displays().map_err(|e| e.to_string())?;
+        let target = crate::annotate::display_under_cursor(&displays).ok_or("no displays")?;
+        let index = displays
+            .iter()
+            .position(|d| d.id == target.id)
+            .map(|i| i as u32 + 1)
+            .unwrap_or(1);
+        // The panel needs somewhere to be. Opening the selection overlay first
+        // would put a dimmed sheet over the display for a frame or two, so the
+        // panel is opened where it belongs and nothing else is.
+        crate::commands::conceal_for_capture(&app);
+        open_hud(&app, target.bounds)?;
+        index
     };
 
     start(&app, &["-D", &index.to_string()], "Whole screen".into())
@@ -385,6 +391,10 @@ fn end(app: &AppHandle, keep: bool) {
 /// Put everything back: panel gone, editor as it was, tray honest again.
 fn wind_down(app: &AppHandle) {
     close(app);
+    // Forgotten along with the window it describes. Left behind, it is a
+    // display and an index that no longer have a panel on them, and every
+    // caller that reads it has to wonder whether it means anything.
+    *app.state::<RecordState>().bounds.lock().unwrap() = None;
     crate::commands::reveal_after_capture(app);
 
     // The tray menu is AppKit, and AppKit menus are built on the main thread.
@@ -534,6 +544,9 @@ fn shrink_to_hud(app: &AppHandle) -> Result<(), String> {
         .set_position(tauri::LogicalPosition::new(x, y))
         .and_then(|_| window.set_size(tauri::LogicalSize::new(HUD_WIDTH, HUD_HEIGHT)))
         .map_err(|e| e.to_string())?;
+
+    // It is a panel now, so it can be raised above everything.
+    raise_panel(app);
     let _ = app.emit_to(LABEL, "record:phase", "hud");
     Ok(())
 }
@@ -552,7 +565,7 @@ fn open_hud(app: &AppHandle, display: Rect) -> Result<(), String> {
     }
 
     let (x, y) = hud_spot(&display);
-    let window = WebviewWindowBuilder::new(&app.clone(), LABEL, WebviewUrl::App("record.html".into()))
+    WebviewWindowBuilder::new(&app.clone(), LABEL, WebviewUrl::App("record.html".into()))
         .title("Shotly Recording")
         .position(x, y)
         .inner_size(HUD_WIDTH, HUD_HEIGHT)
@@ -566,14 +579,35 @@ fn open_hud(app: &AppHandle, display: Rect) -> Result<(), String> {
         .build()
         .map_err(|e| e.to_string())?;
 
-    if let Err(err) = crate::platform::hide_from_capture(&window) {
-        eprintln!("[shotly] the recording panel may appear in the recording: {err}");
-    }
+    // Born a panel: nothing to select, so it is raised straight away.
+    raise_panel(app);
 
-    // Straight to the panel: there is nothing to select.
     let _ = app.emit_to(LABEL, "record:phase", "hud");
     watch(app);
     Ok(())
+}
+
+/// Put the panel where it can actually be seen and used.
+///
+/// Three things, and none of them optional. It floats above every other window
+/// and shows on every Space, because `alwaysOnTop` alone is a floating-level
+/// window that belongs to the Space it was born on — which is how the first
+/// version of this handed anyone recording from a full-screen app a stop
+/// button behind their windows. And it stays out of the recording itself
+/// (`NSWindowSharingNone`), which is what lets it sit over the display it is
+/// recording rather than dodging it.
+///
+/// Safe to raise this one where it would not be safe to raise the selection
+/// overlay: this is a 232-point panel with two buttons on it, not a sheet over
+/// the whole display.
+fn raise_panel(app: &AppHandle) {
+    let Some(window) = app.get_webview_window(LABEL) else { return };
+    if let Err(err) = crate::platform::elevate_overlay_window(&window) {
+        eprintln!("[shotly] the recording panel may sit behind other windows: {err}");
+    }
+    if let Err(err) = crate::platform::hide_from_capture(&window) {
+        eprintln!("[shotly] the recording panel may appear in the recording: {err}");
+    }
 }
 
 fn close(app: &AppHandle) {

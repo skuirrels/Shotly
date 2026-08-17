@@ -462,6 +462,36 @@ HUD does.
 Recordings are filed straight in the library folder as `.mov` and are not
 listed in the library grid, which reads images only.
 
+## Window level and Spaces — the rule for every overlay
+
+A window created while a full-screen app is in front belongs to the **desktop**
+Space, not the one the user is looking at. `alwaysOnTop` does not change that:
+it is a floating-level window on a Space nobody is on. For an overlay that is
+invisible, unreachable, and — because macOS never composites it, and suspends
+the WebView of a window it never composites — unable to report that it painted,
+which its own watchdog then reads as a hung renderer and tears down.
+
+Every overlay therefore has to say where it lives. Which of the two treatments
+it gets depends on one question: **does it take the mouse across the whole
+display?**
+
+| Window | Takes the mouse? | Treatment |
+|---|---|---|
+| `snap` outline | No — `ignore_cursor_events` throughout, clicks come from a CGEventTap | `elevate_overlay_window`: screen-saver level, all Spaces |
+| recording panel | Only its own 232 points | `elevate_overlay_window` |
+| recording selection | Yes, full screen | `show_on_every_space`: Space membership only |
+| `scroll` selection + HUD | Yes, full screen | `show_on_every_space` |
+| `annotate` layer | Yes, full screen | `follow_active_space` — moves to the active Space |
+
+The line is about what a wedged window costs. A full-screen click target raised
+above the menu bar is a full-screen click target with the *tray behind it*, and
+the tray is one of the ways out of an overlay that has stopped answering — the
+state this app has been bricked by more than once. Small panels and
+click-through outlines have no such cost, so they get the level as well as the
+Space.
+
+If you add an overlay, pick a row. Neither treatment is the default.
+
 ## Not built yet
 
 GIF recording, and audio — `screencapture -g`/`-G` can record an input device,

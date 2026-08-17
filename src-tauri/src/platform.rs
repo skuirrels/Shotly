@@ -44,6 +44,48 @@ pub fn elevate_overlay_window(_window: &tauri::WebviewWindow) -> Result<(), Stri
 }
 
 
+/// Show a window on whatever Space the user is on, without moving it up the
+/// window order.
+///
+/// The quieter half of `elevate_overlay_window`, and the right amount for a
+/// window that covers a display and takes the mouse. Such a window created
+/// while a full-screen app is in front lands on the desktop Space instead:
+/// invisible, unreachable, and — because macOS suspends the WebView of a
+/// window that is never composited — unable to report that it painted, which
+/// its own watchdog then reads as a hung renderer.
+///
+/// What this deliberately does *not* do is raise the level. A full-screen
+/// click target above the menu bar is a full-screen click target with the tray
+/// behind it, and the tray is one of the ways out of an overlay that has
+/// stopped answering. Small always-on-top panels are the ones that earn
+/// `elevate_overlay_window`.
+#[cfg(target_os = "macos")]
+pub fn show_on_every_space(window: &tauri::WebviewWindow) -> Result<(), String> {
+    use objc2_app_kit::{NSWindow, NSWindowCollectionBehavior};
+
+    let ptr = window.ns_window().map_err(|e| e.to_string())? as *mut NSWindow;
+    if ptr.is_null() {
+        return Err("window has no backing NSWindow".into());
+    }
+
+    // SAFETY: as `elevate_overlay_window` — a live NSWindow from Tauri, touched
+    // only from the main thread.
+    unsafe {
+        (*ptr).setCollectionBehavior(
+            NSWindowCollectionBehavior::CanJoinAllSpaces
+                | NSWindowCollectionBehavior::Stationary
+                | NSWindowCollectionBehavior::FullScreenAuxiliary,
+        );
+    }
+
+    Ok(())
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn show_on_every_space(_window: &tauri::WebviewWindow) -> Result<(), String> {
+    Ok(())
+}
+
 /// Keep a window out of screen recordings and screen sharing.
 ///
 /// `NSWindowSharingNone` is the flag the window server itself honours: the
