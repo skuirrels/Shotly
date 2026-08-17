@@ -163,6 +163,7 @@ src-tauri/src/
   ocr.rs         text and QR/barcode recognition, via macOS Vision
   pin.rs         always-on-top pin windows
   drive.rs       a shareable Google Drive link, read out of Drive's own index
+  gauth.rs       signing in to Google, for the sharing the index cannot do
   media.rs       serving a recording to the player, off the main thread
   record.rs      screen recording: what to record, and the child that records it
   scroll.rs      scrolling capture: session loop and the row-signature stitcher
@@ -664,6 +665,38 @@ thing that would need OAuth.
 That folder is resolved *through a file*, not by name, for the same reason the
 file lookup walks its chain: there are two `Shotly` folders under My Drive here,
 and a capture that is definitely in the right one names its own parent.
+
+### Connecting an account (`gauth.rs`)
+
+With a Google account connected, Shotly sets the sharing itself — per file, as
+the link is copied — and the folder switch above becomes unnecessary. Sharing
+one file is also the better default: sharing the folder makes every capture in
+it readable, including ones taken later and never sent to anyone.
+
+* **The flow** is the one Google specifies for an installed app: loopback
+  redirect on `127.0.0.1` with a port the OS hands out, plus PKCE. The client
+  secret proves nothing in an app anyone can unzip; the code verifier is what
+  does, and it never leaves the process.
+* **A refresh token goes in the login keychain**, not in a file beside the
+  settings — it is a long-lived credential for the user's whole Drive. Access
+  tokens live in memory for their hour, with a minute's headroom so one never
+  expires mid-request.
+* **`invalid_grant` disconnects.** A refresh token revoked from the Google
+  account page fails identically for ever; dropping it means the next attempt
+  offers to connect instead of failing the same way again.
+* **The scope is the wide `drive` one**, and it has to be: the files were
+  uploaded by Drive for desktop, not by this app, so `drive.file` — which only
+  covers an app's own files — cannot touch them. Google classes `drive` as
+  restricted. For one person on their own project that means adding themselves
+  as a test user and clicking past one "unverified app" screen. Shipping it to
+  other people would mean an annual third-party security assessment, which is
+  why there is **no client id in the binary**: the user brings their own, from
+  their own Cloud project, and the app is theirs.
+
+The command returns `{ url, shared }` rather than a bare string, because the
+difference between the two is the whole feature: an unshared link is correct
+and useless to whoever receives it, and the toast has to say which one it just
+put on the clipboard.
 
 The query has a test that builds a Drive-shaped database and runs the real
 statement against it, because a renamed column would otherwise break every link

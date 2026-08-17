@@ -174,9 +174,56 @@ fn expected_chain(destination: &Path, subfolder: &str) -> Vec<String> {
     chain
 }
 
+/// Make `id` readable by anyone who has the link.
+///
+/// The one thing the local index cannot do, and the whole reason `gauth.rs`
+/// exists: permissions live on Google's servers. Idempotent — asking twice for
+/// the same permission is not an error, and Drive answers the second one the
+/// same way it answered the first.
+fn share(id: &str) -> Result<(), String> {
+    let token = crate::gauth::token()?;
+    let reply = ureq::post(&format!(
+        "https://www.googleapis.com/drive/v3/files/{id}/permissions?supportsAllDrives=true"
+    ))
+    .header("Authorization", &format!("Bearer {token}"))
+    .send_json(serde_json::json!({ "role": "reader", "type": "anyone" }));
+
+    match reply {
+        Ok(_) => Ok(()),
+        Err(ureq::Error::StatusCode(403)) => Err(
+            "Google refused: this account cannot share that file. If it is in a Shared Drive, its \
+             admin may have link sharing switched off."
+                .into(),
+        ),
+        Err(ureq::Error::StatusCode(404)) => {
+            Err("Google has no such file — it may still be uploading.".into())
+        }
+        Err(e) => Err(format!("could not set sharing: {e}")),
+    }
+}
+
+/// Whether Shotly can set sharing itself — an account is connected.
+#[tauri::command]
+pub fn drive_connected() -> bool {
+    crate::gauth::connected()
+}
+
+/// A link, and whether it was made to work.
+///
+/// The distinction is the whole difference between the two ways of doing this,
+/// and the caller has to say which one happened: an unshared link is correct
+/// and useless to the person you send it to.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Link {
+    pub url: String,
+    /// True when Shotly set anyone-with-the-link on it just now.
+    pub shared: bool,
+}
+
 /// A link to the backed-up copy of `name`, or why there isn't one.
 #[tauri::command]
-pub async fn drive_link(app: AppHandle, path: String) -> Result<String, String> {
+pub async fn drive_link(app: AppHandle, path: String) -> Result<Link, String> {
     let settings = crate::backup::load(&app);
     let destination = settings
         .destination
@@ -202,11 +249,24 @@ pub async fn drive_link(app: AppHandle, path: String) -> Result<String, String> 
     let home = app.path().home_dir().map_err(|e| format!("no home directory: {e}"))?;
     let expected = expected_chain(&destination, crate::backup::FOLDER);
 
+    // With an account connected, the link is made to *work* before it is
+    // handed over: the file is set to anyone-with-the-link first, so what lands
+    // on the clipboard opens for whoever it is sent to. Without one, the link
+    // is still correct — it just opens for nobody but its owner until the
+    // folder is shared by hand, which is what the caller's wording reflects.
+    let connected = crate::gauth::connected();
+
     tauri::async_runtime::spawn_blocking(move || {
         for index in indexes(&home) {
             if let Some(chain) = matching(walk(&index, &name)?, &expected) {
                 let id = &chain[0].own_id;
-                return Ok(format!("https://drive.google.com/file/d/{id}/view?usp=sharing"));
+                if connected {
+                    share(id)?;
+                }
+                return Ok(Link {
+                    url: format!("https://drive.google.com/file/d/{id}/view?usp=sharing"),
+                    shared: connected,
+                });
             }
         }
         Err(
@@ -401,4 +461,49 @@ mod tests {
         // A name nobody has is not an error, it is an empty answer.
         assert!(matching(walk(&db, "absent.png").expect("query"), &expected).is_none());
     }
+}
+
+// ------------------------------------------------------------ the account
+
+/// Whether an OAuth client has been set up at all.
+///
+/// Shotly ships without one — see `gauth::Client` — so the Settings pane has to
+/// ask for it before it can offer to connect anything.
+#[tauri::command]
+pub fn drive_has_client() -> bool {
+    crate::gauth::client().is_some()
+}
+
+#[tauri::command]
+pub fn drive_set_client(id: String, secret: String) -> Result<(), String> {
+    let (id, secret) = (id.trim().to_string(), secret.trim().to_string());
+    if id.is_empty() || secret.is_empty() {
+        return Err("Both the client ID and the client secret are needed.".into());
+    }
+    if !id.ends_with(".apps.googleusercontent.com") {
+        return Err("That does not look like a Google client ID — they end in \
+                    .apps.googleusercontent.com".into());
+    }
+    crate::gauth::set_client(&crate::gauth::Client { id, secret })
+}
+
+/// Run the consent flow, and report whether an account is connected after it.
+#[tauri::command]
+pub async fn drive_connect(app: AppHandle) -> Result<bool, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::gauth::connect(|url| {
+            use tauri_plugin_opener::OpenerExt;
+            app.opener()
+                .open_url(url, None::<&str>)
+                .map_err(|e| format!("could not open your browser: {e}"))
+        })?;
+        Ok(crate::gauth::connected())
+    })
+    .await
+    .map_err(|e| format!("connecting failed: {e}"))?
+}
+
+#[tauri::command]
+pub fn drive_disconnect() {
+    crate::gauth::disconnect();
 }

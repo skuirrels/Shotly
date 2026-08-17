@@ -10,6 +10,7 @@ mod markup;
 mod ocr;
 mod pin;
 mod drive;
+mod gauth;
 mod media;
 mod record;
 mod scroll;
@@ -203,6 +204,11 @@ pub fn run() {
             backup::backup_now,
             drive::drive_link,
             drive::drive_folder_link,
+            drive::drive_connected,
+            drive::drive_connect,
+            drive::drive_disconnect,
+            drive::drive_set_client,
+            drive::drive_has_client,
             backup::launch_at_login,
             backup::set_launch_at_login,
             ocr::scan_image,

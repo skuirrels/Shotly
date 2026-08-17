@@ -7,6 +7,7 @@ import type {
   CaptureResult,
   HotkeyAction,
   HotkeyBinding,
+  DriveLink,
   LibraryItem,
   Scan,
   WindowInfo,
@@ -128,7 +129,7 @@ export const openExternally = (path: string) => invoke<void>("open_externally", 
  * Rejects with something worth showing the user: backup off, not copied yet,
  * or Drive still uploading. See `src-tauri/src/drive.rs`.
  */
-export const driveLink = (path: string) => invoke<string>("drive_link", { path });
+export const driveLink = (path: string) => invoke<DriveLink>("drive_link", { path });
 
 /**
  * A link to the Drive folder the backup writes into.
@@ -137,6 +138,15 @@ export const driveLink = (path: string) => invoke<string>("drive_link", { path }
  * Shotly cannot do for you without a connected Google account.
  */
 export const driveFolderLink = () => invoke<string>("drive_folder_link");
+
+/** Whether an OAuth client has been set up — Shotly ships without one. */
+export const driveHasClient = () => invoke<boolean>("drive_has_client");
+export const driveSetClient = (id: string, secret: string) =>
+  invoke<void>("drive_set_client", { id, secret });
+/** Whether an account is connected, so links can be made to work by themselves. */
+export const driveConnected = () => invoke<boolean>("drive_connected");
+export const driveConnect = () => invoke<boolean>("drive_connect");
+export const driveDisconnect = () => invoke<void>("drive_disconnect");
 
 export const launchAtLogin = () => invoke<boolean>("launch_at_login");
 export const setLaunchAtLogin = (enabled: boolean) =>

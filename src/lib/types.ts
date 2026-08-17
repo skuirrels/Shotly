@@ -60,6 +60,12 @@ export interface CaptureResult {
   markup?: string;
 }
 
+/** A Google Drive link, and whether Shotly could make it open for others. */
+export interface DriveLink {
+  url: string;
+  shared: boolean;
+}
+
 export interface LibraryItem {
   path: string;
   name: string;

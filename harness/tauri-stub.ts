@@ -35,7 +35,27 @@ export async function invoke<T>(cmd: string, args?: Record<string, unknown>): Pr
   if (cmd === "drive_link") {
     const name = String(args?.path ?? "").split("/").pop() ?? "";
     if (!name.endsWith(".mov")) throw new Error("That capture hasn't been backed up yet.");
-    return "https://drive.google.com/file/d/HARNESSFILEID/view?usp=sharing" as T;
+    return {
+      url: "https://drive.google.com/file/d/HARNESSFILEID/view?usp=sharing",
+      shared: google.connected,
+    } as T;
+  }
+  if (cmd === "drive_has_client") return google.client as T;
+  if (cmd === "drive_connected") return google.connected as T;
+  if (cmd === "drive_set_client") {
+    if (!String(args?.id ?? "").endsWith(".apps.googleusercontent.com")) {
+      throw new Error("That does not look like a Google client ID.");
+    }
+    google.client = true;
+    return undefined as T;
+  }
+  if (cmd === "drive_connect") {
+    google.connected = true;
+    return true as T;
+  }
+  if (cmd === "drive_disconnect") {
+    google.connected = false;
+    return undefined as T;
   }
   if (cmd === "drive_folder_link") return "https://drive.google.com/drive/folders/HARNESSFOLDER" as T;
   if (cmd === "launch_at_login") return atLogin as T;
@@ -100,6 +120,7 @@ export async function invoke<T>(cmd: string, args?: Record<string, unknown>): Pr
 }
 
 let atLogin = false;
+const google = { client: false, connected: false };
 
 /** Enabled and pointing at Drive, so the sharing panel is on screen. */
 const backup = {
