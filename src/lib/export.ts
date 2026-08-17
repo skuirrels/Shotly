@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import {
   arrowPolygon,
+  calloutBaselines,
   calloutLayout,
   neonBorderForFont,
   neonPaint,
@@ -468,7 +469,8 @@ function drawAnnotation(
       break;
 
     case "callout": {
-      const { lines, lineHeight } = calloutLayout(a.text ?? "", a.style.fontSize, b.width);
+      const layout = calloutLayout(a.text ?? "", a.style.fontSize, b.width);
+      const { lines } = layout;
       const paint = neonPaint(color, neonBorderForFont(a.style.fontSize));
 
       if (a.style.neon) {
@@ -510,12 +512,13 @@ function drawAnnotation(
       ctx.fillStyle = a.style.neon ? paint.ink : contrastInk(color);
       ctx.font = fontFor(a.style.fontSize);
       ctx.textAlign = "center";
-      ctx.textBaseline = "middle";
-      // Matches the SVG: centred as a block, so a two-line callout sits
-      // symmetrically rather than hanging from the top.
-      const first = b.y + b.height / 2 - ((lines.length - 1) * lineHeight) / 2;
+      // Alphabetic, with the baselines worked out by `calloutBaselines` — the
+      // same call the SVG makes, so neither renderer depends on an engine's
+      // idea of where "middle" is.
+      ctx.textBaseline = "alphabetic";
+      const baselines = calloutBaselines(b, layout, a.style.fontSize);
       lines.forEach((line, i) => {
-        ctx.fillText(line, b.x + b.width / 2, first + i * lineHeight);
+        ctx.fillText(line, b.x + b.width / 2, baselines[i]);
       });
       ctx.restore();
       break;

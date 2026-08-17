@@ -543,6 +543,61 @@ Everything else is in the component:
   test clip. What it cannot reach is the asset protocol, which is exactly the
   half that the two config lines above govern — check that in the app.
 
+## The main thread and files that are not really there
+
+Five hang reports in two days, every one the same stack: the main thread, inside
+a WebKit URL-scheme callback, stopped in `apfs_materialize_dataless_file_ext`.
+Two of them were startup hangs (`Time Since Fork: 20s`, `36s`), the rest froze a
+session already in progress, for up to 26 seconds.
+
+Two facts combine into that:
+
+1. **Both of Shotly's scheme handlers are synchronous and run on the main
+   thread.** The `ipc:` one dispatches `#[tauri::command]`s — a plain `fn`
+   command runs *on the main thread* (tauri-macros' `Blocking` default), and
+   only an `async fn` is moved off it. The `asset:` one is worse: Tauri's asset
+   protocol opens and reads the file inline, on the calling thread, with no way
+   to opt out.
+2. **A file's bytes may not be on the disk.** macOS marks a file whose contents
+   a provider — iCloud Drive, Dropbox, Google Drive — has evicted with
+   `SF_DATALESS`. `stat` still answers instantly, so name, size and date are
+   free. Reading one byte blocks until the provider has fetched *the whole
+   file*. This machine had thirteen such files on the Desktop, one of them
+   345 MB.
+
+So the rules here are:
+
+* **Anything that opens a file the user owns is an `async` command** that does
+  the work in `spawn_blocking` — `list_library`, `open_image`,
+  `read_capture_bytes`, `image_data_url`, `library_thumbnail`. If such a command
+  then needs to touch a window (`open_image` shows the editor, which changes the
+  activation policy), that half goes back through `run_on_main_thread`. A `fn`
+  where an `async fn` belongs is invisible in review and shows up as a frozen
+  app on someone else's machine.
+* **Listing a folder must never download anything.** `read_library` checks
+  `is_dataless` before it opens anything, and a capture in that state is listed
+  from its `stat` alone — no dimensions, no duration, no thumbnail, and the grid
+  says "In the cloud" rather than "0 × 0". The thumbnail command refuses these
+  too, because the grid asks for one per card as you scroll and a folder of
+  recordings would quietly become a gigabyte of downloads.
+* **The player refuses a cloud recording outright** and offers QuickTime, which
+  downloads it with a progress bar. Streaming it through `asset:` would freeze
+  the app for the length of the download.
+* **The asset scope is `$TEMP/**` and `$DOCUMENT/Shotly/**`, and that is all.**
+  It used to include `$DESKTOP`, `$DOWNLOAD`, `$PICTURE` and `$APPDATA`, none of
+  which anything asked for — three `assetUrl` call sites exist, and they read a
+  thumbnail, a scratch capture and a recording. Those extra roots were a way for
+  the webview to read the user's Desktop *and* the most likely source of the
+  0.7.9 freeze, since that is where the evicted files are.
+
+**Still true, and not yet fixed:** a *local* recording still streams through the
+asset protocol, which means main-thread reads in 1 MB slices. Off an SSD that is
+fast enough to be invisible, and it is what shipped in 0.8.0. The real fix is
+`register_asynchronous_uri_scheme_protocol` — a media scheme of our own that
+answers range requests from a worker thread — which would also let the player
+handle a slow network volume. Worth doing before anything else grows a
+dependency on `asset:`.
+
 ## Neon — one recipe, two renderers
 
 The lit boxes are a `Style` flag, not a tool: a callout you have already dragged

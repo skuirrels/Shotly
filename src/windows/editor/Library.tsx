@@ -460,7 +460,7 @@ function LibraryCard({
   onTrash: (item: LibraryItem) => void;
   onMenu: (item: LibraryItem, at: { x: number; y: number }) => void;
 }) {
-  const { url: thumb, failed } = useThumbnail(item.path, item.modified);
+  const { url: thumb, failed } = useThumbnail(item.path, item.modified, item.cloud);
   // Double-click means "open this" whichever kind it is; a still goes to the
   // editor and a recording to the player, and neither leaves the app.
   const open = () => (item.video ? onPlay(item) : onOpen(item.path));
@@ -504,7 +504,9 @@ function LibraryCard({
               className="max-h-full max-w-full object-contain"
             />
           ) : (
-            <span className="text-[11px] text-ink-4">{failed ? "Unreadable" : ""}</span>
+            <span className="px-3 text-center text-[11px] text-ink-4">
+              {item.cloud ? "In the cloud" : failed ? "Unreadable" : ""}
+            </span>
           )}
 
           {/* A recording's poster frame is just a screenshot of the screen —
@@ -526,7 +528,11 @@ function LibraryCard({
           {/* Never wraps: the sidebar took width off the cards, and a metadata
               line that folds onto a second row makes the grid ragged. */}
           <p className="mt-0.5 truncate font-mono text-[10.5px] tabular-nums text-ink-4">
-            {item.video && item.seconds > 0 ? formatDuration(item.seconds) : `${item.width} × ${item.height}`}
+            {item.cloud
+              ? "Not downloaded"
+              : item.video && item.seconds > 0
+                ? formatDuration(item.seconds)
+                : `${item.width} × ${item.height}`}
             <span className="mx-1.5">·</span>
             {formatSize(item.size)}
             <span className="mx-1.5">·</span>

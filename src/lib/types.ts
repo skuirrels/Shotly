@@ -71,6 +71,14 @@ export interface LibraryItem {
   video: boolean;
   /** Running time of a recording, in seconds. Zero for stills. */
   seconds: number;
+  /**
+   * The bytes live in the cloud, not on this disk.
+   *
+   * Its size and date are still true; its dimensions and duration are not,
+   * because reading them would mean downloading the file. Nothing in the app
+   * may touch the contents of one of these without the user asking.
+   */
+  cloud: boolean;
 }
 
 // ------------------------------------------------------------- annotations

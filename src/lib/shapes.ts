@@ -201,6 +201,42 @@ export function calloutLayout(
   return { lines, lineHeight, needed: lines.length * lineHeight + CALLOUT_PADDING * 2 };
 }
 
+/**
+ * Roughly the cap height of the UI font, as a fraction of the type size.
+ *
+ * Centring text by its cap height rather than its em box is what makes a label
+ * *look* centred: the em box carries descender room that most labels never use,
+ * so centring on it hangs the words high by a few percent of the size — small
+ * on a 16px caption, plainly wrong on a 48px callout.
+ */
+const CAP_HEIGHT = 0.72;
+
+/**
+ * The baseline of each line of a callout, centred as a block in its box.
+ *
+ * Arithmetic rather than `dominant-baseline`, because that property is **not
+ * inherited by `<tspan>`** — and a multi-line callout has to position each line
+ * with its own `y`, which means tspans. WebKit therefore drew the block with
+ * alphabetic baselines where the centres should have been, and hung the text
+ * off the top of the box; Chromium inherited the property and looked correct,
+ * which is exactly how the browser harness came to pass a bug the app has.
+ *
+ * Both renderers now ask this function where the baselines go and neither sets
+ * a baseline mode at all, so there is nothing left for an engine to disagree
+ * about.
+ */
+export function calloutBaselines(
+  box: { y: number; height: number },
+  layout: Pick<CalloutLayout, "lines" | "lineHeight">,
+  fontSize: number,
+): number[] {
+  const block = layout.lines.length * layout.lineHeight;
+  const top = box.y + (box.height - block) / 2;
+  return layout.lines.map(
+    (_, i) => top + layout.lineHeight * (i + 0.5) + (fontSize * CAP_HEIGHT) / 2,
+  );
+}
+
 // ------------------------------------------------------------------- neon
 
 /** A hex colour laid down at an opacity, so one swatch can paint three layers. */

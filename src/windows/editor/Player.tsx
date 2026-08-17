@@ -30,6 +30,17 @@ export interface Movie {
   modified: number;
   /** Running time as Rust read it, used until the movie reports its own. */
   seconds: number;
+  /**
+   * The bytes are in the cloud rather than on this disk.
+   *
+   * The player refuses these outright. Streaming happens through Tauri's asset
+   * protocol, whose handler is synchronous and runs on the **main thread**, so
+   * a movie a file provider has to fetch would freeze the whole app for the
+   * length of the download — the exact failure the hang reports of 17 Aug were
+   * all made of. QuickTime downloads it properly, with a progress bar and a
+   * cancel, so that is what this offers.
+   */
+  cloud?: boolean;
 }
 
 interface Props {
@@ -94,7 +105,7 @@ export function Player({ movie, startAt = 0, onLeave, onClose, onError }: Props)
   // The poster frame the library already made. It paints in the first frame
   // rather than leaving a black rectangle while the movie's own first frame is
   // decoded, which on a large recording is long enough to look broken.
-  const { url: poster } = useThumbnail(movie.path, movie.modified);
+  const { url: poster } = useThumbnail(movie.path, movie.modified, movie.cloud);
   const src = useMemo(() => ipc.assetUrl(movie.path), [movie.path]);
 
   const seek = useCallback((to: number) => {
@@ -196,7 +207,7 @@ export function Player({ movie, startAt = 0, onLeave, onClose, onError }: Props)
   return (
     <div className="relative flex min-w-0 flex-1 flex-col bg-inset">
       <div className="relative flex min-h-0 flex-1 items-center justify-center p-6 pb-24">
-        {failed ? (
+        {failed || movie.cloud ? (
           <Unplayable movie={movie} onError={onError} />
         ) : (
           <video
@@ -248,7 +259,7 @@ export function Player({ movie, startAt = 0, onLeave, onClose, onError }: Props)
         {/* A recording opens playing, so the big centre button is only there
             when it isn't: it says "paused", and it's the easiest possible
             target for starting again. */}
-        {!failed && !playing && (
+        {!failed && !movie.cloud && !playing && (
           <button
             type="button"
             onClick={toggle}
@@ -262,7 +273,7 @@ export function Player({ movie, startAt = 0, onLeave, onClose, onError }: Props)
         )}
       </div>
 
-      {!failed && (
+      {!failed && !movie.cloud && (
         <div className="pointer-events-none absolute inset-x-0 bottom-5 z-40 flex justify-center px-6">
           <div className="surface-float pointer-events-auto flex w-full max-w-[720px] items-center gap-1.5 rounded-2xl px-2.5 py-1.5">
             <IconButton
@@ -415,10 +426,13 @@ export function Player({ movie, startAt = 0, onLeave, onClose, onError }: Props)
 function Unplayable({ movie, onError }: { movie: Movie; onError: (message: string) => void }) {
   return (
     <div className="max-w-[380px] text-center">
-      <p className="text-[13.5px] font-medium text-ink">Shotly can’t play this one</p>
+      <p className="text-[13.5px] font-medium text-ink">
+        {movie.cloud ? "This recording isn’t downloaded" : "Shotly can’t play this one"}
+      </p>
       <p className="mt-1.5 text-[12px] leading-relaxed text-ink-3">
-        The file may have moved, or it may be in a format this window can’t decode. It should
-        still open in whatever plays movies on this Mac.
+        {movie.cloud
+          ? "Its contents are in the cloud. Playing it here would freeze Shotly until the whole file had come down, so open it in the movie player instead — that downloads it properly, and you can watch it as it arrives."
+          : "The file may have moved, or it may be in a format this window can’t decode. It should still open in whatever plays movies on this Mac."}
       </p>
       <div className="mt-4 flex justify-center gap-2">
         <button

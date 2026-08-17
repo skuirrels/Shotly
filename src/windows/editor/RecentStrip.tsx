@@ -271,7 +271,7 @@ function RecentRow({
   onOpen: (path: string) => void;
   onMenu: (item: LibraryItem, at: { x: number; y: number }) => void;
 }) {
-  const { url, failed } = useThumbnail(item.path, item.modified);
+  const { url, failed } = useThumbnail(item.path, item.modified, item.cloud);
   const row = useRef<HTMLButtonElement>(null);
 
   // Follow the document: opening a capture from anywhere else — ⌘O, a fresh

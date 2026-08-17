@@ -1,6 +1,7 @@
 import { Fragment } from "react";
 import {
   arrowPolygon,
+  calloutBaselines,
   calloutLayout,
   contrastInk,
   FONT_STACK,
@@ -407,13 +408,14 @@ function Shape({ a, doc, hidden }: { a: Annotation; doc: Doc; hidden: boolean })
     }
 
     case "callout": {
-      const { lines, lineHeight } = calloutLayout(a.text ?? "", a.style.fontSize, b.width);
+      const layout = calloutLayout(a.text ?? "", a.style.fontSize, b.width);
+      const { lines } = layout;
       const paint = neonPaint(a.style.color, neonBorderForFont(a.style.fontSize));
       const ink = a.style.neon ? paint.ink : contrastInk(a.style.color);
+      const baselines = calloutBaselines(b, layout, a.style.fontSize);
       // Centred in the box rather than run from the top: a callout is usually
       // two or three words, and left-aligned short text in a wide box reads as
       // a mistake.
-      const first = b.y + b.height / 2 - ((lines.length - 1) * lineHeight) / 2;
 
       const radius = a.style.neon
         ? neonRadius(b.width, b.height)
@@ -459,12 +461,11 @@ function Shape({ a, doc, hidden }: { a: Annotation; doc: Doc; hidden: boolean })
             <text
               x={b.x + b.width / 2}
               textAnchor="middle"
-              dominantBaseline="central"
               fill={ink}
               style={{ font: fontFor(a.style.fontSize), pointerEvents: "none" }}
             >
               {lines.map((line, i) => (
-                <tspan key={i} x={b.x + b.width / 2} y={first + i * lineHeight}>
+                <tspan key={i} x={b.x + b.width / 2} y={baselines[i]}>
                   {line || " "}
                 </tspan>
               ))}

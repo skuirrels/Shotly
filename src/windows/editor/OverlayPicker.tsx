@@ -127,7 +127,7 @@ function Candidate({
   disabled: boolean;
   onChoose: () => void;
 }) {
-  const { url, failed } = useThumbnail(item.path, item.modified);
+  const { url, failed } = useThumbnail(item.path, item.modified, item.cloud);
 
   return (
     <button

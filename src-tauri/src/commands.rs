@@ -326,13 +326,36 @@ fn deliver_with(app: &AppHandle, frame: Frame, markup: Option<String>) -> CmdRes
 /// The file is copied into the scratch directory rather than referenced in
 /// place: it keeps the editor's asset-protocol and `read_capture_bytes` scoping
 /// to one directory, and means editing can never touch the user's original.
+///
+/// Async for the same reason as `list_library`: this reads a whole PNG, and the
+/// file it reads is one of the user's own captures — which may be a placeholder
+/// a file provider has to fetch first. Read on the main thread, that is a
+/// frozen app for as long as the download takes. See `is_dataless`.
 #[tauri::command]
-pub fn open_image(app: AppHandle, path: String) -> CmdResult<CaptureResult> {
-    let source = std::path::Path::new(&path);
-    let name =
-        || source.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| path.clone());
+pub async fn open_image(app: AppHandle, path: String) -> CmdResult<CaptureResult> {
+    let scale = cli::scale_of_file(std::path::Path::new(&path));
+    let (frame, markup) = tauri::async_runtime::spawn_blocking(move || load_image(&path, scale))
+        .await
+        .map_err(|e| format!("opening that image failed: {e}"))??;
 
-    let scale = cli::scale_of_file(source);
+    // Handing it to the editor is the other half, and it is AppKit work —
+    // changing the activation policy and showing a window — so it goes back to
+    // the main thread rather than running on whichever worker did the reading.
+    let (tx, rx) = std::sync::mpsc::channel();
+    let handle = app.clone();
+    app.run_on_main_thread(move || {
+        let _ = tx.send(deliver_with(&handle, frame, markup));
+    })
+    .map_err(|e| e.to_string())?;
+    rx.recv().map_err(|e| e.to_string())?
+}
+
+/// Copy an image into the scratch directory and describe it. Never on the main
+/// thread — see the caller.
+fn load_image(path: &str, scale: f64) -> CmdResult<(Frame, Option<String>)> {
+    let source = std::path::Path::new(path);
+    let name =
+        || source.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| path.to_string());
 
     let scratch = std::env::temp_dir().join("shotly");
     std::fs::create_dir_all(&scratch).map_err(|e| e.to_string())?;
@@ -404,7 +427,7 @@ pub fn open_image(app: AppHandle, path: String) -> CmdResult<CaptureResult> {
         scale,
     };
 
-    deliver_with(&app, frame, markup)
+    Ok((frame, markup))
 }
 
 // ----------------------------------------------------------------- window list
@@ -420,8 +443,15 @@ pub fn list_windows(app: AppHandle) -> CmdResult<Vec<WindowInfo>> {
 /// URL. Loading the PNG over the asset protocol instead would taint the export
 /// canvas and make `toBlob` throw.
 #[tauri::command]
-pub fn read_capture_bytes(path: String) -> CmdResult<Vec<u8>> {
-    let requested = std::path::Path::new(&path);
+pub async fn read_capture_bytes(path: String) -> CmdResult<Vec<u8>> {
+    tauri::async_runtime::spawn_blocking(move || capture_bytes(&path))
+        .await
+        .map_err(|e| format!("reading the capture failed: {e}"))?
+}
+
+/// Off the main thread, always: see `is_dataless`.
+fn capture_bytes(path: &str) -> CmdResult<Vec<u8>> {
+    let requested = std::path::Path::new(path);
     let scratch = std::env::temp_dir().join("shotly");
 
     // Only ever serve files we created. `canonicalize` resolves `..` and
@@ -483,6 +513,32 @@ pub fn save_editable_png(
     // ever — quietly, which is the worst way for a backup to be wrong.
     crate::backup::mirror_one(&app, &path);
     Ok(())
+}
+
+/// Whether this file's contents live somewhere other than this disk.
+///
+/// macOS marks a file whose bytes a file provider — iCloud Drive, Dropbox,
+/// Google Drive — has evicted with `SF_DATALESS`. `stat` still answers, so the
+/// name, size and date are free; **reading a single byte blocks until the
+/// provider has fetched the whole file**, which for a screen recording is a
+/// download of hundreds of megabytes.
+///
+/// Five hang reports in two days all had the same shape: the main thread, in a
+/// WebKit URL-scheme callback, stopped in `apfs_materialize_dataless_file_ext`.
+/// Anything that opens a library file has to either be off the main thread or
+/// ask this first — and listing a folder should never trigger a download at
+/// all, which is what the caller in `read_library` uses this for.
+#[cfg(target_os = "macos")]
+pub fn is_dataless(meta: &std::fs::Metadata) -> bool {
+    use std::os::macos::fs::MetadataExt;
+    /// `sys/stat.h`: "file is dataless object".
+    const SF_DATALESS: u32 = 0x4000_0000;
+    meta.st_flags() & SF_DATALESS != 0
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn is_dataless(_meta: &std::fs::Metadata) -> bool {
+    false
 }
 
 /// The folder every capture lands in: `~/Documents/Shotly`.
@@ -655,6 +711,11 @@ pub struct LibraryItem {
     pub video: bool,
     /// How long it runs, for movies. Zero when it could not be measured.
     pub seconds: f64,
+    /// The bytes are not on this disk — a file provider has evicted them, and
+    /// touching the contents means a download. Its size and date are still
+    /// honest; its dimensions and duration are not, because reading them is
+    /// exactly what must not happen while listing. See `is_dataless`.
+    pub cloud: bool,
 }
 
 const LIBRARY_EXTENSIONS: [&str; 3] = ["png", "jpg", "jpeg"];
@@ -664,16 +725,27 @@ const LIBRARY_EXTENSIONS: [&str; 3] = ["png", "jpg", "jpeg"];
 /// Only metadata — `image_dimensions` reads the header rather than decoding, so
 /// this stays fast with a large library. Thumbnails are produced separately and
 /// on demand by `library_thumbnail`.
+///
+/// **Async, and that is load-bearing.** A synchronous command runs on the main
+/// thread, and this one opens every file in the folder to read its header. One
+/// cloud-evicted capture in there froze the whole app — see `is_dataless`. The
+/// library is also re-read on every window focus, so this is not a rare path.
 #[tauri::command]
-pub fn list_library(app: AppHandle) -> CmdResult<Vec<LibraryItem>> {
+pub async fn list_library(app: AppHandle) -> CmdResult<Vec<LibraryItem>> {
     let dir = library_dir(&app)?;
+    tauri::async_runtime::spawn_blocking(move || read_library(&dir))
+        .await
+        .map_err(|e| format!("the library listing failed: {e}"))?
+}
+
+pub fn read_library(dir: &std::path::Path) -> CmdResult<Vec<LibraryItem>> {
     if !dir.exists() {
         return Ok(Vec::new());
     }
 
     let mut items = Vec::new();
 
-    for entry in std::fs::read_dir(&dir).map_err(|e| e.to_string())?.flatten() {
+    for entry in std::fs::read_dir(dir).map_err(|e| e.to_string())?.flatten() {
         let path = entry.path();
         if !path.is_file() {
             continue;
@@ -697,9 +769,17 @@ pub fn list_library(app: AppHandle) -> CmdResult<Vec<LibraryItem>> {
             .map(|d| d.as_millis() as u64)
             .unwrap_or(0);
 
+        // A capture whose bytes are in the cloud is listed from its `stat`
+        // alone. Every line below this one opens the file, and opening an
+        // evicted file downloads it — browsing a folder must not pull a
+        // gigabyte of recordings back onto the disk.
+        let cloud = is_dataless(&meta);
+
         // Neither an unreadable image nor an unmeasurable movie should sink the
         // whole listing: both are shown, without their dimensions.
-        let (width, height, seconds) = if is_video {
+        let (width, height, seconds) = if cloud {
+            (0, 0, 0.0)
+        } else if is_video {
             crate::video::probe(&path)
                 .map(|v| (v.width, v.height, v.seconds))
                 .unwrap_or((0, 0, 0.0))
@@ -717,6 +797,7 @@ pub fn list_library(app: AppHandle) -> CmdResult<Vec<LibraryItem>> {
             height,
             video: is_video,
             seconds,
+            cloud,
         });
     }
 
@@ -803,6 +884,15 @@ fn thumbnail(path: String, max: u32) -> CmdResult<String> {
 
     let source = std::path::Path::new(&path);
     let meta = std::fs::metadata(source).map_err(|e| e.to_string())?;
+
+    // Never fetch a file back from the cloud to make a picture of it. The grid
+    // asks for a thumbnail per card as it scrolls, and a folder of recordings
+    // would quietly become a gigabyte of downloads — the caller shows the
+    // card without one instead. See `is_dataless`.
+    if is_dataless(&meta) {
+        return Err("that capture's contents are not on this disk".into());
+    }
+
     let mtime = meta
         .modified()
         .ok()
@@ -1058,8 +1148,12 @@ pub fn read_clipboard_image() -> CmdResult<Option<String>> {
 /// overlay wants the picture, not a second document's worth of shapes nested
 /// inside the one being edited.
 #[tauri::command]
-pub fn image_data_url(path: String) -> CmdResult<String> {
-    Ok(data_url(&png_bytes(std::path::Path::new(&path))?))
+pub async fn image_data_url(path: String) -> CmdResult<String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        Ok(data_url(&png_bytes(std::path::Path::new(&path))?))
+    })
+    .await
+    .map_err(|e| format!("reading that image failed: {e}"))?
 }
 
 fn data_url(png: &[u8]) -> String {
@@ -1176,5 +1270,61 @@ mod tests {
         // Padding is the half that changes between encoders.
         assert_eq!(data_url(b"foob"), "data:image/png;base64,Zm9vYg==");
         assert_eq!(data_url(b""), "data:image/png;base64,");
+    }
+}
+
+#[cfg(test)]
+mod library_listing_tests {
+    use super::{is_dataless, read_library};
+
+    /// An ordinary file is not a cloud placeholder.
+    ///
+    /// Thin on its own — the interesting case cannot be built in a test, since
+    /// only a file provider can mark a file dataless — but it pins the flag
+    /// arithmetic. Getting `SF_DATALESS` wrong in the other direction would
+    /// declare every capture undownloaded and empty the library grid.
+    #[test]
+    fn an_ordinary_file_is_not_dataless() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("plain.png");
+        std::fs::write(&path, b"not really a png").expect("write");
+        let meta = std::fs::metadata(&path).expect("stat");
+        assert!(!is_dataless(&meta));
+    }
+
+    /// A listing survives files it cannot measure, and says so honestly.
+    ///
+    /// The bytes here are deliberately nonsense: an image whose header will not
+    /// parse and a movie with no `moov` atom. Both must still appear — a
+    /// capture that vanishes from the grid because its header is odd is worse
+    /// than one listed without its dimensions.
+    #[test]
+    fn unreadable_captures_are_still_listed() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        std::fs::write(dir.path().join("shot.png"), b"nonsense").expect("write");
+        std::fs::write(dir.path().join("clip.mov"), b"nonsense").expect("write");
+        // Not a capture at all: it must not be listed.
+        std::fs::write(dir.path().join("notes.txt"), b"hello").expect("write");
+
+        let items = read_library(dir.path()).expect("listing");
+        assert_eq!(items.len(), 2, "the text file should not be listed");
+
+        let movie = items.iter().find(|i| i.name == "clip.mov").expect("the movie");
+        assert!(movie.video);
+        assert_eq!(movie.seconds, 0.0, "an unmeasurable movie reports no duration");
+        assert!(!movie.cloud);
+
+        let still = items.iter().find(|i| i.name == "shot.png").expect("the still");
+        assert!(!still.video);
+        assert_eq!((still.width, still.height), (0, 0));
+        assert!(still.size > 0, "the size comes from stat and is always known");
+    }
+
+    /// A missing library folder is empty, not an error.
+    #[test]
+    fn a_missing_folder_lists_nothing() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let items = read_library(&dir.path().join("no-such-folder")).expect("listing");
+        assert!(items.is_empty());
     }
 }

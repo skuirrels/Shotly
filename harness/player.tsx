@@ -21,6 +21,7 @@ const MOVIE = {
   name: "Recording 2026-08-17 at 13.58.12.mov",
   modified: Date.now(),
   seconds: 12,
+  cloud: false,
 };
 
 function Harness() {

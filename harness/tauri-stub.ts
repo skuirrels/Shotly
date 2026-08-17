@@ -41,10 +41,10 @@ export async function invoke<T>(cmd: string, args?: Record<string, unknown>): Pr
     const day = 86_400_000;
     const now = Date.now();
     return [
-      { path: "/lib/Recording 2026-08-17 at 13.58.12.mov", name: "Recording 2026-08-17 at 13.58.12.mov", modified: now - 120_000, size: 12_848_576, width: 4096, height: 2304, video: true, seconds: 386.4 },
-      { path: "/lib/Shotly 2026-08-17 at 10.19.37.png", name: "Shotly 2026-08-17 at 10.19.37.png", modified: now - 3 * 3600_000, size: 39_325, width: 1512, height: 982, video: false, seconds: 0 },
-      { path: "/lib/Recording 2026-08-16 at 09.02.00.mov", name: "Recording 2026-08-16 at 09.02.00.mov", modified: now - day, size: 3_204_000, width: 840, height: 520, video: true, seconds: 7 },
-      { path: "/lib/Shotly 2026-08-16 at 23.41.09.png", name: "Shotly 2026-08-16 at 23.41.09.png", modified: now - day - 7200_000, size: 752_026, width: 2048, height: 1152, video: false, seconds: 0 },
+      { path: "/lib/Recording 2026-08-17 at 13.58.12.mov", name: "Recording 2026-08-17 at 13.58.12.mov", modified: now - 120_000, size: 12_848_576, width: 4096, height: 2304, video: true, seconds: 386.4, cloud: false },
+      { path: "/lib/Shotly 2026-08-17 at 10.19.37.png", name: "Shotly 2026-08-17 at 10.19.37.png", modified: now - 3 * 3600_000, size: 39_325, width: 1512, height: 982, video: false, seconds: 0, cloud: false },
+      { path: "/lib/Recording 2026-08-16 at 09.02.00.mov", name: "Recording 2026-08-16 at 09.02.00.mov", modified: now - day, size: 3_204_000, width: 0, height: 0, video: true, seconds: 0, cloud: true },
+      { path: "/lib/Shotly 2026-08-16 at 23.41.09.png", name: "Shotly 2026-08-16 at 23.41.09.png", modified: now - day - 7200_000, size: 752_026, width: 2048, height: 1152, video: false, seconds: 0, cloud: false },
     ] as T;
   }
 

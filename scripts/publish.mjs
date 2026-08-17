@@ -17,6 +17,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
+const REPO = "skuirrels/shotly";
 const bundle = join(root, "src-tauri/target/release/bundle");
 
 /**
@@ -40,6 +41,42 @@ const die = (message) => {
 
 const run = (cmd, cmdArgs) =>
   execFileSync(cmd, cmdArgs, { cwd: root, encoding: "utf8" }).trim();
+
+/** Block for `ms` without a timer, because everything here is synchronous. */
+const sleep = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+
+/**
+ * Run a `gh` call that must not be abandoned halfway.
+ *
+ * GitHub's API returns 503 often enough to have interrupted two releases in one
+ * afternoon, both times on the very last call — the one that turns the finished
+ * draft into a published release. Everything was uploaded and nothing was
+ * visible, and the failure needed unpicking by hand.
+ *
+ * Only transport-level failures are retried: a 503, a 5xx, a timeout. A refusal
+ * — "already exists", "not found", a bad token — is an answer, and repeating it
+ * would only turn a clear error into a slow one.
+ */
+function ghWithRetry(args, { attempts = 8, what = "gh" } = {}) {
+  for (let attempt = 1; ; attempt++) {
+    const result = spawnSync("gh", args, { cwd: root, encoding: "utf8" });
+    if (result.status === 0) return (result.stdout ?? "").trim();
+
+    const output = `${result.stdout ?? ""}${result.stderr ?? ""}`;
+    const retryable = /HTTP (5\d\d|429)|no server is currently available|timed out|connection reset/i;
+    if (attempt >= attempts || !retryable.test(output)) {
+      die(`${what} failed:\n\n${output.trim()}`);
+    }
+
+    // Linear rather than exponential: these outages last minutes, and the
+    // useful thing is to keep asking for a couple of them, not to back off
+    // until the next attempt is half an hour away.
+    const wait = 15_000 * attempt;
+    console.log(`  ${what}: ${output.trim().split("\n")[0]}`);
+    console.log(`  retrying in ${wait / 1000}s (attempt ${attempt + 1} of ${attempts})…`);
+    sleep(wait);
+  }
+}
 
 // ------------------------------------------------------------------ inputs
 
@@ -121,13 +158,35 @@ const probe = spawnSync("gh", ["release", "view", tag, "--json", "isDraft,url"],
   cwd: root,
   encoding: "utf8",
 });
-const existing = probe.status === 0 ? JSON.parse(probe.stdout) : null;
-if (existing && !existing.isDraft) {
+const published = probe.status === 0 ? JSON.parse(probe.stdout) : null;
+if (published && !published.isDraft) {
   die(
-    `${tag} is already published:\n    ${existing.url}\n\n` +
+    `${tag} is already published:\n    ${published.url}\n\n` +
       `  Bump the version instead: npm run bump -- <next>`,
   );
 }
+
+/**
+ * The id of a draft release for this tag, if an earlier run left one.
+ *
+ * `gh release view` cannot find one: it resolves by tag, and a draft has no tag
+ * until it is published — the release object carries the name, but the git ref
+ * does not exist yet. So this asks for the release list instead. Without it, a
+ * re-run after an interrupted publish tries to *create* a second release under
+ * the same tag.
+ */
+const findDraft = () =>
+  ghWithRetry(
+    [
+      "api",
+      `/repos/${REPO}/releases?per_page=100`,
+      "--jq",
+      `.[] | select(.draft == true and .tag_name == "${tag}") | .id`,
+    ],
+    { what: "looking for a leftover draft" },
+  )
+    .split("\n")
+    .filter(Boolean)[0] ?? null;
 
 // The release tag has to name a commit GitHub can see, and it should name the
 // commit these artefacts were actually built from — otherwise the source at
@@ -184,12 +243,25 @@ const assets = [
   manifestPath,
 ];
 
-if (existing) {
-  // Finish a draft left over from an interrupted run.
-  run("gh", ["release", "upload", tag, ...assets, "--clobber"]);
-  run("gh", ["release", "edit", tag, "--draft=false", "--latest"]);
-} else {
-  run("gh", [
+// Anything left over from an interrupted run goes, rather than being patched
+// up: a draft is this script's own debris — nobody could have downloaded it —
+// and starting again is the one recovery that is the same at every failure
+// point.
+const leftover = findDraft();
+if (leftover) {
+  console.log(`\n  removing a draft left by an earlier run (${leftover})`);
+  ghWithRetry(["api", "-X", "DELETE", `/repos/${REPO}/releases/${leftover}`], {
+    what: "removing a leftover draft",
+  });
+}
+
+// Deliberately in two steps. `gh release create` does this internally — upload
+// to a draft, then publish it — and when GitHub answers 503 on that second call
+// the assets are all there and the release is invisible, which is how two
+// releases in one afternoon ended up being finished by hand. Split apart, the
+// publish is a call of its own that can be retried until it lands.
+ghWithRetry(
+  [
     "release",
     "create",
     tag,
@@ -200,9 +272,35 @@ if (existing) {
     `Shotly ${version}`,
     "--notes",
     manifest.notes,
-    "--latest",
-  ]);
-}
+    "--draft",
+  ],
+  { what: "uploading the release" },
+);
+
+const draft = findDraft();
+if (!draft) die(`${tag} was uploaded but no draft came back — check the releases page.`);
+
+ghWithRetry(
+  // `-f` and not `-F` for make_latest: it is a *string* enum in the API
+  // ("true"/"false"/"legacy"), and sent as a boolean it is quietly ignored —
+  // the release publishes, and the updater goes on being offered the old one.
+  ["api", "-X", "PATCH", `/repos/${REPO}/releases/${draft}`, "-F", "draft=false", "-f", "make_latest=true"],
+  { what: "publishing the release" },
+);
+
+// Say it landed only once GitHub agrees, on both counts that matter: the
+// release is no longer a draft, and it is the one `releases/latest` resolves
+// to — which is the URL the updater reads.
+const state = JSON.parse(
+  ghWithRetry(["api", `/repos/${REPO}/releases/${draft}`, "--jq", "{draft:.draft}"], {
+    what: "checking the release",
+  }),
+);
+const latest = ghWithRetry(["api", `/repos/${REPO}/releases/latest`, "--jq", ".tag_name"], {
+  what: "checking which release is latest",
+});
+if (state.draft) die(`${tag} is still a draft. Publish it by hand, or re-run.`);
+if (latest !== tag) die(`${tag} published, but GitHub still calls ${latest} the latest release.`);
 
 writeFileSync(stampPath, `${authority}\n`);
 
