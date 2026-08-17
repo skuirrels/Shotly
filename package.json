@@ -10,9 +10,9 @@
     "tauri": "tauri",
     "app": "tauri dev",
     "typecheck": "tsc --noEmit",
-    "bundle": "APPLE_SIGNING_IDENTITY='Shotly Local Signing' TAURI_SIGNING_PRIVATE_KEY=\"$HOME/.tauri/shotly.key\" TAURI_SIGNING_PRIVATE_KEY_PASSWORD='' tauri build --debug --bundles app && npm run install-local",
+    "bundle": "set -a; [ -f .env.release ] && . ./.env.release; set +a; APPLE_SIGNING_IDENTITY='Shotly Local Signing' TAURI_SIGNING_PRIVATE_KEY=\"$HOME/.tauri/shotly.key\" TAURI_SIGNING_PRIVATE_KEY_PASSWORD='' tauri build --debug --bundles app && npm run install-local",
     "install-local": "rm -rf '/Applications/Shotly.app' && cp -R src-tauri/target/debug/bundle/macos/Shotly.app '/Applications/Shotly.app' && /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f '/Applications/Shotly.app' && echo 'installed to /Applications/Shotly.app'",
-    "release": "APPLE_SIGNING_IDENTITY=\"${APPLE_SIGNING_IDENTITY:-Shotly Local Signing}\" TAURI_SIGNING_PRIVATE_KEY=\"$HOME/.tauri/shotly.key\" TAURI_SIGNING_PRIVATE_KEY_PASSWORD='' tauri build --bundles app,dmg",
+    "release": "set -a; [ -f .env.release ] && . ./.env.release; set +a; APPLE_SIGNING_IDENTITY=\"${APPLE_SIGNING_IDENTITY:-Shotly Local Signing}\" TAURI_SIGNING_PRIVATE_KEY=\"$HOME/.tauri/shotly.key\" TAURI_SIGNING_PRIVATE_KEY_PASSWORD='' tauri build --bundles app,dmg",
     "publish": "npm run release && node scripts/publish.mjs",
     "bump": "node scripts/bump.mjs"
   },

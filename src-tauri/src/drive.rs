@@ -656,28 +656,6 @@ pub async fn drive_share(app: AppHandle, path: String) -> Result<Link, String> {
 
 // ------------------------------------------------------------ the account
 
-/// Whether an OAuth client has been set up at all.
-///
-/// Shotly ships without one — see `gauth::Client` — so the Settings pane has to
-/// ask for it before it can offer to connect anything.
-#[tauri::command]
-pub fn drive_has_client() -> bool {
-    crate::gauth::client().is_some()
-}
-
-#[tauri::command]
-pub fn drive_set_client(id: String, secret: String) -> Result<(), String> {
-    let (id, secret) = (id.trim().to_string(), secret.trim().to_string());
-    if id.is_empty() || secret.is_empty() {
-        return Err("Both the client ID and the client secret are needed.".into());
-    }
-    if !id.ends_with(".apps.googleusercontent.com") {
-        return Err("That does not look like a Google client ID — they end in \
-                    .apps.googleusercontent.com".into());
-    }
-    crate::gauth::set_client(&crate::gauth::Client { id, secret })
-}
-
 /// Run the consent flow, and report whether an account is connected after it.
 #[tauri::command]
 pub async fn drive_connect(app: AppHandle) -> Result<bool, String> {

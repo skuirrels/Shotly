@@ -90,15 +90,18 @@ nobody who installs Shotly ever sees a Google Cloud console. It is **not in the
 repository**: it comes from the environment at compile time, through
 `option_env!` in `gauth.rs`.
 
+Put them in `.env.release`, which `npm run release` and `npm run bundle` source
+and `.gitignore` excludes:
+
 ```bash
-export SHOTLY_GOOGLE_CLIENT_ID="....apps.googleusercontent.com"
-export SHOTLY_GOOGLE_CLIENT_SECRET="GOCSPX-..."
+cp .env.release.example .env.release   # then fill in the two values
 npm run publish
 ```
 
-A build without them still works: Settings offers to take a client the user
-supplies, which is what a build from source needs. `drive_built_in_client` is
-what the pane asks to decide which of the two it is looking at.
+A build without it still runs; Settings simply says there is nothing to connect
+to. There is deliberately **no way to enter a client from inside the app** — that
+was the previous design, and it meant every user making a Google Cloud project
+to send one link.
 
 The client is a **Desktop app** client, and the scope Shotly requests is
 `drive.file` — non-sensitive, so the consent screen is the ordinary one and the

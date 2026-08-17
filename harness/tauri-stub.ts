@@ -40,7 +40,6 @@ export async function invoke<T>(cmd: string, args?: Record<string, unknown>): Pr
       shared: google.connected,
     } as T;
   }
-  if (cmd === "drive_has_client") return google.client as T;
   if (cmd === "drive_built_in_client") return google.builtIn as T;
   if (cmd === "drive_share") {
     // Report a few steps of progress, the way a real upload does.
@@ -51,13 +50,6 @@ export async function invoke<T>(cmd: string, args?: Record<string, unknown>): Pr
     return { url: "https://drive.google.com/file/d/UPLOADED/view?usp=sharing", shared: true } as T;
   }
   if (cmd === "drive_connected") return google.connected as T;
-  if (cmd === "drive_set_client") {
-    if (!String(args?.id ?? "").endsWith(".apps.googleusercontent.com")) {
-      throw new Error("That does not look like a Google client ID.");
-    }
-    google.client = true;
-    return undefined as T;
-  }
   if (cmd === "drive_connect") {
     google.connected = true;
     return true as T;
@@ -129,7 +121,7 @@ export async function invoke<T>(cmd: string, args?: Record<string, unknown>): Pr
 }
 
 let atLogin = false;
-const google = { client: false, connected: false, builtIn: false };
+const google = { connected: false, builtIn: true };
 
 /** Enabled and pointing at Drive, so the sharing panel is on screen. */
 const backup = {

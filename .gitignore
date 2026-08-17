@@ -31,3 +31,6 @@ dist-ssr
 
 # Local Claude Code launch config
 .claude/
+
+# The Google OAuth client for release builds. Never committed.
+.env.release

@@ -209,8 +209,6 @@ pub fn run() {
             drive::drive_built_in_client,
             drive::drive_connect,
             drive::drive_disconnect,
-            drive::drive_set_client,
-            drive::drive_has_client,
             backup::launch_at_login,
             backup::set_launch_at_login,
             ocr::scan_image,

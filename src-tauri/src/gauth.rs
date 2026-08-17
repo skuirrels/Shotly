@@ -46,7 +46,6 @@ const TOKEN_URL: &str = "https://oauth2.googleapis.com/token";
 /// The keychain entry: one service, two accounts.
 const SERVICE: &str = "com.skuirrels.shotly";
 const REFRESH_KEY: &str = "google-refresh-token";
-const CLIENT_KEY: &str = "google-oauth-client";
 
 /// How long to wait for someone to finish in the browser.
 const CONSENT_TIMEOUT: Duration = Duration::from_secs(180);
@@ -69,12 +68,11 @@ static TOKEN: Mutex<Option<(String, Instant)>> = Mutex::new(None);
 const BUILT_IN_ID: Option<&str> = option_env!("SHOTLY_GOOGLE_CLIENT_ID");
 const BUILT_IN_SECRET: Option<&str> = option_env!("SHOTLY_GOOGLE_CLIENT_SECRET");
 
-/// The OAuth client in use: the one built in, or one the user supplied.
+/// The OAuth client, which a released build always has.
 ///
-/// Both exist because they answer different needs. A downloaded Shotly carries
-/// its own and asks the user for nothing — click, pick an account, done. A
-/// build from source has none, so it can still be pointed at a Cloud project
-/// the person building it owns.
+/// There is deliberately no way to set one from inside the app. Asking a user
+/// for a client id is asking them to make a Google Cloud project, and that is
+/// the thing this whole rewrite exists to delete.
 #[derive(Clone, serde::Serialize, Deserialize)]
 pub struct Client {
     pub id: String,
@@ -100,11 +98,6 @@ fn forget(key: &str) {
 }
 
 pub fn client() -> Option<Client> {
-    // A client the user set up wins: they went to the trouble for a reason,
-    // and on a build with none it is the only one there is.
-    if let Some(client) = read(CLIENT_KEY).and_then(|raw| serde_json::from_str(&raw).ok()) {
-        return Some(client);
-    }
     Some(Client {
         id: BUILT_IN_ID?.to_string(),
         secret: BUILT_IN_SECRET?.to_string(),
@@ -114,13 +107,6 @@ pub fn client() -> Option<Client> {
 /// Whether this build carries a client of its own, and so needs nothing set up.
 pub fn built_in() -> bool {
     BUILT_IN_ID.is_some() && BUILT_IN_SECRET.is_some()
-}
-
-pub fn set_client(client: &Client) -> Result<(), String> {
-    // A new client invalidates any token issued to the old one.
-    forget(REFRESH_KEY);
-    *TOKEN.lock().unwrap() = None;
-    write(CLIENT_KEY, &serde_json::to_string(client).map_err(|e| e.to_string())?)
 }
 
 pub fn connected() -> bool {
@@ -376,6 +362,30 @@ fn urlencode(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The client has to arrive from the build environment, or a release ships
+    /// with a Connect button that cannot connect to anything.
+    ///
+    /// Compiled-in values are baked at build time, so this asserts the wiring
+    /// rather than any particular value: with the variables set, a client
+    /// exists; without them, `built_in` is false and the pane says so.
+    #[test]
+    fn the_built_in_client_follows_the_build_environment() {
+        match (BUILT_IN_ID, BUILT_IN_SECRET) {
+            (Some(id), Some(_)) => {
+                assert!(built_in());
+                assert!(client().is_some());
+                assert!(
+                    id.ends_with(".apps.googleusercontent.com"),
+                    "SHOTLY_GOOGLE_CLIENT_ID does not look like a Google client id: {id}",
+                );
+            }
+            _ => {
+                assert!(!built_in());
+                assert!(client().is_none(), "no client should exist without the environment");
+            }
+        }
+    }
 
     /// The challenge has to be the SHA-256 of the verifier, base64url, no
     /// padding. Google checks it, and "invalid_grant" is all it says when the

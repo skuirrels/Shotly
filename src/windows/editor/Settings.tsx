@@ -223,19 +223,13 @@ function General() {
  * user's own, from their own Google Cloud project, and the app is theirs.
  */
 function GoogleAccount() {
-  const [hasClient, setHasClient] = useState<boolean | null>(null);
+  const [ready, setReady] = useState<boolean | null>(null);
   const [connected, setConnected] = useState(false);
-  const [showForm, setShowForm] = useState(false);
-  const [id, setId] = useState("");
-  const [secret, setSecret] = useState("");
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState<{ text: string; bad?: boolean } | null>(null);
 
-  const [builtIn, setBuiltIn] = useState(false);
-
   const refresh = useCallback(async () => {
-    setBuiltIn(await ipc.driveBuiltInClient());
-    setHasClient(await ipc.driveHasClient());
+    setReady(await ipc.driveBuiltInClient());
     setConnected(await ipc.driveConnected());
   }, []);
 
@@ -243,26 +237,12 @@ function GoogleAccount() {
     void refresh();
   }, [refresh]);
 
-  const saveClient = useCallback(async () => {
-    setNote(null);
-    try {
-      await ipc.driveSetClient(id, secret);
-      setShowForm(false);
-      setId("");
-      setSecret("");
-      await refresh();
-    } catch (e) {
-      setNote({ text: String(e), bad: true });
-    }
-  }, [id, secret, refresh]);
-
   const connect = useCallback(async () => {
     setBusy(true);
     setNote(null);
     try {
       await ipc.driveConnect();
       await refresh();
-      setNote({ text: "Connected. Links will share themselves from now on." });
     } catch (e) {
       setNote({ text: String(e), bad: true });
     } finally {
@@ -270,17 +250,16 @@ function GoogleAccount() {
     }
   }, [refresh]);
 
-  if (hasClient === null) return null;
+  if (ready === null) return null;
 
   return (
     <div className="mt-3 border-t border-white/8 pt-3">
-      <p className="text-[12px] font-medium text-ink">
-        Or let Shotly share each link for you
-      </p>
+      <p className="text-[12px] font-medium text-ink">Or let Shotly share it for you</p>
       <p className="mt-1 text-[11.5px] leading-relaxed text-ink-3">
-        Connect a Google account and Shotly uploads the capture to a <strong className="font-medium text-ink-2">Shotly</strong>{" "}
-        folder in your Drive, shares that one file, and copies the link. It can only see what it
-        put there — not the rest of your Drive — and nothing else becomes readable.
+        Connect a Google account and Shotly uploads the capture to a{" "}
+        <strong className="font-medium text-ink-2">Shotly</strong> folder in your Drive, shares that
+        one file, and copies the link. It can only see what it put there — not the rest of your
+        Drive.
       </p>
 
       {connected ? (
@@ -297,79 +276,23 @@ function GoogleAccount() {
             Disconnect
           </button>
         </div>
-      ) : hasClient ? (
-        <div className="mt-2.5 flex items-center gap-2">
-          <button
-            type="button"
-            onClick={() => void connect()}
-            disabled={busy}
-            className="flex h-8 items-center gap-1.5 rounded-lg bg-accent px-2.5 text-[12px] font-semibold text-accent-fg transition-colors hover:bg-accent-hi disabled:opacity-40"
-          >
-            {busy ? "Waiting for your browser…" : "Connect Google Drive"}
-          </button>
-          {/* Only worth offering on a build that has none of its own — on a
-              downloaded Shotly this is a way to break a working thing. */}
-          {!builtIn && (
-            <button
-              type="button"
-              onClick={() => setShowForm(true)}
-              className="rounded px-1 text-[11.5px] text-ink-3 underline decoration-dotted underline-offset-2 hover:text-ink"
-            >
-              Change the OAuth client
-            </button>
-          )}
-        </div>
-      ) : showForm ? null : (
+      ) : ready ? (
         <button
           type="button"
-          onClick={() => setShowForm(true)}
-          className="mt-2.5 flex h-8 items-center gap-1.5 rounded-lg bg-white/[0.07] px-2.5 text-[12px] font-medium text-ink transition-colors hover:bg-white/[0.11]"
+          onClick={() => void connect()}
+          disabled={busy}
+          className="mt-2.5 flex h-8 items-center gap-1.5 rounded-lg bg-accent px-2.5 text-[12px] font-semibold text-accent-fg transition-colors hover:bg-accent-hi disabled:opacity-40"
         >
-          Set up a Google OAuth client…
+          {busy ? "Waiting for your browser…" : "Connect Google Drive"}
         </button>
-      )}
-
-      {showForm && (
-        <div className="mt-2.5 rounded-lg border border-line bg-black/20 p-2.5">
-          <p className="text-[11.5px] leading-relaxed text-ink-3">
-            In the Google Cloud console: create a project, enable the{" "}
-            <strong className="font-medium text-ink-2">Google Drive API</strong>, add yourself as a
-            test user on the consent screen, then create an OAuth client of type{" "}
-            <strong className="font-medium text-ink-2">Desktop app</strong> and paste its two values
-            here. They go in your keychain, not on disk.
-          </p>
-          <input
-            value={id}
-            onChange={(e) => setId(e.target.value)}
-            placeholder="Client ID (…apps.googleusercontent.com)"
-            spellCheck={false}
-            className="mt-2 h-8 w-full rounded-lg border border-line bg-surface px-2 font-mono text-[11px] text-ink placeholder:text-ink-4 focus:border-accent focus:outline-none"
-          />
-          <input
-            value={secret}
-            onChange={(e) => setSecret(e.target.value)}
-            placeholder="Client secret"
-            type="password"
-            spellCheck={false}
-            className="mt-1.5 h-8 w-full rounded-lg border border-line bg-surface px-2 font-mono text-[11px] text-ink placeholder:text-ink-4 focus:border-accent focus:outline-none"
-          />
-          <div className="mt-2 flex gap-2">
-            <button
-              type="button"
-              onClick={() => void saveClient()}
-              className="flex h-7 items-center rounded-lg bg-accent px-2.5 text-[12px] font-semibold text-accent-fg hover:bg-accent-hi"
-            >
-              Save
-            </button>
-            <button
-              type="button"
-              onClick={() => setShowForm(false)}
-              className="flex h-7 items-center rounded-lg bg-white/[0.07] px-2.5 text-[12px] text-ink hover:bg-white/[0.11]"
-            >
-              Cancel
-            </button>
-          </div>
-        </div>
+      ) : (
+        // A build from source carries no OAuth client — see docs/RELEASING.md.
+        // Saying so is better than offering a form nobody downloading Shotly
+        // should ever have to fill in.
+        <p className="mt-2.5 text-[11.5px] text-ink-4">
+          This build has no Google client compiled into it, so there is nothing to connect to.
+          Released builds of Shotly do.
+        </p>
       )}
 
       {note && (
