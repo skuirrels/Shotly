@@ -162,6 +162,7 @@ src-tauri/src/
   markup.rs      the shTL PNG chunk that keeps a saved capture editable
   ocr.rs         text and QR/barcode recognition, via macOS Vision
   pin.rs         always-on-top pin windows
+  media.rs       serving a recording to the player, off the main thread
   record.rs      screen recording: what to record, and the child that records it
   scroll.rs      scrolling capture: session loop and the row-signature stitcher
   combine.rs     several captures composed onto one sheet
@@ -581,8 +582,10 @@ So the rules here are:
   too, because the grid asks for one per card as you scroll and a folder of
   recordings would quietly become a gigabyte of downloads.
 * **The player refuses a cloud recording outright** and offers QuickTime, which
-  downloads it with a progress bar. Streaming it through `asset:` would freeze
-  the app for the length of the download.
+  downloads it with a progress bar. Fetching hundreds of megabytes because a
+  video element asked for four bytes of header — with no progress and no way to
+  cancel — is not something to do on the user's behalf. `media.rs` refuses these
+  too, as a backstop.
 * **The asset scope is `$TEMP/**` and `$DOCUMENT/Shotly/**`, and that is all.**
   It used to include `$DESKTOP`, `$DOWNLOAD`, `$PICTURE` and `$APPDATA`, none of
   which anything asked for — three `assetUrl` call sites exist, and they read a
@@ -590,13 +593,35 @@ So the rules here are:
   the webview to read the user's Desktop *and* the most likely source of the
   0.7.9 freeze, since that is where the evicted files are.
 
-**Still true, and not yet fixed:** a *local* recording still streams through the
-asset protocol, which means main-thread reads in 1 MB slices. Off an SSD that is
-fast enough to be invisible, and it is what shipped in 0.8.0. The real fix is
-`register_asynchronous_uri_scheme_protocol` — a media scheme of our own that
-answers range requests from a worker thread — which would also let the player
-handle a slow network volume. Worth doing before anything else grows a
-dependency on `asset:`.
+### The `media` scheme (`media.rs`)
+
+Recordings do not go through `asset:` at all. They are served by a scheme of
+Shotly's own, registered with `register_asynchronous_uri_scheme_protocol`, whose
+handler may answer *later* — so the read happens in `spawn_blocking` and the
+main thread returns immediately. Measured with `sample` during playback: 2,570
+samples over three seconds, **zero** blocking-read frames on the main thread,
+and the `read` sitting on a `tokio-rt-worker` where it belongs.
+
+Worth knowing if you touch it:
+
+* It serves **one directory**, the capture folder, and checks containment by
+  canonicalising both sides — which resolves `..` and follows symlinks, so
+  neither a crafted path nor a symlink planted in the folder points out of it.
+  That is also why the `asset:` scope could shrink back to `$TEMP/**` alone.
+* `convertFileSrc` percent-encodes the *whole* path, separators included, so the
+  path component arrives as one escaped blob behind the authority's slash. The
+  first version trimmed leading slashes off a literal path and quietly made it
+  relative; the tests build their URLs the way the frontend does, which is what
+  caught it.
+* One chunk or a range, with no third case: a file that fits in `CHUNK` comes
+  back whole in a 200, and anything larger is ranged from the first request
+  onwards — including a request that arrives with no `Range` header at all,
+  which is what a media engine sends first and means "start playing", not "send
+  me 300 MB".
+* A reply must describe **what it sent**, not what was asked for. A capped range
+  that claims the range it was given is an off-by-one nobody sees until seeking
+  lands in the wrong place, which is why the range arithmetic has tests of its
+  own.
 
 ## Neon — one recipe, two renderers
 

@@ -352,6 +352,7 @@ export function EditorApp() {
     setView("player");
   }, []);
 
+
   /** Load an image from disk — the same entry point for ⌘O and for drag-drop. */
   const openPath = useCallback(
     (path: string) => {

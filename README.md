@@ -72,7 +72,8 @@ records *that window*: it follows if you move it, and anything dropped in front
 of it stays out.
 
 Double-click it and it plays in Shotly, in a pane beside the editor and the
-library. <kbd>Space</kbd> plays and pauses, <kbd>←</kbd> and <kbd>→</kbd> jump
+library — streamed off disk as it plays, so a three-hundred-megabyte recording
+starts at once. <kbd>Space</kbd> plays and pauses, <kbd>←</kbd> and <kbd>→</kbd> jump
 five seconds (hold <kbd>⇧</kbd> for one), <kbd>Home</kbd> and <kbd>End</kbd> go
 to the ends, and there is a speed control and a loop for watching one moment
 again. <kbd>Esc</kbd> goes back to the library, and the Player tab holds your
@@ -130,6 +131,11 @@ A few things worth knowing:
   *through* a shape that's in the way.
 - Paste an image on top with <kbd>⌘V</kbd> and drag it around — good for
   putting a logo or a second screenshot into the shot.
+
+The rail down the left holds your recent captures: **one click opens one**, and
+⌘-click or ⇧-click picks several without opening anything, for a Copy or a
+Delete. The library grid keeps double-click-to-open, since there a click is how
+you choose what an action applies to.
 
 <kbd>⌘K</kbd> opens a command palette if you'd rather search than remember, and
 <kbd>⌘/</kbd> shows every key in one sheet.

@@ -17,6 +17,19 @@ export function assetUrl(path: string): string {
   return convertFileSrc(path);
 }
 
+/**
+ * The same for a recording, through Shotly's own scheme rather than `asset:`.
+ *
+ * Not interchangeable with the above, and the difference is the whole point:
+ * Tauri's asset protocol reads the file on the **main thread**, so streaming a
+ * movie through it does every seek on the thread that draws the interface. The
+ * `media` scheme answers from a worker instead — see `src-tauri/src/media.rs`.
+ * It serves the capture folder and nothing else.
+ */
+export function mediaUrl(path: string): string {
+  return convertFileSrc(path, "media");
+}
+
 export const capturePermissionStatus = () => invoke<boolean>("capture_permission_status");
 export const requestCapturePermission = () => invoke<boolean>("request_capture_permission");
 export const openScreenRecordingSettings = () => invoke<void>("open_screen_recording_settings");

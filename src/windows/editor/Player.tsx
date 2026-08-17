@@ -64,11 +64,12 @@ const RATES = [0.5, 1, 1.25, 1.5, 2] as const;
 /**
  * Watch a recording without leaving Shotly.
  *
- * The file is streamed straight off disk through Tauri's asset protocol, which
- * answers range requests — so a seven-minute, 300 MB recording starts playing
- * at once instead of being read into memory first. That protocol is scoped to
- * the capture folder in `tauri.conf.json`; a recording kept anywhere else will
- * fail to load, which is what the fallback below is for.
+ * The file is streamed off disk by `media.rs`, a scheme of Shotly's own that
+ * answers range requests from a worker thread — so a seven-minute, 300 MB
+ * recording starts playing at once, is never held in memory, and cannot block
+ * the interface however slow the disk is. It serves the capture folder and
+ * nothing else; a recording kept anywhere else will fail to load, which is what
+ * the fallback below is for.
  */
 export function Player({ movie, startAt = 0, onLeave, onClose, onError }: Props) {
   const video = useRef<HTMLVideoElement>(null);
@@ -106,7 +107,7 @@ export function Player({ movie, startAt = 0, onLeave, onClose, onError }: Props)
   // rather than leaving a black rectangle while the movie's own first frame is
   // decoded, which on a large recording is long enough to look broken.
   const { url: poster } = useThumbnail(movie.path, movie.modified, movie.cloud);
-  const src = useMemo(() => ipc.assetUrl(movie.path), [movie.path]);
+  const src = useMemo(() => ipc.mediaUrl(movie.path), [movie.path]);
 
   const seek = useCallback((to: number) => {
     const el = video.current;

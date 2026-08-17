@@ -9,6 +9,7 @@ mod hotkeys;
 mod markup;
 mod ocr;
 mod pin;
+mod media;
 mod record;
 mod scroll;
 mod snap;
@@ -45,6 +46,24 @@ fn dispatch(app: &tauri::AppHandle, mode: CaptureMode) {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let mut builder = tauri::Builder::default()
+        // Recordings are served through a scheme of our own rather than
+        // `asset:`, whose handler is synchronous and would do every read of a
+        // 300 MB movie on the main thread. See `media.rs`.
+        .register_asynchronous_uri_scheme_protocol(
+            media::SCHEME,
+            |ctx, request, responder| {
+                match commands::library_dir(ctx.app_handle()) {
+                    Ok(root) => media::serve_async(root, request, responder),
+                    // No capture folder means nothing this scheme can serve.
+                    Err(_) => responder.respond(
+                        tauri::http::Response::builder()
+                            .status(tauri::http::StatusCode::NOT_FOUND)
+                            .body(Vec::new())
+                            .expect("a response with valid headers"),
+                    ),
+                }
+            },
+        )
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())

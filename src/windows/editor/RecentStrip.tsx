@@ -137,11 +137,18 @@ export function RecentStrip({
   }
 
   /**
-   * Finder's selection model, the same one the library grid uses: a plain click
-   * replaces, ⌘ toggles one, ⇧ extends from the last anchor. Opening is the
-   * double-click, which is what the library says on its own header and what
-   * makes "these three" expressible at all — a rail where every click opened a
-   * capture could never hold a selection long enough to act on it.
+   * Finder's selection model, with one deliberate departure: **a plain click
+   * opens.**
+   *
+   * The rail sits beside the canvas and exists to move between captures — that
+   * is the whole of what it is for, and asking for two clicks to do the only
+   * thing it does was a tax on the common case. The library grid keeps
+   * double-click, because there a click means "pick this one" for a Copy or a
+   * Delete that acts on several.
+   *
+   * The selection this rail can hold is still reachable: ⌘ toggles one and ⇧
+   * extends a range, neither of which opens anything, so "these three, delete"
+   * still works.
    */
   const choose = (item: LibraryItem, modifiers: { meta: boolean; shift: boolean }) => {
     const paths = (items ?? []).slice(0, shown).map((i) => i.path);
@@ -168,6 +175,10 @@ export function RecentStrip({
 
     anchor.current = item.path;
     onSelect([item.path]);
+    // Opening is deliberately last: `onOpen` may refuse — it asks before
+    // discarding unsaved annotations — and the click should still have moved
+    // the selection either way.
+    onOpen(item.path);
   };
 
   /**
@@ -288,6 +299,9 @@ function RecentRow({
         aria-current={active}
         aria-selected={selected}
         onClick={(e) => onChoose(item, { meta: e.metaKey, shift: e.shiftKey })}
+        // A second click lands on a capture that is already open, where opening
+        // it again is a no-op — but leaving this here means an impatient
+        // double-click is never swallowed.
         onDoubleClick={() => onOpen(item.path)}
         onContextMenu={(e) => {
           e.preventDefault();

@@ -86,6 +86,6 @@ const hotkeys = [
   defaultAccelerator: accel,
 }));
 
-export function convertFileSrc(path: string): string {
+export function convertFileSrc(path: string, _protocol?: string): string {
   return path;
 }
