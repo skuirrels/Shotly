@@ -11,10 +11,10 @@
 //! leaves this process, and the redirect is to `127.0.0.1` on a port the OS
 //! hands out for the occasion, so nothing off this machine can intercept it.
 //!
-//! **What is stored, and where.** A refresh token, in the login keychain. It is
-//! a long-lived credential for the user's whole Drive, which is exactly why it
-//! does not go in a JSON file next to the settings. Access tokens are held in
-//! memory for their hour and never written down.
+//! **What is stored, and where.** A refresh token, in `google.json` in the
+//! app's config directory, mode `0600` — see `Store` for why that is not the
+//! login keychain and what would move it back. Access tokens are held in memory
+//! for their hour and never written down.
 
 use std::io::{BufRead, BufReader, Write};
 use std::net::TcpListener;
@@ -45,7 +45,10 @@ const SCOPE: &str = "https://www.googleapis.com/auth/drive.file";
 const AUTH_URL: &str = "https://accounts.google.com/o/oauth2/v2/auth";
 const TOKEN_URL: &str = "https://oauth2.googleapis.com/token";
 
-/// The keychain entry: one service, two accounts.
+/// The keychain Shotly *used* to use, kept only long enough to move out of it.
+///
+/// See `Store` for why it stopped. These constants exist so an install that
+/// already signed in finds its token once and never looks again.
 const SERVICE: &str = "com.skuirrels.shotly";
 const REFRESH_KEY: &str = "google-refresh-token";
 const CLIENT_KEY: &str = "google-oauth-client";
@@ -84,65 +87,131 @@ pub struct Client {
     pub secret: String,
 }
 
-fn entry(key: &str) -> Result<keyring::Entry, String> {
-    keyring::Entry::new(SERVICE, key).map_err(|e| format!("no keychain access: {e}"))
-}
-
-/// What the keychain has already been asked, so it is asked once per launch.
+/// What Shotly has been told, on disk beside its other settings.
 ///
-/// Not an optimisation — a keychain read is fast. It is about the *prompt*.
-/// macOS binds a keychain item to the app that made it, and when that app's
-/// signature no longer matches (a rebuild, an update, a repair install) every
-/// single read raises "Shotly wants to use your keychain". This module read on
-/// every call: `connected()` read one item, `client()` read another, and
-/// `share_providers` asks both of every provider — so merely *looking* at
-/// Settings was two dialogs, and a session's worth of looking was ten. Reading
-/// once per process turns the worst case into one dialog per item, and Always
-/// Allow into a decision that actually sticks.
+/// **This used to be the login keychain, and moving it out is deliberate.**
+/// The legacy macOS keychain authorises "Always Allow" against the binary's
+/// code-directory hash, so every rebuild, every auto-update and every repair
+/// install invalidates the grant and macOS asks again — on *every read*, of
+/// *every item*. It is not a bug that can be tuned away: it is how that
+/// keychain identifies callers, and Shotly updates itself.
 ///
-/// A miss is cached too. "There is no refresh token" is an answer, and asking
-/// the keychain to confirm it repeatedly is what produced the pile of prompts.
-static CACHE: Mutex<Option<std::collections::HashMap<String, Option<String>>>> = Mutex::new(None);
+/// The fix Apple intends is the Data Protection keychain, which authorises by
+/// team id through a `keychain-access-groups` entitlement and therefore
+/// survives an update. That needs a real signing team — a Developer ID from the
+/// Apple Developer Program — which Shotly does not yet have; an ad-hoc or
+/// self-signed build falls back to the legacy keychain and its prompts. When
+/// that certificate exists this should move there (the `keyring` crate reaches
+/// it with the "Protected" target) and this file should be migrated away in the
+/// same release. Until then, prompting the user a dozen times is a worse answer
+/// than the one below, and the difference in what an attacker gets is nil.
+///
+/// **What is actually at risk.** A `drive.file` refresh token can see only the
+/// files Shotly itself created — the `ShotlyShared` folder and what has been
+/// uploaded into it. It is not, as an earlier version of this comment claimed,
+/// a credential for the whole of someone's Drive; that was true under the wide
+/// `drive` scope and stopped being true when the scope narrowed. The file is
+/// written `0600` in the app's own config directory, so reading it means
+/// already running as this user — at which point the same attacker can drive
+/// the app, read the legacy keychain after one prompt, or take the access token
+/// out of memory.
+#[derive(Default, serde::Serialize, Deserialize)]
+struct Store {
+    #[serde(default)]
+    refresh_token: Option<String>,
+    /// An OAuth client an older Shotly was configured with by hand. Nothing
+    /// writes this any more — see the note on `Client`.
+    #[serde(default)]
+    client: Option<Client>,
+}
 
-fn read(key: &str) -> Option<String> {
-    let mut cache = CACHE.lock().unwrap();
-    let known = cache.get_or_insert_with(Default::default);
-    if let Some(answer) = known.get(key) {
-        return answer.clone();
+/// The store, read once per launch.
+static STORE: Mutex<Option<Store>> = Mutex::new(None);
+
+fn config_dir() -> std::path::PathBuf {
+    std::env::var("HOME")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|_| std::env::temp_dir())
+        .join("Library/Application Support")
+        .join(SERVICE)
+}
+
+fn store_path() -> std::path::PathBuf {
+    config_dir().join("google.json")
+}
+
+/// Whatever is on disk, migrating an older install's keychain items in first.
+fn load() -> Store {
+    if let Ok(raw) = std::fs::read_to_string(store_path()) {
+        if let Ok(store) = serde_json::from_str::<Store>(&raw) {
+            return store;
+        }
     }
-    let answer = entry(key).ok().and_then(|e| e.get_password().ok());
-    known.insert(key.to_string(), answer.clone());
-    answer
+    migrate_from_keychain()
 }
 
-fn write(key: &str, value: &str) -> Result<(), String> {
-    entry(key)?.set_password(value).map_err(|e| format!("could not use the keychain: {e}"))?;
-    remember_secret(key, Some(value.to_string()));
-    Ok(())
-}
+/// Take an existing sign-in out of the keychain, once.
+///
+/// The last prompt anybody sees: whatever is there is copied to the store and
+/// then deleted, because a live refresh token left behind in the keychain is a
+/// credential nobody is watching any more. A machine with nothing there — every
+/// new install — never touches the keychain at all and is never asked.
+fn migrate_from_keychain() -> Store {
+    let read = |key: &str| {
+        keyring::Entry::new(SERVICE, key).ok().and_then(|e| e.get_password().ok())
+    };
+    let store = Store {
+        refresh_token: read(REFRESH_KEY),
+        client: read(CLIENT_KEY).and_then(|raw| serde_json::from_str(&raw).ok()),
+    };
 
-fn forget(key: &str) {
-    if let Ok(entry) = entry(key) {
-        let _ = entry.delete_credential();
+    if store.refresh_token.is_some() || store.client.is_some() {
+        if save(&store).is_ok() {
+            for key in [REFRESH_KEY, CLIENT_KEY] {
+                if let Ok(entry) = keyring::Entry::new(SERVICE, key) {
+                    let _ = entry.delete_credential();
+                }
+            }
+        }
     }
-    remember_secret(key, None);
+    store
 }
 
-/// Keep the cache honest after a write or a delete, so nothing has to go back
-/// to the keychain — and so a disconnect is visible immediately.
-fn remember_secret(key: &str, value: Option<String>) {
-    let mut cache = CACHE.lock().unwrap();
-    cache.get_or_insert_with(Default::default).insert(key.to_string(), value);
+fn save(store: &Store) -> Result<(), String> {
+    let dir = config_dir();
+    std::fs::create_dir_all(&dir).map_err(|e| format!("could not create {dir:?}: {e}"))?;
+    let path = store_path();
+    let raw = serde_json::to_string_pretty(store).map_err(|e| e.to_string())?;
+    std::fs::write(&path, raw).map_err(|e| format!("could not write {path:?}: {e}"))?;
+
+    // Owner-only, and set after the write rather than before: the bytes must
+    // never exist at the default mode, however briefly.
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))
+        .map_err(|e| format!("could not lock down {path:?}: {e}"))
+}
+
+/// Read the store, then hand it to `f`, keeping it in memory afterwards.
+fn with_store<T>(f: impl FnOnce(&mut Store) -> T) -> T {
+    let mut held = STORE.lock().unwrap();
+    let store = held.get_or_insert_with(load);
+    f(store)
+}
+
+/// Change the store and write it back.
+fn update(f: impl FnOnce(&mut Store)) -> Result<(), String> {
+    with_store(|store| {
+        f(store);
+        save(store)
+    })
 }
 
 pub fn client() -> Option<Client> {
     if let (Some(id), Some(secret)) = (BUILT_IN_ID, BUILT_IN_SECRET) {
         return Some(Client { id: id.to_string(), secret: secret.to_string() });
     }
-    // A build with none of its own reads whatever an earlier version was told.
-    // No UI writes this any more — see the note on `Client` — but a client
-    // already on the machine is one nobody should have to supply twice.
-    read(CLIENT_KEY).and_then(|raw| serde_json::from_str(&raw).ok())
+    // A build with none of its own uses whatever an earlier version was told.
+    with_store(|store| store.client.clone())
 }
 
 /// Whether there is any client at all, and so anything to connect to.
@@ -151,11 +220,11 @@ pub fn ready() -> bool {
 }
 
 pub fn connected() -> bool {
-    read(REFRESH_KEY).is_some()
+    with_store(|store| store.refresh_token.is_some())
 }
 
 pub fn disconnect() {
-    forget(REFRESH_KEY);
+    let _ = update(|store| store.refresh_token = None);
     *TOKEN.lock().unwrap() = None;
 }
 
@@ -355,7 +424,7 @@ pub fn connect(open: impl FnOnce(&str) -> Result<(), String>) -> Result<(), Stri
     let refresh = reply.refresh_token.ok_or(
         "Google did not send a refresh token. Remove Shotly at myaccount.google.com/permissions and connect again.",
     )?;
-    write(REFRESH_KEY, &refresh)?;
+    update(|store| store.refresh_token = Some(refresh))?;
     remember(reply.access_token, reply.expires_in);
     Ok(())
 }
@@ -376,7 +445,8 @@ pub fn token() -> Result<String, String> {
     }
 
     let client = client().ok_or("No Google OAuth client is set up.")?;
-    let refresh = read(REFRESH_KEY).ok_or("Connect Google Drive in Settings first.")?;
+    let refresh = with_store(|store| store.refresh_token.clone())
+        .ok_or("Connect Google Drive in Settings first.")?;
 
     let reply = exchange(&[
         ("client_id", client.id.as_str()),
@@ -421,26 +491,37 @@ mod tests {
     /// before anything could read it, so the app showed "could not reach
     /// Google: http status: 400" for a request that had reached Google and been
     /// answered. The exchange now asks for the body regardless of status.
-    /// The prompt problem, as a test: two callers asking the same question must
-    /// not be two trips to the keychain. `remember_secret` seeds the cache the
-    /// way a successful write does, and a hit has to be served from it — a miss
-    /// here is a macOS dialog in front of the user.
+    /// The store has to survive a round trip, because it is now the only copy
+    /// of a sign-in — there is no keychain to fall back on.
     #[test]
-    fn the_keychain_is_asked_once_and_then_remembered() {
-        let key = "test-only-never-a-real-item";
-        remember_secret(key, Some("value".into()));
-        assert_eq!(read(key), Some("value".into()));
-        assert_eq!(read(key), Some("value".into()));
+    fn a_sign_in_survives_being_written_and_read() {
+        let store = Store {
+            refresh_token: Some("1//refresh".into()),
+            client: Some(Client { id: "id".into(), secret: "secret".into() }),
+        };
+        let raw = serde_json::to_string(&store).expect("serialises");
+        let back: Store = serde_json::from_str(&raw).expect("deserialises");
+        assert_eq!(back.refresh_token.as_deref(), Some("1//refresh"));
+        assert_eq!(back.client.map(|c| c.id).as_deref(), Some("id"));
+    }
 
-        // And a deletion is visible at once, rather than the old value being
-        // served until the process restarts.
-        remember_secret(key, None);
-        assert_eq!(read(key), None);
+    /// A store written by a newer Shotly, or half-filled by a failed write,
+    /// must not be a hard error — the worst case is being asked to connect
+    /// again, never a crash on a path that runs at launch.
+    #[test]
+    fn a_store_missing_its_fields_reads_as_empty() {
+        let back: Store = serde_json::from_str("{}").expect("an empty object is a store");
+        assert!(back.refresh_token.is_none());
+        assert!(back.client.is_none());
+    }
 
-        // A cached "nothing here" is an answer too. Re-asking the keychain to
-        // confirm an absence is what produced the pile of prompts.
-        let map = CACHE.lock().unwrap();
-        assert!(map.as_ref().expect("a cache").contains_key(key));
+    /// It goes beside the app's other settings, not in the home directory and
+    /// not in a temp folder something else can empty.
+    #[test]
+    fn the_store_sits_in_the_apps_own_config_directory() {
+        let path = store_path();
+        assert!(path.ends_with("Library/Application Support/com.skuirrels.shotly/google.json"),
+                "{path:?}");
     }
 
     #[test]

@@ -111,10 +111,15 @@ The client is a **Desktop app** client, and the scope Shotly requests is
 `drive.file` — non-sensitive, so the consent screen is the ordinary one and the
 project needs no security assessment. Two things have to be true of it:
 
-* The consent screen is **published**, not in Testing. A client in Testing only
-  admits accounts on its test-user list, and everyone else gets
-  `Error 403: access_denied` — which is exactly what the wide-scope version of
-  this feature put every user through.
+* The consent screen is **published**, not in Testing. Two separate failures
+  follow from leaving it in Testing, and the second one is the nastier:
+  1. Only accounts on the test-user list can connect; everyone else gets
+     `Error 403: access_denied`.
+  2. **Refresh tokens issued by a Testing client are revoked after seven days.**
+     Sharing works all week and then everybody is silently signed out, with
+     `invalid_grant` on the next refresh. Nothing in the app can prevent this —
+     it is Google protecting users from unverified apps — and no amount of
+     reconnecting fixes it for longer than another week. Publishing does.
 * Brand details are filled in — app name, icon, homepage, privacy policy —
   because that name and icon are what the consent screen shows the user.
 

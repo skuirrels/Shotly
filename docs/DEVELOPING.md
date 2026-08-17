@@ -717,9 +717,32 @@ test asserts the two names differ.
   redirect on `127.0.0.1` with a port the OS hands out, plus PKCE. The client
   secret proves nothing in an app anyone can unzip; the code verifier does, and
   it never leaves the process.
-* **A refresh token goes in the login keychain**, not in a file beside the
-  settings. Access tokens live in memory for their hour, with a minute's
-  headroom so one never expires mid-request.
+* **A refresh token goes in `google.json`, mode `0600`, in the app's config
+  directory** — deliberately *not* the login keychain, and this is the one
+  decision here most likely to look wrong at a glance.
+
+  The legacy macOS keychain authorises "Always Allow" against the binary's
+  code-directory hash. Shotly updates itself, so every update invalidates every
+  grant, and macOS then prompts *per read, per item*. This module read on every
+  call, so a user saw ten or more dialogs in a session and answering them
+  achieved nothing that survived the next update.
+
+  The fix Apple intends is the Data Protection keychain, which authorises by
+  team id via a `keychain-access-groups` entitlement and survives updates. It
+  needs a Developer ID from the Apple Developer Program; an ad-hoc or
+  self-signed build falls back to the legacy keychain and its prompts. **When
+  that certificate is bought, move this** — `keyring` reaches that keychain with
+  its "Protected" target — and migrate the file away in the same release.
+
+  What is at stake is smaller than it looks: a `drive.file` refresh token can
+  reach only the files Shotly created, not the user's Drive. Reading a `0600`
+  file in the app's own directory means already running as that user, and such
+  an attacker can equally drive the app or lift the access token out of memory.
+  An install that signed in under the old scheme is migrated on first launch —
+  read once, written to the store, deleted from the keychain — which is the
+  last prompt anyone sees.
+* **Access tokens live in memory** for their hour, with a minute's headroom so
+  one never expires mid-request.
 * **`invalid_grant` disconnects.** A refresh token revoked from the Google
   account page fails identically for ever; dropping it means the next attempt
   offers to connect instead of failing the same way again.
