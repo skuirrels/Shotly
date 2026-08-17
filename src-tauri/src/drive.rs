@@ -677,8 +677,8 @@ pub fn drive_disconnect() {
     crate::gauth::disconnect();
 }
 
-/// Whether this build carries its own OAuth client, and so needs no setting up.
+/// Whether there is an OAuth client, and so anything to connect to.
 #[tauri::command]
 pub fn drive_built_in_client() -> bool {
-    crate::gauth::built_in()
+    crate::gauth::ready()
 }

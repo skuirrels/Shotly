@@ -98,10 +98,14 @@ cp .env.release.example .env.release   # then fill in the two values
 npm run publish
 ```
 
-A build without it still runs; Settings simply says there is nothing to connect
-to. There is deliberately **no way to enter a client from inside the app** — that
-was the previous design, and it meant every user making a Google Cloud project
-to send one link.
+A build without it falls back to a client left in the keychain by an older
+version of Shotly, which is why the machine this is developed on needs nothing
+done to it. Failing both, Settings says there is nothing to connect to.
+
+There is deliberately **no way to enter a client from inside the app** any more.
+That was the previous design and it meant every user making a Google Cloud
+project before they could send one link — the developer's job, handed to
+everyone who installed it.
 
 The client is a **Desktop app** client, and the scope Shotly requests is
 `drive.file` — non-sensitive, so the consent screen is the ordinary one and the

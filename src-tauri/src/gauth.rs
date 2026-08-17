@@ -46,6 +46,7 @@ const TOKEN_URL: &str = "https://oauth2.googleapis.com/token";
 /// The keychain entry: one service, two accounts.
 const SERVICE: &str = "com.skuirrels.shotly";
 const REFRESH_KEY: &str = "google-refresh-token";
+const CLIENT_KEY: &str = "google-oauth-client";
 
 /// How long to wait for someone to finish in the browser.
 const CONSENT_TIMEOUT: Duration = Duration::from_secs(180);
@@ -68,11 +69,13 @@ static TOKEN: Mutex<Option<(String, Instant)>> = Mutex::new(None);
 const BUILT_IN_ID: Option<&str> = option_env!("SHOTLY_GOOGLE_CLIENT_ID");
 const BUILT_IN_SECRET: Option<&str> = option_env!("SHOTLY_GOOGLE_CLIENT_SECRET");
 
-/// The OAuth client, which a released build always has.
+/// The OAuth client: compiled into a release, or left in the keychain by an
+/// earlier version of Shotly that asked for one.
 ///
-/// There is deliberately no way to set one from inside the app. Asking a user
-/// for a client id is asking them to make a Google Cloud project, and that is
-/// the thing this whole rewrite exists to delete.
+/// There is deliberately no way to *set* one from inside the app any more —
+/// asking a user for a client id is asking them to make a Google Cloud
+/// project, which is the thing this rewrite exists to delete. But one already
+/// on this Mac is one nobody has to think about again, so it is still read.
 #[derive(Clone, serde::Serialize, Deserialize)]
 pub struct Client {
     pub id: String,
@@ -98,15 +101,18 @@ fn forget(key: &str) {
 }
 
 pub fn client() -> Option<Client> {
-    Some(Client {
-        id: BUILT_IN_ID?.to_string(),
-        secret: BUILT_IN_SECRET?.to_string(),
-    })
+    if let (Some(id), Some(secret)) = (BUILT_IN_ID, BUILT_IN_SECRET) {
+        return Some(Client { id: id.to_string(), secret: secret.to_string() });
+    }
+    // A build with none of its own reads whatever an earlier version was told.
+    // No UI writes this any more — see the note on `Client` — but a client
+    // already on the machine is one nobody should have to supply twice.
+    read(CLIENT_KEY).and_then(|raw| serde_json::from_str(&raw).ok())
 }
 
-/// Whether this build carries a client of its own, and so needs nothing set up.
-pub fn built_in() -> bool {
-    BUILT_IN_ID.is_some() && BUILT_IN_SECRET.is_some()
+/// Whether there is any client at all, and so anything to connect to.
+pub fn ready() -> bool {
+    client().is_some()
 }
 
 pub fn connected() -> bool {
@@ -373,17 +379,17 @@ mod tests {
     fn the_built_in_client_follows_the_build_environment() {
         match (BUILT_IN_ID, BUILT_IN_SECRET) {
             (Some(id), Some(_)) => {
-                assert!(built_in());
+                assert!(ready());
                 assert!(client().is_some());
                 assert!(
                     id.ends_with(".apps.googleusercontent.com"),
                     "SHOTLY_GOOGLE_CLIENT_ID does not look like a Google client id: {id}",
                 );
             }
-            _ => {
-                assert!(!built_in());
-                assert!(client().is_none(), "no client should exist without the environment");
-            }
+            // Without a compiled-in one, whether a client exists depends on
+            // whether this Mac has one in its keychain — both are legitimate,
+            // and `ready` has to agree with `client` either way.
+            _ => assert_eq!(ready(), client().is_some()),
         }
     }
 
@@ -412,5 +418,17 @@ mod tests {
     fn urls_are_encoded_for_a_query_string() {
         assert_eq!(urlencode("https://a.b/c"), "https%3A%2F%2Fa.b%2Fc");
         assert_eq!(urlencode("plain-id_1.2~3"), "plain-id_1.2~3");
+    }
+}
+
+#[cfg(test)]
+mod machine_check {
+    /// Not a test of the code so much as of *this Mac*: does a client exist
+    /// here, from a compiled-in value or from the keychain? Ignored by default,
+    /// because the answer is a property of the machine and not of the source.
+    #[test]
+    #[ignore]
+    fn report_whether_a_client_is_available() {
+        eprintln!("client available on this machine: {}", super::ready());
     }
 }
