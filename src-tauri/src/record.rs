@@ -103,6 +103,37 @@ impl Default for Phase {
     }
 }
 
+impl RecordState {
+    /// What the page should be showing, whether or not it has loaded yet.
+    fn phase(&self) -> Phase {
+        *self.phase.lock().unwrap()
+    }
+
+    /// Remember the display a session is on, and which life it opens into.
+    ///
+    /// Set before the window is built, deliberately: the page asks for the
+    /// phase when it mounts, which is long after the window is created and
+    /// after any event announcing it has already come and gone.
+    fn begin(&self, display: Rect, index: u32, phase: Phase) {
+        *self.bounds.lock().unwrap() = Some((display, index));
+        // Cleared before the window exists, so a stale beat from a previous
+        // session can never vouch for this one.
+        *self.last_beat.lock().unwrap() = None;
+        *self.ready.lock().unwrap() = false;
+        *self.phase.lock().unwrap() = phase;
+    }
+
+    /// Forget the session. The display and the phase describe a window that no
+    /// longer exists, and a later caller reading either would be answered with
+    /// something that was true once — which is how the second whole-screen
+    /// recording of a session came to open no panel and then fail looking for
+    /// one.
+    fn forget(&self) {
+        *self.bounds.lock().unwrap() = None;
+        *self.phase.lock().unwrap() = Phase::Select;
+    }
+}
+
 struct Session {
     child: Child,
     /// Where `screencapture` is writing, in the scratch directory.
@@ -171,15 +202,7 @@ pub fn record_begin(app: AppHandle) -> Result<(), String> {
         .map(|i| i as u32 + 1)
         .unwrap_or(1);
 
-    {
-        let state = app.state::<RecordState>();
-        *state.bounds.lock().unwrap() = Some((target.bounds, index));
-        // Cleared before the window exists, so a stale beat from a previous
-        // session can never vouch for this one.
-        *state.last_beat.lock().unwrap() = None;
-        *state.ready.lock().unwrap() = false;
-        *state.phase.lock().unwrap() = Phase::Select;
-    }
+    app.state::<RecordState>().begin(target.bounds, index, Phase::Select);
 
     let bounds = target.bounds;
     let window = WebviewWindowBuilder::new(&app, LABEL, WebviewUrl::App("record.html".into()))
@@ -236,7 +259,7 @@ pub fn record_beat(app: AppHandle) {
 /// Which of its two lives the page is opening into. See `RecordState::phase`.
 #[tauri::command]
 pub fn record_phase(app: AppHandle) -> String {
-    app.state::<RecordState>().phase.lock().unwrap().as_str().to_string()
+    app.state::<RecordState>().phase().as_str().to_string()
 }
 
 /// Move the page to a phase, and remember it for a page that has yet to load.
@@ -244,6 +267,8 @@ fn set_phase(app: &AppHandle, phase: Phase) {
     *app.state::<RecordState>().phase.lock().unwrap() = phase;
     let _ = app.emit_to(LABEL, "record:phase", phase.as_str());
 }
+
+
 
 /// The overlay's place on screen, so the page can map a drag to global points.
 #[tauri::command]
@@ -447,10 +472,7 @@ fn end(app: &AppHandle, keep: bool) {
 /// Put everything back: panel gone, editor as it was, tray honest again.
 fn wind_down(app: &AppHandle) {
     close(app);
-    // Forgotten along with the window it describes. Left behind, it is a
-    // display and an index that no longer have a panel on them, and every
-    // caller that reads it has to wonder whether it means anything.
-    *app.state::<RecordState>().bounds.lock().unwrap() = None;
+    app.state::<RecordState>().forget();
     crate::commands::reveal_after_capture(app);
 
     // The tray menu is AppKit, and AppKit menus are built on the main thread.
@@ -623,15 +645,9 @@ fn shrink_to_hud(app: &AppHandle) -> Result<(), String> {
 
 /// Open the panel on its own, for a recording that needed no selection.
 fn open_hud(app: &AppHandle, display: Rect) -> Result<(), String> {
-    {
-        let state = app.state::<RecordState>();
-        *state.bounds.lock().unwrap() = Some((display, 1));
-        *state.last_beat.lock().unwrap() = None;
-        *state.ready.lock().unwrap() = false;
-        // A panel from birth. Set before the window is built, so the page finds
-        // it already true whenever it gets round to asking.
-        *state.phase.lock().unwrap() = Phase::Hud;
-    }
+    // A panel from birth. Set before the window is built, so the page finds it
+    // already true whenever it gets round to asking.
+    app.state::<RecordState>().begin(display, 1, Phase::Hud);
 
     if app.get_webview_window(LABEL).is_some() {
         return Ok(());
@@ -778,6 +794,10 @@ mod tests {
         let status = child.wait().expect("screencapture should exit");
 
         let movie = std::fs::read(&path).expect("a movie should have been written");
+        // Read before the file goes: this is the same reader the library uses
+        // to put a running time and a size on the card, so the recorder and
+        // the parser are checked against each other rather than separately.
+        let measured = crate::video::probe(&path);
         let _ = std::fs::remove_file(&path);
 
         assert!(status.success(), "interrupting it should not be an error");
@@ -788,6 +808,16 @@ mod tests {
             movie.windows(4).any(|w| w == b"moov"),
             "no moov atom: the movie was never finalised",
         );
+
+        let measured = measured.expect("the library could not measure the recording");
+        assert!(
+            (measured.seconds - 2.0).abs() < 1.0,
+            "two seconds of recording measured as {}",
+            measured.seconds,
+        );
+        // 320×200 points, at whatever backing scale this display has.
+        let ratio = measured.width as f64 / measured.height as f64;
+        assert!((ratio - 1.6).abs() < 0.05, "recorded {}×{}", measured.width, measured.height);
     }
 
     #[test]
@@ -798,5 +828,67 @@ mod tests {
         assert!(x >= display.x);
         assert!(x + HUD_WIDTH <= display.x + display.width);
         assert!(y + HUD_HEIGHT <= display.y + display.height);
+    }
+
+    /// A display whose origin is negative — a second screen placed above and to
+    /// the left of the built-in one, which is where the panel was reported
+    /// "out of sight and off screen".
+    #[test]
+    fn the_panel_clears_the_dock_on_a_display_with_a_negative_origin() {
+        let display = Rect { x: -2048.0, y: -253.0, width: 2048.0, height: 1152.0 };
+        let (x, y) = hud_spot(&display);
+
+        // Centred across, and far enough up that a Dock at its usual height is
+        // not underneath it.
+        assert!((x - (display.x + (display.width - HUD_WIDTH) / 2.0)).abs() < 0.5);
+        let below = display.y + display.height - (y + HUD_HEIGHT);
+        assert!(below >= 90.0, "only {below} points above the bottom");
+    }
+
+    /// The bug that shipped in 0.7.7: recording the whole screen opens a window
+    /// that is a panel before any page exists to be told so. Whoever asks later
+    /// has to be told the same thing, or the page renders a full-screen
+    /// selection overlay inside a 232-point window.
+    #[test]
+    fn a_session_that_opens_as_a_panel_says_so_to_whoever_asks_later() {
+        let state = RecordState::default();
+        let display = Rect { x: 0.0, y: 0.0, width: 1440.0, height: 900.0 };
+
+        assert_eq!(state.phase().as_str(), "select", "nothing open yet");
+
+        state.begin(display, 1, Phase::Hud);
+        assert_eq!(state.phase().as_str(), "hud");
+    }
+
+    /// The other half of the same bug: the display outlives the window unless
+    /// something forgets it, and the second whole-screen recording of a session
+    /// then found a display remembered, skipped opening a panel, and failed
+    /// looking for the one it had not opened.
+    #[test]
+    fn winding_down_forgets_the_session_it_described() {
+        let state = RecordState::default();
+        let display = Rect { x: 0.0, y: 0.0, width: 1440.0, height: 900.0 };
+
+        state.begin(display, 2, Phase::Hud);
+        assert!(state.bounds.lock().unwrap().is_some());
+
+        state.forget();
+        assert!(state.bounds.lock().unwrap().is_none(), "the display outlived its window");
+        assert_eq!(state.phase().as_str(), "select", "the next window opens fresh");
+    }
+
+    /// Starting a session must not inherit the previous one's vital signs: a
+    /// beat or a paint from the window that has just closed would vouch for a
+    /// window that has not drawn anything yet.
+    #[test]
+    fn a_new_session_starts_with_no_pulse_of_its_own() {
+        let state = RecordState::default();
+        *state.last_beat.lock().unwrap() = Some(Instant::now());
+        *state.ready.lock().unwrap() = true;
+
+        state.begin(Rect { x: 0.0, y: 0.0, width: 800.0, height: 600.0 }, 1, Phase::Select);
+
+        assert!(state.last_beat.lock().unwrap().is_none());
+        assert!(!*state.ready.lock().unwrap());
     }
 }

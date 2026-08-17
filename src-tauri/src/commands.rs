@@ -556,15 +556,7 @@ pub fn move_into_library(
     extension: &str,
 ) -> CmdResult<String> {
     let target = free_name(app, stem, extension)?;
-
-    // A rename is instant and a copy is not, but the scratch directory and the
-    // library are only usually on the same volume — `TMPDIR` can be moved, and
-    // a home directory can be on an external disk. Copy when the cheap move is
-    // refused rather than losing the recording to it.
-    if std::fs::rename(source, &target).is_err() {
-        std::fs::copy(source, &target).map_err(|e| e.to_string())?;
-        let _ = std::fs::remove_file(source);
-    }
+    place_file(source, &target)?;
 
     let path = target.to_string_lossy().into_owned();
     crate::backup::mirror_one(app, &path);
@@ -575,7 +567,13 @@ pub fn move_into_library(
 fn free_name(app: &AppHandle, stem: &str, extension: &str) -> CmdResult<std::path::PathBuf> {
     let dir = library_dir(app)?;
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    Ok(free_name_in(&dir, stem, extension))
+}
 
+/// The naming rules themselves, against a directory rather than the app — so
+/// that what a stem may contain, and how a collision is resolved, can be tested
+/// without a library on disk.
+fn free_name_in(dir: &std::path::Path, stem: &str, extension: &str) -> std::path::PathBuf {
     // Strip anything that would break out of the directory or upset the
     // filesystem; the stem is generated, but it costs nothing to be safe.
     let safe: String = stem
@@ -591,7 +589,22 @@ fn free_name(app: &AppHandle, stem: &str, extension: &str) -> CmdResult<std::pat
         target = dir.join(format!("{safe} ({n}).{extension}"));
         n += 1;
     }
-    Ok(target)
+    target
+}
+
+/// Put `source` at `target`, leaving nothing behind at `source`.
+///
+/// A rename is instant and a copy is not, but the scratch directory and the
+/// library are only usually on the same volume — `TMPDIR` can be moved, and a
+/// home directory can be on an external disk. Copy when the cheap move is
+/// refused rather than losing a recording to it.
+fn place_file(source: &std::path::Path, target: &std::path::Path) -> CmdResult<()> {
+    if std::fs::rename(source, target).is_ok() {
+        return Ok(());
+    }
+    std::fs::copy(source, target).map_err(|e| e.to_string())?;
+    let _ = std::fs::remove_file(source);
+    Ok(())
 }
 
 /// The name a capture is filed under: "Recording 2026-08-17 at 11.52.03".
@@ -1066,6 +1079,66 @@ pub fn hide_editor(app: AppHandle, window: WebviewWindow) -> CmdResult<()> {
 
 #[cfg(test)]
 mod naming_tests {
+    use super::{free_name_in, place_file};
+
+    /// A recording is filed under its own extension, and never over the top of
+    /// something already there.
+    #[test]
+    fn a_name_already_taken_is_numbered_rather_than_overwritten() {
+        let dir = tempfile::tempdir().unwrap();
+        let stem = "Recording 2026-08-17 at 13.58.12";
+
+        let first = free_name_in(dir.path(), stem, "mov");
+        assert_eq!(first.file_name().unwrap(), format!("{stem}.mov").as_str());
+
+        std::fs::write(&first, b"").unwrap();
+        let second = free_name_in(dir.path(), stem, "mov");
+        assert_eq!(second.file_name().unwrap(), format!("{stem} (2).mov").as_str());
+
+        std::fs::write(&second, b"").unwrap();
+        let third = free_name_in(dir.path(), stem, "mov");
+        assert_eq!(third.file_name().unwrap(), format!("{stem} (3).mov").as_str());
+
+        // A still of the same name is a different file, not a collision.
+        let png = free_name_in(dir.path(), stem, "png");
+        assert_eq!(png.file_name().unwrap(), format!("{stem}.png").as_str());
+    }
+
+    #[test]
+    fn a_stem_cannot_climb_out_of_the_library() {
+        let dir = tempfile::tempdir().unwrap();
+
+        // The separators are what matter, not the dots: "..-..-etc-passwd.mov"
+        // is an odd name for a file and a perfectly harmless one, because it
+        // cannot be anywhere but in the library.
+        let escaped = free_name_in(dir.path(), "../../etc/passwd", "mov");
+        assert_eq!(escaped.parent().unwrap(), dir.path());
+        let name = escaped.file_name().unwrap().to_string_lossy();
+        assert!(!name.contains('/') && !name.contains('\\') && !name.contains(':'), "{name}");
+
+        // Nothing usable left in the name is still a file, not an extension
+        // with no name in front of it.
+        let empty = free_name_in(dir.path(), "  ...  ", "mov");
+        assert_eq!(empty.file_name().unwrap(), "Capture.mov");
+    }
+
+    /// The recording is moved out of the scratch directory, not copied and
+    /// left behind: these are hundreds of megabytes.
+    #[test]
+    fn filing_a_recording_leaves_nothing_in_the_scratch_directory() {
+        let scratch = tempfile::tempdir().unwrap();
+        let library = tempfile::tempdir().unwrap();
+
+        let source = scratch.path().join("recording-1786961840681.mov");
+        std::fs::write(&source, b"pretend this is a movie").unwrap();
+
+        let target = free_name_in(library.path(), "Recording 2026-08-17 at 13.58.12", "mov");
+        place_file(&source, &target).unwrap();
+
+        assert!(!source.exists(), "the scratch copy was left behind");
+        assert_eq!(std::fs::read(&target).unwrap(), b"pretend this is a movie");
+    }
+
     #[test]
     fn a_stamped_stem_reads_the_way_a_screenshot_name_does() {
         let stem = super::stamped_stem("Recording");

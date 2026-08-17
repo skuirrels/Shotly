@@ -176,18 +176,19 @@ fn be64(bytes: &[u8], at: usize) -> Option<u64> {
 /// codec decisions, and it is one subprocess in the same spirit as the rest of
 /// the capture layer. It writes `<name>.png` beside wherever it is pointed, so
 /// it is pointed at a directory of its own and the result moved into place.
+/// Somewhere for QuickLook to write, belonging to this one thumbnail.
+///
+/// Per call, not per process: thumbnails are asked for concurrently now that
+/// they are off the main thread, and this directory is deleted when its poster
+/// is done — a shared one would be deleted out from under whichever poster was
+/// still being written into it.
+fn scratch_for(dest: &Path) -> Option<std::path::PathBuf> {
+    let stem = dest.file_stem()?.to_string_lossy().into_owned();
+    Some(dest.parent()?.join(format!("ql-{stem}")))
+}
+
 pub fn poster(source: &Path, dest: &Path, max: u32) -> Result<(), String> {
-    // A directory of its own per call, not per process: thumbnails are asked
-    // for concurrently now that they are off the main thread, and this one is
-    // deleted when it is done — a shared one would be deleted out from under
-    // whichever poster was still being written into it.
-    let scratch = dest
-        .parent()
-        .ok_or("no cache directory")?
-        .join(format!(
-            "ql-{}",
-            dest.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default()
-        ));
+    let scratch = scratch_for(dest).ok_or("no cache directory")?;
     std::fs::create_dir_all(&scratch).map_err(|e| e.to_string())?;
 
     let mut child = Command::new("/usr/bin/qlmanage")
@@ -293,6 +294,21 @@ mod tests {
         assert_eq!(tkhd_size(&[0u8; 3]), None);
         // A size field that does not advance must not spin.
         assert_eq!(scan(&atom(b"mvhd", &[0u8; 4])[..4], b"mvhd"), None);
+    }
+
+    /// Two thumbnails being made at once must not share a workspace: each one
+    /// deletes its own when it finishes, and the first to finish would take the
+    /// other's poster frame with it.
+    #[test]
+    fn two_posters_never_share_a_scratch_directory() {
+        let cache = Path::new("/tmp/shotly/thumbs");
+        let one = scratch_for(&cache.join("1a2b-1786961840681-480.png")).unwrap();
+        let two = scratch_for(&cache.join("9f8e-1786961840681-480.png")).unwrap();
+
+        assert_ne!(one, two);
+        // Beside the thumbnail it is for, so cleaning the cache cleans these.
+        assert_eq!(one.parent().unwrap(), cache);
+        assert_eq!(scratch_for(Path::new("no-parent.png")), Some("ql-no-parent".into()));
     }
 
     #[test]
