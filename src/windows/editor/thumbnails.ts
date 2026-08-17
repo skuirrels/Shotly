@@ -16,15 +16,12 @@ export function useThumbnail(path: string, modified: number, cloud = false) {
     let cancelled = false;
     setFailed(false);
 
-    // A capture whose bytes are in the cloud is left alone. Making a thumbnail
-    // of one means downloading it, and the grid asks for a thumbnail per card
-    // — so scrolling a folder of recordings would pull the whole folder back
-    // onto the disk without anyone asking for it. Rust refuses this too; the
-    // check is here as well so the request is never made.
-    if (cloud) {
-      setUrl(null);
-      return;
-    }
+    // A cloud capture is asked about like any other. Rust hands back a
+    // thumbnail it made earlier if it has one — reading its own cache touches
+    // nothing in the library — and refuses only when it would have to read the
+    // capture itself, which is what would trigger a download. Skipping the
+    // request outright, as this used to, left a library of grey rectangles the
+    // day macOS evicted the lot.
 
     void ipc
       .libraryThumbnail(path)

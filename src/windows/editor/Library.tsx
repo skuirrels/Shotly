@@ -1,6 +1,7 @@
 import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import clsx from "clsx";
 import {
+  IconCloud,
   IconClose,
   IconCopy,
   IconExternal,
@@ -520,6 +521,19 @@ function LibraryCard({
             </span>
           )}
 
+          {/* Its picture is here; its contents are not. Said quietly, in the
+              corner, rather than by replacing the thumbnail with the word
+              "cloud" — the capture is still recognisable, which is the whole
+              job of a grid. */}
+          {item.cloud && thumb && !failed && (
+            <span
+              title="In the cloud — not downloaded to this Mac"
+              className="pointer-events-none absolute top-1.5 left-1.5 grid size-5 place-items-center rounded-md bg-black/60 text-ink-2 backdrop-blur"
+            >
+              <IconCloud />
+            </span>
+          )}
+
           {/* A recording's poster frame is just a screenshot of the screen —
               nothing about it says "this one moves". The badge does, and it
               doubles as the hint that double-clicking will play it. */}
@@ -539,11 +553,15 @@ function LibraryCard({
           {/* Never wraps: the sidebar took width off the cards, and a metadata
               line that folds onto a second row makes the grid ragged. */}
           <p className="mt-0.5 truncate font-mono text-[10.5px] tabular-nums text-ink-4">
-            {item.cloud
-              ? "Not downloaded"
-              : item.video && item.seconds > 0
-                ? formatDuration(item.seconds)
-                : `${item.width} × ${item.height}`}
+            {/* The cloud badge in the corner already says where the contents
+                are, so this line goes back to saying what the capture *is* —
+                remembered from when it could be read. Only a capture nobody
+                has measured falls back to saying so. */}
+            {item.video && item.seconds > 0
+              ? formatDuration(item.seconds)
+              : item.width > 0
+                ? `${item.width} × ${item.height}`
+                : "Not downloaded"}
             <span className="mx-1.5">·</span>
             {formatSize(item.size)}
             <span className="mx-1.5">·</span>

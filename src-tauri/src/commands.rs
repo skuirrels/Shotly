@@ -777,8 +777,13 @@ pub fn read_library(dir: &std::path::Path) -> CmdResult<Vec<LibraryItem>> {
 
         // Neither an unreadable image nor an unmeasurable movie should sink the
         // whole listing: both are shown, without their dimensions.
+        let key = path.to_string_lossy().into_owned();
         let (width, height, seconds) = if cloud {
-            (0, 0, 0.0)
+            // Nothing here opens the file. Either it was measured while it was
+            // on the disk, or its size and date are all this row will carry.
+            recall(&key, modified as u128)
+                .map(|m| (m.width, m.height, m.seconds))
+                .unwrap_or((0, 0, 0.0))
         } else if is_video {
             crate::video::probe(&path)
                 .map(|v| (v.width, v.height, v.seconds))
@@ -787,6 +792,10 @@ pub fn read_library(dir: &std::path::Path) -> CmdResult<Vec<LibraryItem>> {
             let (w, h) = image::image_dimensions(&path).unwrap_or((0, 0));
             (w, h, 0.0)
         };
+
+        if !cloud && (width > 0 || seconds > 0.0) {
+            remember(&key, modified as u128, &Measured { width, height, seconds });
+        }
 
         items.push(LibraryItem {
             name: path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default(),
@@ -879,19 +888,73 @@ pub fn warm_thumbnail(path: &str) -> CmdResult<String> {
     thumbnail(path.to_string(), 480)
 }
 
+/// Where thumbnails live.
+///
+/// `~/Library/Caches`, not the temp directory they used to be in. macOS empties
+/// the temp directory whenever it feels like it, and a thumbnail lost there is
+/// one that can only be rebuilt by reading the capture again — which, for a
+/// library the cloud has evicted, means it cannot be rebuilt at all. The cache
+/// is still a cache: deleting it costs nothing but a re-render of whatever is
+/// still on the disk.
+///
+/// This is `$APPCACHE` as the asset protocol's scope knows it — the two must
+/// agree, or every thumbnail comes back 403 and the grid fills with broken
+/// image icons, which is exactly what the first attempt at this did.
+fn thumb_cache() -> CmdResult<std::path::PathBuf> {
+    let dir = dirs_cache().join("thumbs");
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    Ok(dir)
+}
+
+fn dirs_cache() -> std::path::PathBuf {
+    std::env::var("HOME")
+        .map(|home| std::path::PathBuf::from(home).join("Library/Caches/com.skuirrels.shotly"))
+        .unwrap_or_else(|_| std::env::temp_dir().join("shotly"))
+}
+
+/// What was measured about a capture the last time it could be read.
+///
+/// The cloud can take a capture's contents away, and with them its dimensions
+/// and its running time — `stat` still gives the size and the date, but nothing
+/// inside the file. Rather than show "0 × 0" or nothing at all, what was
+/// measured while it was here is kept beside its thumbnail, and read back when
+/// the file itself is out of reach.
+#[derive(serde::Serialize, serde::Deserialize)]
+struct Measured {
+    width: u32,
+    height: u32,
+    seconds: f64,
+}
+
+fn measured_path(path: &str, mtime: u128) -> Option<std::path::PathBuf> {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    path.hash(&mut hasher);
+    // The mtime is in the name for the same reason it is in a thumbnail's: an
+    // edited capture is a different picture with the same path.
+    Some(thumb_cache().ok()?.join(format!("{:x}-{mtime}.json", hasher.finish())))
+}
+
+fn recall(path: &str, mtime: u128) -> Option<Measured> {
+    let raw = std::fs::read_to_string(measured_path(path, mtime)?).ok()?;
+    serde_json::from_str(&raw).ok()
+}
+
+fn remember(path: &str, mtime: u128, measured: &Measured) {
+    let Some(dest) = measured_path(path, mtime) else { return };
+    if dest.exists() {
+        return;
+    }
+    if let Ok(raw) = serde_json::to_string(measured) {
+        let _ = std::fs::write(dest, raw);
+    }
+}
+
 fn thumbnail(path: String, max: u32) -> CmdResult<String> {
     use std::hash::{Hash, Hasher};
 
     let source = std::path::Path::new(&path);
     let meta = std::fs::metadata(source).map_err(|e| e.to_string())?;
-
-    // Never fetch a file back from the cloud to make a picture of it. The grid
-    // asks for a thumbnail per card as it scrolls, and a folder of recordings
-    // would quietly become a gigabyte of downloads — the caller shows the
-    // card without one instead. See `is_dataless`.
-    if is_dataless(&meta) {
-        return Err("that capture's contents are not on this disk".into());
-    }
 
     let mtime = meta
         .modified()
@@ -904,12 +967,24 @@ fn thumbnail(path: String, max: u32) -> CmdResult<String> {
     path.hash(&mut hasher);
     let key = hasher.finish();
 
-    let cache = std::env::temp_dir().join("shotly").join("thumbs");
-    std::fs::create_dir_all(&cache).map_err(|e| e.to_string())?;
-
+    let cache = thumb_cache()?;
     let dest = cache.join(format!("{key:x}-{mtime}-{max}.png"));
+
+    // A thumbnail already made is one to hand back, whatever has since become
+    // of the original — reading the cache touches nothing in the library. This
+    // check comes *first* for that reason: a capture whose contents the cloud
+    // has taken away still has a picture here, and a grid of grey rectangles
+    // for a library that has been evicted is the alternative.
     if dest.exists() {
         return Ok(dest.to_string_lossy().into_owned());
+    }
+
+    // Making a *new* one is different: it means reading the file, and reading
+    // an evicted file means downloading it. The grid asks per card as it
+    // scrolls, so a folder of recordings would quietly become a gigabyte of
+    // downloads nobody asked for. See `is_dataless`.
+    if is_dataless(&meta) {
+        return Err("that capture's contents are not on this disk".into());
     }
 
     if crate::video::is_video(source) {
@@ -1326,5 +1401,34 @@ mod library_listing_tests {
         let dir = tempfile::tempdir().expect("temp dir");
         let items = read_library(&dir.path().join("no-such-folder")).expect("listing");
         assert!(items.is_empty());
+    }
+}
+
+#[cfg(test)]
+mod cloud_memory_tests {
+    use super::*;
+
+    /// What was measured survives the file's contents going away.
+    ///
+    /// The case this exists for cannot be built in a test — only a file
+    /// provider can mark a file dataless — so this drives the two halves
+    /// directly: remember while it is readable, recall when it is not.
+    #[test]
+    fn dimensions_are_remembered_across_an_eviction() {
+        let path = format!("/tmp/shotly-test-{}.png", std::process::id());
+        let mtime = 1_786_999_999_000u128;
+        assert!(recall(&path, mtime).is_none(), "nothing remembered yet");
+
+        remember(&path, mtime, &Measured { width: 3160, height: 1926, seconds: 0.0 });
+        let back = recall(&path, mtime).expect("it should have been remembered");
+        assert_eq!((back.width, back.height), (3160, 1926));
+
+        // A capture edited since is a different picture: its mtime moves, and
+        // the old measurement must not be handed back for the new file.
+        assert!(recall(&path, mtime + 1).is_none());
+
+        if let Some(p) = measured_path(&path, mtime) {
+            let _ = std::fs::remove_file(p);
+        }
     }
 }

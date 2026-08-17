@@ -405,6 +405,13 @@ export const IconBack = (p: SVGProps<SVGSVGElement>) => (
   </Icon>
 );
 
+/** A cloud: this one's contents live somewhere other than this disk. */
+export const IconCloud = (p: SVGProps<SVGSVGElement>) => (
+  <Icon {...p}>
+    <path d="M4.6 12.5h6.6a2.9 2.9 0 0 0 .3-5.8 4 4 0 0 0-7.7-.6 2.7 2.7 0 0 0 .8 6.4z" />
+  </Icon>
+);
+
 /** An arrow leaving a box: hand this to another app. */
 export const IconExternal = (p: SVGProps<SVGSVGElement>) => (
   <Icon {...p}>

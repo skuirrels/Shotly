@@ -577,6 +577,23 @@ So the rules here are:
   activation policy), that half goes back through `run_on_main_thread`. A `fn`
   where an `async fn` belongs is invisible in review and shows up as a frozen
   app on someone else's machine.
+* **A thumbnail already made is served whatever became of the original.** The
+  cache moved out of `$TMPDIR` — which macOS empties whenever it likes — into
+  `$APPCACHE`, and the dataless check now sits *after* the cache hit rather than
+  before it. Reading our own cache touches nothing in the library; only
+  *generating* a thumbnail has to read the capture, and that is what a download
+  would be. The version that checked first turned a whole evicted library into
+  grey rectangles.
+
+  The scope in `tauri.conf.json` has to include `$APPCACHE/**` for the same
+  reason it includes `$TEMP/**`: the webview loads those files over `asset:`,
+  and a cache the protocol cannot reach is a grid of broken-image icons.
+
+* **What was measured is remembered.** Dimensions and duration come from inside
+  the file, so an evicted capture has none — and "0 × 0" is a worse answer than
+  the truth from the last time it could be read. `remember`/`recall` keep them
+  beside the thumbnail, keyed on path and mtime like everything else here.
+
 * **Listing a folder must never download anything.** `read_library` checks
   `is_dataless` before it opens anything, and a capture in that state is listed
   from its `stat` alone — no dimensions, no duration, no thumbnail, and the grid
