@@ -1,5 +1,15 @@
 /** Human-readable file sizes and dates, shared by the library grid and rail. */
 
+/** A running time, the way a player writes it: 0:07, 1:42, 1:02:03. */
+export function formatDuration(seconds: number): string {
+  const whole = Math.max(0, Math.round(seconds));
+  const s = whole % 60;
+  const m = Math.floor(whole / 60) % 60;
+  const h = Math.floor(whole / 3600);
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return h > 0 ? `${h}:${pad(m)}:${pad(s)}` : `${m}:${pad(s)}`;
+}
+
 export function formatSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;

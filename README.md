@@ -66,7 +66,9 @@ appears at the bottom of the display with the elapsed time and the way out —
 does the menu bar, which says *Stop Recording* while one is running.
 
 The movie lands in your Shotly folder as an ordinary `.mov` — no editor, no
-export step, nothing to convert. Picking a window records *that window*: it
+export step, nothing to convert — and appears in the library alongside your
+captures, with a still from the recording and its running time. Double-click it
+to play it in QuickTime Player. Picking a window records *that window*: it
 follows if you move it, and anything dropped in front of it stays out.
 
 The panel does not appear in the recording, so you can leave it where it is.

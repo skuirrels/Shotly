@@ -43,6 +43,16 @@ export function RecordApp() {
   const [phase, setPhase] = useState<"select" | "hud">("select");
 
   useEffect(() => {
+    // Asked for, not waited for. Recording the whole screen opens a window that
+    // is already a panel and says so before this page exists to hear it, and a
+    // missed handover left the selection overlay rendering inside a 232-point
+    // window: a clipped prompt, nothing to press, and a recording already
+    // running behind it. The listener covers the other handover, where the
+    // overlay becomes the panel with the page very much alive.
+    void invoke<string>("record_phase")
+      .then((p) => p === "hud" && setPhase("hud"))
+      .catch(() => {});
+
     const un = listen<string>("record:phase", (e) => {
       if (e.payload === "hud") setPhase("hud");
     });

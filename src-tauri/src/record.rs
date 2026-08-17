@@ -69,6 +69,38 @@ pub struct RecordState {
     /// the reason `scroll::ScrollState` gives: a page can beat happily while
     /// never getting a frame onto the screen.
     ready: Mutex<bool>,
+    /// Which of its two lives the page should be showing: `"select"` or `"hud"`.
+    ///
+    /// Held here, and not merely announced, because an event emitted while the
+    /// window is still loading is an event nobody hears. Recording the whole
+    /// screen opens a window that is a panel from birth and says so
+    /// immediately — milliseconds before the page exists to be told — and the
+    /// page then came up as a full-screen selection overlay squeezed into 232
+    /// points: a prompt clipped by the bottom of the window, no way to start
+    /// anything, and no way to tell it had already started. The page asks for
+    /// this on mount and listens for changes afterwards.
+    phase: Mutex<Phase>,
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum Phase {
+    Select,
+    Hud,
+}
+
+impl Phase {
+    fn as_str(self) -> &'static str {
+        match self {
+            Phase::Select => "select",
+            Phase::Hud => "hud",
+        }
+    }
+}
+
+impl Default for Phase {
+    fn default() -> Self {
+        Phase::Select
+    }
 }
 
 struct Session {
@@ -146,6 +178,7 @@ pub fn record_begin(app: AppHandle) -> Result<(), String> {
         // session can never vouch for this one.
         *state.last_beat.lock().unwrap() = None;
         *state.ready.lock().unwrap() = false;
+        *state.phase.lock().unwrap() = Phase::Select;
     }
 
     let bounds = target.bounds;
@@ -198,6 +231,18 @@ pub fn record_ready(app: AppHandle) -> Result<(), String> {
 #[tauri::command]
 pub fn record_beat(app: AppHandle) {
     *app.state::<RecordState>().last_beat.lock().unwrap() = Some(Instant::now());
+}
+
+/// Which of its two lives the page is opening into. See `RecordState::phase`.
+#[tauri::command]
+pub fn record_phase(app: AppHandle) -> String {
+    app.state::<RecordState>().phase.lock().unwrap().as_str().to_string()
+}
+
+/// Move the page to a phase, and remember it for a page that has yet to load.
+fn set_phase(app: &AppHandle, phase: Phase) {
+    *app.state::<RecordState>().phase.lock().unwrap() = phase;
+    let _ = app.emit_to(LABEL, "record:phase", phase.as_str());
 }
 
 /// The overlay's place on screen, so the page can map a drag to global points.
@@ -377,6 +422,17 @@ fn end(app: &AppHandle, keep: bool) {
 
         match saved {
             Ok(Some(path)) => {
+                // Say so somewhere the user can see. The editor is hidden for
+                // the whole recording — it would otherwise be *in* it — so the
+                // toast it carries has been landing in a window nobody was
+                // looking at, which is most of why a working recorder read as
+                // a broken one. Activation policy is AppKit, hence the hop.
+                let h = handle.clone();
+                let _ = handle.run_on_main_thread(move || {
+                    if let Err(err) = crate::commands::present_editor(&h) {
+                        eprintln!("[shotly] could not show the editor: {err}");
+                    }
+                });
                 let _ = handle.emit("record:saved", &path);
             }
             Ok(None) => {}
@@ -528,7 +584,10 @@ fn clamp_to_display(region: Rect, display: Rect) -> Rect {
 /// the panel is invisible to the recording, so the only thing it can get in
 /// the way of is the user's own view.
 fn hud_spot(display: &Rect) -> (f64, f64) {
-    const GAP: f64 = 28.0;
+    // Enough to clear a Dock at its usual size. The panel floats above
+    // everything now, so a smaller gap would not hide it behind the Dock — it
+    // would sit on top of it, which is its own kind of in the way.
+    const GAP: f64 = 96.0;
     (
         display.x + (display.width - HUD_WIDTH) / 2.0,
         display.y + display.height - HUD_HEIGHT - GAP,
@@ -547,7 +606,7 @@ fn shrink_to_hud(app: &AppHandle) -> Result<(), String> {
 
     // It is a panel now, so it can be raised above everything.
     raise_panel(app);
-    let _ = app.emit_to(LABEL, "record:phase", "hud");
+    set_phase(app, Phase::Hud);
     Ok(())
 }
 
@@ -558,6 +617,9 @@ fn open_hud(app: &AppHandle, display: Rect) -> Result<(), String> {
         *state.bounds.lock().unwrap() = Some((display, 1));
         *state.last_beat.lock().unwrap() = None;
         *state.ready.lock().unwrap() = false;
+        // A panel from birth. Set before the window is built, so the page finds
+        // it already true whenever it gets round to asking.
+        *state.phase.lock().unwrap() = Phase::Hud;
     }
 
     if app.get_webview_window(LABEL).is_some() {
@@ -581,8 +643,6 @@ fn open_hud(app: &AppHandle, display: Rect) -> Result<(), String> {
 
     // Born a panel: nothing to select, so it is raised straight away.
     raise_panel(app);
-
-    let _ = app.emit_to(LABEL, "record:phase", "hud");
     watch(app);
     Ok(())
 }

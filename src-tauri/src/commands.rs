@@ -246,13 +246,25 @@ pub fn request_window_pick(app: &AppHandle) -> CmdResult<()> {
 /// stolen by another app has to start: the editor window may well be hidden,
 /// and its own ⌘, cannot be reached from a window you cannot see.
 pub fn request_settings(app: &AppHandle, tab: &str) -> CmdResult<()> {
+    present_editor(app)?;
+    app.emit_to("editor", "editor:settings", tab)
+        .map_err(|e| e.to_string())
+}
+
+/// Bring the editor forward, whatever state it was left in.
+///
+/// Not `reveal_editor`, which only undoes a hide *we* did: this is for the
+/// times something has happened that the user has to be told about, and the
+/// window that does the telling has spent the whole operation hidden. A
+/// finished screen recording is the example — it is filed silently, in a folder
+/// the library grid does not show movies from, so without this the entire
+/// feature is indistinguishable from one that does nothing at all.
+pub fn present_editor(app: &AppHandle) -> CmdResult<()> {
     let editor = app.get_webview_window("editor").ok_or("editor window missing")?;
     *app.state::<AppState>().hid_editor.lock().unwrap() = false;
     platform::set_accessory_mode(app, false);
     editor.show().map_err(|e| e.to_string())?;
-    editor.set_focus().map_err(|e| e.to_string())?;
-    app.emit_to("editor", "editor:settings", tab)
-        .map_err(|e| e.to_string())
+    editor.set_focus().map_err(|e| e.to_string())
 }
 
 /// Abandon an in-flight capture and restore the editor.
@@ -625,6 +637,11 @@ pub struct LibraryItem {
     pub size: u64,
     pub width: u32,
     pub height: u32,
+    /// A screen recording rather than a capture. There is nothing to annotate
+    /// in one, so the grid opens it in whatever plays movies instead.
+    pub video: bool,
+    /// How long it runs, for movies. Zero when it could not be measured.
+    pub seconds: f64,
 }
 
 const LIBRARY_EXTENSIONS: [&str; 3] = ["png", "jpg", "jpeg"];
@@ -654,7 +671,8 @@ pub fn list_library(app: AppHandle) -> CmdResult<Vec<LibraryItem>> {
             .and_then(|e| e.to_str())
             .map(|e| LIBRARY_EXTENSIONS.contains(&e.to_ascii_lowercase().as_str()))
             .unwrap_or(false);
-        if !is_image {
+        let is_video = crate::video::is_video(&path);
+        if !is_image && !is_video {
             continue;
         }
 
@@ -666,8 +684,16 @@ pub fn list_library(app: AppHandle) -> CmdResult<Vec<LibraryItem>> {
             .map(|d| d.as_millis() as u64)
             .unwrap_or(0);
 
-        // A file that can't be read as an image shouldn't sink the whole listing.
-        let (width, height) = image::image_dimensions(&path).unwrap_or((0, 0));
+        // Neither an unreadable image nor an unmeasurable movie should sink the
+        // whole listing: both are shown, without their dimensions.
+        let (width, height, seconds) = if is_video {
+            crate::video::probe(&path)
+                .map(|v| (v.width, v.height, v.seconds))
+                .unwrap_or((0, 0, 0.0))
+        } else {
+            let (w, h) = image::image_dimensions(&path).unwrap_or((0, 0));
+            (w, h, 0.0)
+        };
 
         items.push(LibraryItem {
             name: path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default(),
@@ -676,6 +702,8 @@ pub fn list_library(app: AppHandle) -> CmdResult<Vec<LibraryItem>> {
             size: meta.len(),
             width,
             height,
+            video: is_video,
+            seconds,
         });
     }
 
@@ -761,11 +789,29 @@ pub fn library_thumbnail(path: String, max: u32) -> CmdResult<String> {
         return Ok(dest.to_string_lossy().into_owned());
     }
 
+    if crate::video::is_video(source) {
+        // A movie's poster frame comes from QuickLook at the size asked for,
+        // so there is nothing left to resize. See `video::poster`.
+        crate::video::poster(source, &dest, max)?;
+        return Ok(dest.to_string_lossy().into_owned());
+    }
+
     let image = image::open(source).map_err(|e| e.to_string())?;
     // `thumbnail` preserves aspect ratio and is much cheaper than a full resize.
     image.thumbnail(max, max).save(&dest).map_err(|e| e.to_string())?;
 
     Ok(dest.to_string_lossy().into_owned())
+}
+
+/// Hand a file to whatever the system opens it with.
+///
+/// For recordings: there is nothing to annotate in a movie, so double-clicking
+/// one in the library sends it to QuickTime Player — or to whatever the user
+/// has told macOS they prefer — rather than into an editor built for pictures.
+#[tauri::command]
+pub fn open_externally(app: AppHandle, path: String) -> CmdResult<()> {
+    use tauri_plugin_opener::OpenerExt;
+    app.opener().open_path(path, None::<&str>).map_err(|e| e.to_string())
 }
 
 /// Move captures to the Trash rather than deleting them outright, so a

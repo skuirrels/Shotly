@@ -459,8 +459,45 @@ records until the machine is turned off.
 recording rather than having to dodge the region the way the scrolling-capture
 HUD does.
 
-Recordings are filed straight in the library folder as `.mov` and are not
-listed in the library grid, which reads images only.
+**The page asks for its phase; it does not wait to be told.** Recording the
+whole screen opens a window that is a panel from birth and says so
+milliseconds before the page exists to hear it. Relying on that event put the
+full-screen selection overlay inside a 232-point window — a clipped prompt with
+nothing pressable, over a recording that had already started. `record_phase` is
+the pull; the event still covers the overlay-becomes-panel handover, where the
+page is very much alive.
+
+The editor is hidden for the whole recording — it would otherwise be *in* it —
+so saving presents it again (`commands::present_editor`) and the toast has
+somewhere to land. Without that the feature was indistinguishable from one that
+does nothing at all, which is exactly how it was reported.
+
+### Movies in the library (`video.rs`)
+
+Recordings are listed beside the captures. Two things the image crate cannot
+answer, both handled without a new dependency:
+
+* **Size and duration** are read from the file's own `moov` atom — `mvhd` for
+  the running time, the first `trak`'s `tkhd` for the display size. Only atom
+  headers are read on the way there, which matters when the file is a hundred
+  megabytes and the library lists it on every refresh. The `tkhd` field offsets
+  are the part to get right: the first attempt was four bytes out, the synthetic
+  test agreed with the mistake, and a real movie was what caught it. That test
+  now spells the layout out.
+* **The poster frame** comes from `qlmanage -t`, so it is the same picture
+  Finder shows, at the size asked for, with no codec decisions of ours. It
+  lands in the same mtime-keyed thumbnail cache as everything else, so it is
+  generated once per recording.
+
+Double-clicking a recording opens it in whatever plays movies
+(`commands::open_externally`). **Playing it inline would need two things it does
+not have**: a `media-src` in the CSP (`tauri.conf.json` lists only `img-src`, so
+an `asset:` video is refused), and `$DOCUMENT/**` in the asset protocol scope —
+the library lives there, and only `$TEMP` and friends are allowed today, which
+is why thumbnails resolve and the movie itself would not.
+
+The recents rail filters movies out. It sits beside the editor and every row in
+it is one click from being annotated; a row that cannot do that reads as broken.
 
 ## Window level and Spaces — the rule for every overlay
 

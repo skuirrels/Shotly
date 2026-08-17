@@ -129,6 +129,13 @@ export const IconGear = (p: SVGProps<SVGSVGElement>) => (
   </Icon>
 );
 
+/** A solid play triangle, for the badge over a recording's poster frame. */
+export const IconPlay = (p: SVGProps<SVGSVGElement>) => (
+  <Icon {...p}>
+    <path d="M5.4 3.4 12.6 8l-7.2 4.6z" fill="currentColor" stroke="currentColor" />
+  </Icon>
+);
+
 /** The record button everyone knows: a filled dot in a ring. */
 export const IconRecord = (p: SVGProps<SVGSVGElement>) => (
   <Icon {...p}>

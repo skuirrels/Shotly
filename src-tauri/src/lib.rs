@@ -14,6 +14,7 @@ mod scroll;
 mod snap;
 mod platform;
 mod update;
+mod video;
 
 use capture::cli::ScreencaptureCli;
 use commands::{AppState, CaptureMode};
@@ -150,6 +151,7 @@ pub fn run() {
             commands::library_thumbnail,
             commands::trash_captures,
             commands::reveal_in_finder,
+            commands::open_externally,
             commands::copy_png_to_clipboard,
             commands::copy_files_to_clipboard,
             commands::copy_file_image_to_clipboard,
@@ -181,6 +183,7 @@ pub fn run() {
             record::record_begin,
             record::record_ready,
             record::record_beat,
+            record::record_phase,
             record::record_layout,
             record::record_windows,
             record::record_region,

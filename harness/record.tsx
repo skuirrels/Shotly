@@ -23,9 +23,7 @@ if (location.hash === "#panel") {
     "position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);width:232px;height:92px;border:0;background:transparent";
   document.body.append(frame);
 } else {
+  // No EMIT for `#hud`: the point of that case is that nothing is emitted and
+  // the page has to ask. The stub answers `record_phase` from the hash.
   createRoot(document.getElementById("root")!).render(<RecordApp />);
-
-  if (location.hash === "#hud") {
-    setTimeout(() => (window as any).EMIT("record:phase", "hud"), 50);
-  }
 }

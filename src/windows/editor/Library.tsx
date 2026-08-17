@@ -7,6 +7,7 @@ import {
   IconImage,
   IconCanvas,
   IconPin,
+  IconPlay,
   IconSearch,
   IconTrash,
 } from "@/components/icons";
@@ -16,7 +17,7 @@ import { Tooltip } from "@/components/ui/Tooltip";
 import * as ipc from "@/lib/ipc";
 import type { LibraryItem } from "@/lib/types";
 import { type Scope, groupByDate, inScope, scopeExists } from "./dates";
-import { formatSize, formatWhen } from "./format";
+import { formatDuration, formatSize, formatWhen } from "./format";
 import { LibraryFilter } from "./LibraryFilter";
 import { useThumbnail } from "./thumbnails";
 
@@ -119,6 +120,12 @@ export function Library({
         inScope(item, scope) && (needle === "" || item.name.toLowerCase().includes(needle)),
     );
   }, [items, scope, query]);
+
+  /** Path to item, so the menu can ask what kind of thing it is acting on. */
+  const byPath = useMemo(
+    () => new Map((items ?? []).map((item) => [item.path, item])),
+    [items],
+  );
 
   // A scope can outlive the captures that made it: delete the last shot of a
   // month and its row disappears from the tree, leaving the grid filtered to
@@ -227,11 +234,24 @@ export function Library({
 
   const menuItems = (targets: string[]): (MenuEntry | false)[] => {
     const many = targets.length > 1;
+    // Everything below the Open line is picture work — annotating, copying an
+    // image to the clipboard, laying several out on one canvas, pinning one to
+    // the screen. A movie can do none of it, so a selection containing one
+    // offers only what applies to it.
+    const videos = targets.filter((p) => byPath.get(p)?.video);
+    const anyVideo = videos.length > 0;
+    const allVideo = videos.length === targets.length;
+
     return [
       // Open and Reveal are single-capture actions: there is one editor pane,
       // and revealing several would spray Finder windows across the screen.
-      !many && { label: "Open", icon: <IconImage />, run: () => onOpen(targets[0]) },
-      {
+      !many && {
+        label: allVideo ? "Play" : "Open",
+        icon: allVideo ? <IconPlay /> : <IconImage />,
+        run: () =>
+          allVideo ? void ipc.openExternally(targets[0]) : onOpen(targets[0]),
+      },
+      !anyVideo && {
         label: many ? `Copy ${targets.length} captures` : "Copy",
         icon: <IconCopy />,
         run: () => onCopy(targets),
@@ -239,18 +259,18 @@ export function Library({
       // Only with something to combine *with*. The submenu is the layout,
       // because "side by side" and "stacked" are different enough answers
       // that guessing one would be wrong half the time.
-      many && "separator" as const,
-      many && {
+      many && !anyVideo && "separator" as const,
+      many && !anyVideo && {
         label: `Combine ${targets.length} side by side`,
         icon: <IconCanvas />,
         run: () => onCombine(targets, "row"),
       },
-      many && {
+      many && !anyVideo && {
         label: `Combine ${targets.length} stacked`,
         icon: <IconCanvas />,
         run: () => onCombine(targets, "column"),
       },
-      many && targets.length > 2 && {
+      many && !anyVideo && targets.length > 2 && {
         label: `Combine ${targets.length} as a grid`,
         icon: <IconCanvas />,
         run: () => onCombine(targets, "grid"),
@@ -258,7 +278,7 @@ export function Library({
       many && "separator" as const,
       // One at a time: pinning a selection of twelve would bury the screen
       // under the very thing the pins are meant to sit beside.
-      !many && {
+      !many && !anyVideo && {
         label: "Pin to screen",
         icon: <IconPin />,
         run: () => void onPin(targets[0]),
@@ -424,6 +444,9 @@ function LibraryCard({
   onMenu: (item: LibraryItem, at: { x: number; y: number }) => void;
 }) {
   const { url: thumb, failed } = useThumbnail(item.path, item.modified);
+  // A recording goes to whatever plays movies. Double-click means "open this"
+  // in both cases; what "open" means is the only thing that differs.
+  const open = () => (item.video ? void ipc.openExternally(item.path) : onOpen(item.path));
 
   return (
     // Tagged so a click anywhere else in the pane can clear the selection.
@@ -441,11 +464,11 @@ function LibraryCard({
         type="button"
         aria-pressed={selected}
         onClick={(e) => onChoose(item, { meta: e.metaKey, shift: e.shiftKey })}
-        onDoubleClick={() => onOpen(item.path)}
+        onDoubleClick={open}
         onKeyDown={(e) => {
           if (e.key === "Enter") {
             e.preventDefault();
-            onOpen(item.path);
+            open();
           }
         }}
         className={clsx(
@@ -466,16 +489,27 @@ function LibraryCard({
           ) : (
             <span className="text-[11px] text-ink-4">{failed ? "Unreadable" : ""}</span>
           )}
+
+          {/* A recording's poster frame is just a screenshot of the screen —
+              nothing about it says "this one moves". The badge does, and it
+              doubles as the hint that double-clicking will play it. */}
+          {item.video && (
+            <span className="pointer-events-none absolute inset-0 grid place-items-center">
+              <span className="grid size-9 place-items-center rounded-full bg-black/55 text-white shadow-lg backdrop-blur-[2px]">
+                <IconPlay />
+              </span>
+            </span>
+          )}
         </div>
 
         <div className="px-2.5 py-2">
           <p className="truncate text-[12px] font-medium text-ink" title={item.name}>
-            {item.name.replace(/\.(png|jpe?g)$/i, "")}
+            {item.name.replace(/\.(png|jpe?g|mov|mp4|m4v)$/i, "")}
           </p>
           {/* Never wraps: the sidebar took width off the cards, and a metadata
               line that folds onto a second row makes the grid ragged. */}
           <p className="mt-0.5 truncate font-mono text-[10.5px] tabular-nums text-ink-4">
-            {item.width} × {item.height}
+            {item.video && item.seconds > 0 ? formatDuration(item.seconds) : `${item.width} × ${item.height}`}
             <span className="mx-1.5">·</span>
             {formatSize(item.size)}
             <span className="mx-1.5">·</span>

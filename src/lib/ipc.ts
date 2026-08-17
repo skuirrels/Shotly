@@ -101,6 +101,14 @@ export const saveLibraryPath = () => invoke<string>("save_library_path");
 
 export const revealInFinder = (path: string) => invoke<void>("reveal_in_finder", { path });
 
+/**
+ * Hand a file to whatever the system opens it with.
+ *
+ * Recordings, in practice: a movie has nothing to annotate, so the library
+ * sends it to QuickTime Player rather than into an editor built for pictures.
+ */
+export const openExternally = (path: string) => invoke<void>("open_externally", { path });
+
 export const listLibrary = () => invoke<LibraryItem[]>("list_library");
 
 export const libraryThumbnail = (path: string, max = 480) =>

@@ -67,6 +67,10 @@ export interface LibraryItem {
   size: number;
   width: number;
   height: number;
+  /** A screen recording. There is nothing to annotate, so it opens elsewhere. */
+  video: boolean;
+  /** Running time of a recording, in seconds. Zero for stills. */
+  seconds: number;
 }
 
 // ------------------------------------------------------------- annotations

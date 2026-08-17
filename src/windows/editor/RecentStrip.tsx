@@ -64,7 +64,11 @@ export function RecentStrip({
     void ipc
       .listLibrary()
       .then((next) => {
-        if (ticket === request.current) setItems(next);
+        // Stills only. This rail sits beside the editor and everything in it
+        // is one click from being annotated; a recording can be neither, and a
+        // row that cannot do what every other row does is a row that looks
+        // broken. Recordings live in the library grid, which knows to play them.
+        if (ticket === request.current) setItems(next.filter((item) => !item.video));
       })
       .catch((e) => {
         if (ticket !== request.current) return;
