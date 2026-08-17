@@ -727,3 +727,9 @@ If you add an overlay, pick a row. Neither treatment is the default.
 
 GIF recording, and audio — `screencapture -g`/`-G` can record an input device,
 which is a different feature with its own permission prompt.
+
+Windows. [WINDOWS.md](WINDOWS.md) is the assessment and the plan: what ports
+free, what has to be built, and what shipping both platforms from one repository
+costs. Its parity rule applies from the day the port starts, not from the day it
+lands — every feature added after that point needs both halves, or a recorded
+decision that it has one.
