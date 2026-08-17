@@ -355,7 +355,12 @@ export function EditorApp() {
       try {
         const url = await ipc.driveLink(path);
         await writeText(url);
-        notify("Drive link copied — anyone with it can view", "ok", 4000);
+        // Deliberately not "anyone with it can view": Shotly cannot know
+        // whether the folder has been shared — Drive keeps no record of that
+        // on this machine — and a message claiming it would be a promise the
+        // recipient's "You need access" page then breaks.
+        setSaved(null);
+        notify("Drive link copied — it opens for others once the folder is shared", "ok", 5200);
       } catch (e) {
         notify(String(e), "error", 5200);
       } finally {

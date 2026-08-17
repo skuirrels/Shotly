@@ -651,9 +651,19 @@ Three things this has to get right:
   worth showing — backup off, not copied yet, still uploading — and nothing in
   the app depends on it working.
 
-Sharing itself stays with the user: they set the `Shotly` folder in Drive to
-"anyone with the link — Viewer" once, and everything copied in afterwards
-inherits it. Doing that per file is the one thing that would need the API.
+**Sharing is the part this cannot do, and it is worth being exact about why.**
+The index carries names, ids, parents and checksums — and *no permissions at
+all*. Drive keeps sharing on its servers, so the app can neither set it nor read
+it: a link copied here opens for the person who owns the file and shows everyone
+else "You need access" until the folder is shared. So the app never claims
+otherwise — the toast says "it opens for others once the folder is shared" — and
+Settings offers a button that resolves the folder's own id and opens it in
+Drive, which is where the switch actually is. Setting it from the app is the one
+thing that would need OAuth.
+
+That folder is resolved *through a file*, not by name, for the same reason the
+file lookup walks its chain: there are two `Shotly` folders under My Drive here,
+and a capture that is definitely in the right one names its own parent.
 
 The query has a test that builds a Drive-shaped database and runs the real
 statement against it, because a renamed column would otherwise break every link

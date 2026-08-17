@@ -4,6 +4,7 @@ import clsx from "clsx";
 import {
   IconCheck,
   IconClose,
+  IconExternal,
   IconFolder,
   IconGear,
   IconKeyboard,
@@ -210,6 +211,8 @@ function General() {
 
 function Backup() {
   const [settings, setSettings] = useState<BackupSettings | null>(null);
+  const [folderBusy, setFolderBusy] = useState(false);
+  const [folderNote, setFolderNote] = useState<string | null>(null);
   const [targets, setTargets] = useState<BackupTarget[]>([]);
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState<{ text: string; bad?: boolean } | null>(null);
@@ -225,6 +228,19 @@ function Backup() {
       setSettings(await ipc.backupConfigure(enabled, destination));
     } catch (e) {
       setNote({ text: String(e), bad: true });
+    }
+  }, []);
+
+  /** Take them to the folder in Drive, where the sharing switch actually is. */
+  const openFolder = useCallback(async () => {
+    setFolderBusy(true);
+    setFolderNote(null);
+    try {
+      await ipc.openExternally(await ipc.driveFolderLink());
+    } catch (e) {
+      setFolderNote(String(e));
+    } finally {
+      setFolderBusy(false);
     }
   }, []);
 
@@ -350,10 +366,26 @@ function Backup() {
                 megabytes.
               </p>
               <p className="mt-1.5 text-[11.5px] leading-relaxed text-ink-3">
-                For those links to open for anyone else, set the <strong className="font-medium text-ink-2">Shotly</strong>{" "}
-                folder in Google Drive to <em>Anyone with the link — Viewer</em>, once. Everything
-                copied into it after that inherits the setting.
+                A link only opens for someone else once the folder allows it. Open the{" "}
+                <strong className="font-medium text-ink-2">Shotly</strong> folder in Drive, and set
+                its sharing to <em>Anyone with the link — Viewer</em>. Once. Everything copied into
+                it afterwards inherits that, including every recording.
               </p>
+              <p className="mt-1.5 text-[11.5px] leading-relaxed text-ink-4">
+                Shotly can't do that part for you, and can't tell whether you have: Google keeps
+                sharing on its servers, not on this Mac. Setting it from here would mean connecting
+                your Google account to the app.
+              </p>
+              <button
+                type="button"
+                onClick={() => void openFolder()}
+                disabled={folderBusy}
+                className="mt-2.5 flex h-8 items-center gap-1.5 rounded-lg bg-white/[0.07] px-2.5 text-[12px] font-medium text-ink transition-colors hover:bg-white/[0.11] disabled:opacity-40"
+              >
+                <IconExternal />
+                {folderBusy ? "Finding it…" : "Open the Shotly folder in Drive"}
+              </button>
+              {folderNote && <p className="mt-2 text-[11.5px] text-danger">{folderNote}</p>}
             </div>
           )}
         </>

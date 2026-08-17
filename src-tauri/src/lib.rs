@@ -202,6 +202,7 @@ pub fn run() {
             backup::backup_configure,
             backup::backup_now,
             drive::drive_link,
+            drive::drive_folder_link,
             backup::launch_at_login,
             backup::set_launch_at_login,
             ocr::scan_image,

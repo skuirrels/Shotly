@@ -21,7 +21,7 @@ export async function invoke<T>(cmd: string, args?: Record<string, unknown>): Pr
     hotkeys.forEach((b) => (b.accelerator = b.defaultAccelerator));
     return undefined as T;
   }
-  if (cmd === "backup_settings") return { enabled: false, destination: null } as T;
+  if (cmd === "backup_settings") return backup as T;
   if (cmd === "backup_targets") {
     return [
       { label: "Google Drive", path: "/Users/harness/Google Drive/My Drive/Shotly" },
@@ -37,6 +37,7 @@ export async function invoke<T>(cmd: string, args?: Record<string, unknown>): Pr
     if (!name.endsWith(".mov")) throw new Error("That capture hasn't been backed up yet.");
     return "https://drive.google.com/file/d/HARNESSFILEID/view?usp=sharing" as T;
   }
+  if (cmd === "drive_folder_link") return "https://drive.google.com/drive/folders/HARNESSFOLDER" as T;
   if (cmd === "launch_at_login") return atLogin as T;
   if (cmd === "set_launch_at_login") {
     atLogin = Boolean(args?.enabled);
@@ -99,6 +100,12 @@ export async function invoke<T>(cmd: string, args?: Record<string, unknown>): Pr
 }
 
 let atLogin = false;
+
+/** Enabled and pointing at Drive, so the sharing panel is on screen. */
+const backup = {
+  enabled: true,
+  destination: "/Users/harness/Library/CloudStorage/GoogleDrive-you@example.com/My Drive",
+};
 
 const hotkeys = [
   ["region", "Capture region", "Drag out the part of the screen to keep.", "Ctrl+Shift+4"],

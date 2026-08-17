@@ -130,6 +130,14 @@ export const openExternally = (path: string) => invoke<void>("open_externally", 
  */
 export const driveLink = (path: string) => invoke<string>("drive_link", { path });
 
+/**
+ * A link to the Drive folder the backup writes into.
+ *
+ * Where you go to set "anyone with the link can view" — the one part of this
+ * Shotly cannot do for you without a connected Google account.
+ */
+export const driveFolderLink = () => invoke<string>("drive_folder_link");
+
 export const launchAtLogin = () => invoke<boolean>("launch_at_login");
 export const setLaunchAtLogin = (enabled: boolean) =>
   invoke<boolean>("set_launch_at_login", { enabled });

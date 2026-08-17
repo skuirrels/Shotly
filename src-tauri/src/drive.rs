@@ -36,11 +36,14 @@ const INDEX: &str = "metadata_sqlite_db";
 const MAX_DEPTH: usize = 12;
 
 /// One row of the parent walk: the same file, at one level of its chain.
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 struct Rung {
+    /// The file the walk started from — the same on every rung of one chain.
     id: String,
     depth: usize,
     name: String,
+    /// The Drive id of *this* rung: the file at depth 0, its folder at 1.
+    own_id: String,
 }
 
 /// Every signed-in account's index, newest first is not meaningful — all are
@@ -75,18 +78,19 @@ fn quote(value: &str) -> String {
 /// real one, which is why it is not worth copying the file first.
 fn walk(index: &Path, name: &str) -> Result<Vec<Rung>, String> {
     let sql = format!(
-        "WITH RECURSIVE up(stable_id, id, depth, name) AS (
-             SELECT stable_id, id, 0, local_title FROM items
+        "WITH RECURSIVE up(stable_id, id, depth, name, own_id) AS (
+             SELECT stable_id, id, 0, local_title, id FROM items
               WHERE local_title = {name} AND trashed = 0 AND is_folder = 0
              UNION ALL
              SELECT p.parent_stable_id,
                     up.id,
                     up.depth + 1,
-                    (SELECT local_title FROM items WHERE stable_id = p.parent_stable_id)
+                    (SELECT local_title FROM items WHERE stable_id = p.parent_stable_id),
+                    (SELECT id FROM items WHERE stable_id = p.parent_stable_id)
                FROM up JOIN stable_parents p ON p.item_stable_id = up.stable_id
               WHERE up.depth < {MAX_DEPTH}
          )
-         SELECT id, depth, name FROM up WHERE name IS NOT NULL;",
+         SELECT id, depth, name, own_id FROM up WHERE name IS NOT NULL;",
         name = quote(name),
     );
 
@@ -121,7 +125,8 @@ fn parse(stdout: &str) -> Vec<Rung> {
             let id = parts.next()?.to_string();
             let depth = parts.next()?.parse().ok()?;
             let name = parts.next()?.to_string();
-            (!id.is_empty()).then_some(Rung { id, depth, name })
+            let own_id = parts.next()?.to_string();
+            (!id.is_empty()).then_some(Rung { id, depth, name, own_id })
         })
         .collect()
 }
@@ -133,14 +138,14 @@ fn parse(stdout: &str) -> Vec<Rung> {
 /// directly under My Drive, and the backup writes to one of them. Matching on
 /// the name alone would be a coin toss, and a link to the wrong file is worse
 /// than no link — so an ambiguous answer returns nothing.
-fn matching(rungs: Vec<Rung>, expected: &[String]) -> Option<String> {
+fn matching(rungs: Vec<Rung>, expected: &[String]) -> Option<Vec<Rung>> {
     let mut by_id: std::collections::HashMap<String, Vec<Rung>> = std::collections::HashMap::new();
     for rung in rungs {
         by_id.entry(rung.id.clone()).or_default().push(rung);
     }
 
-    let mut found: Option<String> = None;
-    for (id, mut chain) in by_id {
+    let mut found: Option<Vec<Rung>> = None;
+    for (_, mut chain) in by_id {
         chain.sort_by_key(|r| r.depth);
         // Rung 0 is the file itself; the folders start above it.
         let folders: Vec<&str> = chain.iter().skip(1).map(|r| r.name.as_str()).collect();
@@ -150,7 +155,7 @@ fn matching(rungs: Vec<Rung>, expected: &[String]) -> Option<String> {
         if found.is_some() {
             return None;
         }
-        found = Some(id);
+        found = Some(chain);
     }
     found
 }
@@ -199,7 +204,8 @@ pub async fn drive_link(app: AppHandle, path: String) -> Result<String, String> 
 
     tauri::async_runtime::spawn_blocking(move || {
         for index in indexes(&home) {
-            if let Some(id) = matching(walk(&index, &name)?, &expected) {
+            if let Some(chain) = matching(walk(&index, &name)?, &expected) {
+                let id = &chain[0].own_id;
                 return Ok(format!("https://drive.google.com/file/d/{id}/view?usp=sharing"));
             }
         }
@@ -207,6 +213,62 @@ pub async fn drive_link(app: AppHandle, path: String) -> Result<String, String> 
             "Google Drive hasn't finished uploading that one yet. Give it a moment and try again."
                 .into(),
         )
+    })
+    .await
+    .map_err(|e| format!("the lookup failed: {e}"))?
+}
+
+/// A link to the folder the backup writes into, for setting its sharing once.
+///
+/// Found through a file rather than by name, and that is not fussiness: this
+/// machine has two folders called `Shotly` directly under My Drive, so a search
+/// by name is ambiguous by construction. A capture that is definitely *in* the
+/// right one names its own parent, which cannot be.
+#[tauri::command]
+pub async fn drive_folder_link(app: AppHandle) -> Result<String, String> {
+    let settings = crate::backup::load(&app);
+    let destination = settings
+        .destination
+        .filter(|_| settings.enabled)
+        .ok_or("Turn on Backup in Settings first.")?;
+
+    let destination = PathBuf::from(destination);
+    if !destination.to_string_lossy().contains("GoogleDrive") {
+        return Err("The backup folder is not in Google Drive.".into());
+    }
+
+    // Any backed-up capture will do; the newest is the likeliest to have
+    // finished uploading.
+    let folder = destination.join(crate::backup::FOLDER);
+    let mut names: Vec<String> = std::fs::read_dir(&folder)
+        .map_err(|_| "Nothing has been backed up yet — run Back Up Now first.".to_string())?
+        .flatten()
+        .filter(|e| e.path().is_file())
+        .filter_map(|e| e.file_name().to_str().map(str::to_string))
+        .filter(|n| !n.starts_with('.'))
+        .collect();
+    names.sort();
+    names.reverse();
+    if names.is_empty() {
+        return Err("Nothing has been backed up yet — run Back Up Now first.".into());
+    }
+
+    let home = app.path().home_dir().map_err(|e| format!("no home directory: {e}"))?;
+    let expected = expected_chain(&destination, crate::backup::FOLDER);
+
+    tauri::async_runtime::spawn_blocking(move || {
+        for index in indexes(&home) {
+            for name in &names {
+                if let Some(chain) = matching(walk(&index, name)?, &expected) {
+                    // Rung 1 is the folder the file sits in — the one to share.
+                    if let Some(rung) = chain.get(1) {
+                        let id = &rung.own_id;
+                        return Ok(format!("https://drive.google.com/drive/folders/{id}"));
+                    }
+                }
+            }
+        }
+        Err("Google Drive hasn't finished uploading these yet. Give it a moment.".into())
     })
     .await
     .map_err(|e| format!("the lookup failed: {e}"))?
@@ -227,18 +289,23 @@ mod tests {
 
     #[test]
     fn rows_that_are_not_three_fields_are_ignored() {
-        let rows = "abc\u{1}0\u{1}shot.png\nrubbish\n\u{1}1\u{1}Shotly\nabc\u{1}1\u{1}Shotly\n";
+        let rows = "abc\u{1}0\u{1}shot.png\u{1}abc\nrubbish\n\u{1}1\u{1}Shotly\u{1}f\nabc\u{1}1\u{1}Shotly\u{1}folder\n";
         assert_eq!(
             parse(rows),
             vec![
-                Rung { id: "abc".into(), depth: 0, name: "shot.png".into() },
-                Rung { id: "abc".into(), depth: 1, name: "Shotly".into() },
+                Rung { id: "abc".into(), depth: 0, name: "shot.png".into(), own_id: "abc".into() },
+                Rung { id: "abc".into(), depth: 1, name: "Shotly".into(), own_id: "folder".into() },
             ],
         );
     }
 
     fn rung(id: &str, depth: usize, name: &str) -> Rung {
-        Rung { id: id.into(), depth, name: name.into() }
+        Rung { id: id.into(), depth, name: name.into(), own_id: format!("{id}-{depth}") }
+    }
+
+    /// The file's own id, for the tests that only care which chain won.
+    fn leaf(found: Option<Vec<Rung>>) -> Option<String> {
+        found.map(|chain| chain[0].own_id.clone())
     }
 
     /// The case a real Drive presented: two folders of the same name, one of
@@ -254,7 +321,17 @@ mod tests {
             rung("other", 2, "My Drive"),
         ];
         let expected = vec!["Shotly".to_string(), "My Drive".to_string()];
-        assert_eq!(matching(rungs, &expected), Some("wanted".to_string()));
+        assert_eq!(leaf(matching(rungs, &expected)), Some("wanted-0".to_string()));
+
+        // And the rung above it is the folder — what `drive_folder_link` sends
+        // you to in order to share the lot in one go.
+        let again = vec![
+            rung("wanted", 0, "clip.mov"),
+            rung("wanted", 1, "Shotly"),
+            rung("wanted", 2, "My Drive"),
+        ];
+        let chain = matching(again, &expected).expect("a chain");
+        assert_eq!(chain[1].own_id, "wanted-1");
     }
 
     /// Two files that both fit the description is not a reason to pick one.
@@ -314,7 +391,12 @@ mod tests {
 
         let rungs = walk(&db, "clip.mov").expect("the query should run");
         let expected = vec!["Shotly".to_string(), "My Drive".to_string()];
-        assert_eq!(matching(rungs, &expected), Some("FILEID".to_string()));
+        let chain = matching(rungs, &expected).expect("the file's chain");
+        assert_eq!(chain[0].own_id, "FILEID");
+        // The folder to share, resolved through the file rather than by name —
+        // there are two called Shotly in this fixture, exactly as in the real
+        // Drive this was written against.
+        assert_eq!(chain[1].own_id, "folderB");
 
         // A name nobody has is not an error, it is an empty answer.
         assert!(matching(walk(&db, "absent.png").expect("query"), &expected).is_none());
