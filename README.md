@@ -110,6 +110,13 @@ A few things worth knowing:
   everything except the part that matters.
 - **Callouts** are boxes you type into; the text colour follows the fill so the
   words stay readable whatever colour you choose.
+- **Neon** (<kbd>⇧N</kbd>, or the switch beside the colour) draws a callout as a
+  lit sign: a bright edge, a glow around it, white text on a darkened tint of
+  your colour. It reads over a bright screenshot as well as a dark one, which a
+  plain translucent box does not. The colour picker has a row of neon inks
+  underneath the usual nine, and choosing one turns the switch on for you.
+  Rectangles and ellipses take the same switch and become a glowing ring —
+  no fill, so whatever you are circling still shows through.
 - **Pick colour** copies the hex under the pointer to the clipboard as well as
   setting your ink — usually you wanted it for a stylesheet.
 - **Measure** draws a dimension line with the distance on it. Drag roughly

@@ -106,6 +106,7 @@ const DEFAULT_STYLE: Style = {
   blurRadius: 12,
   dim: 0.55,
   shadow: true,
+  neon: false,
   measureUnits: "pt",
 };
 

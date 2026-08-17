@@ -1023,6 +1023,15 @@ export function EditorApp() {
         enabled: hasDoc,
         run: () => s().setStyle({ shadow: !s().style.shadow }),
       },
+      {
+        id: "style.neon",
+        title: "Toggle neon",
+        group: "Style",
+        shortcut: "Shift+N",
+        keywords: "glow lit sign bright border callout box label",
+        enabled: hasDoc,
+        run: () => s().setStyle({ neon: !s().style.neon }),
+      },
 
       // ---------------------------------------------------------- arrange
       {

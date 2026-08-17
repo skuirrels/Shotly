@@ -2,6 +2,9 @@ import { invoke } from "@tauri-apps/api/core";
 import {
   arrowPolygon,
   calloutLayout,
+  neonBorderForFont,
+  neonPaint,
+  neonRadius,
   contrastInk,
   FONT_STACK,
   fontFor,
@@ -218,6 +221,31 @@ function shadowScale(ctx: CanvasRenderingContext2D): number {
   return Math.hypot(a, b) || 1;
 }
 
+/**
+ * Stroke twice through a coloured shadow: the neon glow.
+ *
+ * The mirror of `glow()` in `AnnotationLayer`, and it has to stay one — a tight
+ * halo and a wide one, in the shape's own colour. `shadowBlur` is in device
+ * pixels and ignores the transform, exactly as the backdrop's shadow does, so
+ * it is scaled by hand or a halved export would come back with a glow twice the
+ * size it should be.
+ */
+function withGlow(
+  ctx: CanvasRenderingContext2D,
+  color: string,
+  blur: number,
+  stroke: () => void,
+) {
+  const scale = shadowScale(ctx);
+  ctx.save();
+  ctx.shadowColor = color;
+  ctx.shadowBlur = blur * scale;
+  stroke();
+  ctx.shadowBlur = blur * 2 * scale;
+  stroke();
+  ctx.restore();
+}
+
 function withShadow(ctx: CanvasRenderingContext2D, on: boolean, draw: () => void) {
   ctx.save();
   if (on) {
@@ -351,8 +379,12 @@ function drawAnnotation(
 
   switch (a.kind) {
     case "rect":
-      withShadow(ctx, a.style.shadow, () => {
-        const r = Math.min(4, b.width / 2, b.height / 2);
+      // A lit edge instead of a cast shadow, matching the preview — see the
+      // `neon` branch in `AnnotationLayer`.
+      withShadow(ctx, a.style.shadow && !a.style.neon, () => {
+        const r = a.style.neon
+          ? neonRadius(b.width, b.height)
+          : Math.min(4, b.width / 2, b.height / 2);
         ctx.beginPath();
         ctx.roundRect(b.x, b.y, b.width, b.height, r);
         if (fillOpacity > 0) {
@@ -363,12 +395,15 @@ function drawAnnotation(
         }
         ctx.strokeStyle = color;
         ctx.lineWidth = strokeWidth;
+        if (a.style.neon) {
+          withGlow(ctx, color, neonPaint(color, strokeWidth).glow, () => ctx.stroke());
+        }
         ctx.stroke();
       });
       break;
 
     case "ellipse":
-      withShadow(ctx, a.style.shadow, () => {
+      withShadow(ctx, a.style.shadow && !a.style.neon, () => {
         ctx.beginPath();
         ctx.ellipse(
           b.x + b.width / 2,
@@ -387,6 +422,9 @@ function drawAnnotation(
         }
         ctx.strokeStyle = color;
         ctx.lineWidth = strokeWidth;
+        if (a.style.neon) {
+          withGlow(ctx, color, neonPaint(color, strokeWidth).glow, () => ctx.stroke());
+        }
         ctx.stroke();
       });
       break;
@@ -431,16 +469,45 @@ function drawAnnotation(
 
     case "callout": {
       const { lines, lineHeight } = calloutLayout(a.text ?? "", a.style.fontSize, b.width);
+      const paint = neonPaint(color, neonBorderForFont(a.style.fontSize));
 
-      withShadow(ctx, a.style.shadow, () => {
+      if (a.style.neon) {
+        // The four layers of `neonPaint`, in its order. The border is inset by
+        // half its width because a canvas stroke straddles the path, and the
+        // SVG rect it has to match is inset for the same reason.
+        const r = neonRadius(b.width, b.height);
+        ctx.save();
         ctx.beginPath();
-        ctx.roundRect(b.x, b.y, b.width, b.height, Math.min(10, b.width / 2, b.height / 2));
-        ctx.fillStyle = color;
+        ctx.roundRect(b.x, b.y, b.width, b.height, r);
+        ctx.fillStyle = paint.scrim;
         ctx.fill();
-      });
+        ctx.fillStyle = paint.tint;
+        ctx.fill();
+
+        ctx.beginPath();
+        ctx.roundRect(
+          b.x + paint.border / 2,
+          b.y + paint.border / 2,
+          Math.max(0, b.width - paint.border),
+          Math.max(0, b.height - paint.border),
+          Math.max(0, r - paint.border / 2),
+        );
+        ctx.strokeStyle = color;
+        ctx.lineWidth = paint.border;
+        withGlow(ctx, color, paint.glow, () => ctx.stroke());
+        ctx.stroke();
+        ctx.restore();
+      } else {
+        withShadow(ctx, a.style.shadow, () => {
+          ctx.beginPath();
+          ctx.roundRect(b.x, b.y, b.width, b.height, Math.min(10, b.width / 2, b.height / 2));
+          ctx.fillStyle = color;
+          ctx.fill();
+        });
+      }
 
       ctx.save();
-      ctx.fillStyle = contrastInk(color);
+      ctx.fillStyle = a.style.neon ? paint.ink : contrastInk(color);
       ctx.font = fontFor(a.style.fontSize);
       ctx.textAlign = "center";
       ctx.textBaseline = "middle";

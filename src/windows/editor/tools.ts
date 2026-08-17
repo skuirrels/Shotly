@@ -68,6 +68,28 @@ export const SWATCHES = [
   { name: "Black", value: "#1C1C1E" },
 ];
 
+/**
+ * The neon inks.
+ *
+ * A second row rather than a replacement: these are chosen to survive being
+ * lit — saturated, bright, and far enough apart in hue to stay distinct once
+ * each is glowing — which makes several of them poor choices for a hairline
+ * arrow. The nine above stay the palette for everything else.
+ *
+ * No ⌘-digit shortcuts: the digits belong to the row above, and shadowing them
+ * on whichever tool happens to be in hand would be worse than a two-click trip
+ * to the picker.
+ */
+export const NEON_SWATCHES = [
+  { name: "Hot pink", value: "#FF3EA5" },
+  { name: "Electric blue", value: "#4D6BFF" },
+  { name: "Cyan", value: "#22E0FF" },
+  { name: "Amber", value: "#FFB020" },
+  { name: "Lime", value: "#7CFF3E" },
+  { name: "Violet", value: "#A855F7" },
+  { name: "Ice", value: "#CFE6FF" },
+];
+
 export const STROKE_PRESETS = [2, 4, 6, 10, 16];
 export const FONT_PRESETS = [16, 20, 24, 32, 48];
 
@@ -81,6 +103,8 @@ export function styleControlsFor(kind: ToolId | string): {
   color: boolean;
   /** The px/pt switch, which only a measurement has any use for. */
   units: boolean;
+  /** The neon switch — shapes that can be drawn as a lit sign. */
+  neon: boolean;
 } {
   const none = {
     stroke: false,
@@ -90,6 +114,7 @@ export function styleControlsFor(kind: ToolId | string): {
     dim: false,
     color: false,
     units: false,
+    neon: false,
   };
 
   switch (kind) {
@@ -98,7 +123,7 @@ export function styleControlsFor(kind: ToolId | string): {
     // No stroke or fill control: a callout *is* its fill, and the text colour
     // follows from it automatically so the words stay legible on any swatch.
     case "callout":
-      return { ...none, font: true, color: true };
+      return { ...none, font: true, color: true, neon: true };
     case "blur":
       return { ...none, blur: true };
     case "highlight":
@@ -111,7 +136,7 @@ export function styleControlsFor(kind: ToolId | string): {
       return { ...none, stroke: true, color: true };
     case "rect":
     case "ellipse":
-      return { ...none, stroke: true, fill: true, color: true };
+      return { ...none, stroke: true, fill: true, color: true, neon: true };
     case "arrow":
     case "line":
     case "pen":

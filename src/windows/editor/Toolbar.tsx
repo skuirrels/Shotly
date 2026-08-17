@@ -4,9 +4,17 @@ import { Kbd } from "@/components/ui/Kbd";
 import { Popover } from "@/components/ui/Popover";
 import { Tooltip } from "@/components/ui/Tooltip";
 import type { Style } from "@/lib/types";
+import { withAlpha } from "@/lib/shapes";
 import { MAX_STROKE, MIN_STROKE, useEditor } from "@/state/editorStore";
 import { OverlayPicker } from "./OverlayPicker";
-import { FONT_PRESETS, STROKE_PRESETS, SWATCHES, TOOLS, styleControlsFor } from "./tools";
+import {
+  FONT_PRESETS,
+  NEON_SWATCHES,
+  STROKE_PRESETS,
+  SWATCHES,
+  TOOLS,
+  styleControlsFor,
+} from "./tools";
 
 /**
  * The floating tool palette.
@@ -101,6 +109,37 @@ export function Toolbar({ currentPath, onNotify }: Props) {
             onChange={setFontSize}
             render={() => <span className="text-[13px] font-semibold">Aa</span>}
           />
+        )}
+
+        {/* Beside the colour and the size, because that is what it is: a way
+            of drawing the colour you already picked. The swatch inside the
+            button glows when it is on, so the button shows the effect rather
+            than only naming it. */}
+        {controls.neon && (
+          <Tooltip label="Neon" shortcut="Shift+N" side="top">
+            <button
+              type="button"
+              aria-label="Neon"
+              aria-pressed={style.neon}
+              onClick={() => setStyle({ neon: !style.neon })}
+              className={clsx(
+                "no-drag grid h-[30px] w-[30px] place-items-center rounded-lg transition-colors duration-100",
+                style.neon ? "bg-white/[0.06]" : "text-ink-2 hover:bg-hover hover:text-ink",
+              )}
+            >
+              <span
+                className="size-[15px] rounded-[5px] border-2 transition-shadow"
+                style={{
+                  borderColor: style.color,
+                  background: style.neon ? withAlpha(style.color, 0.3) : "transparent",
+                  boxShadow: style.neon
+                    ? `0 0 6px ${style.color}, 0 0 12px ${style.color}`
+                    : undefined,
+                  opacity: style.neon ? 1 : 0.55,
+                }}
+              />
+            </button>
+          </Tooltip>
         )}
 
         {controls.blur && (
@@ -238,6 +277,44 @@ function ColorControl({
                   <span
                     className="size-[19px] rounded-full ring-1 ring-white/20 ring-inset"
                     style={{ background: s.value }}
+                  />
+                </button>
+              </Tooltip>
+            );
+          })}
+        </div>
+
+        {/* The neon row. Drawn as lit chips rather than flat dots: these are
+            the colours that look wrong flat and right glowing, and picking one
+            out of a row of plain circles tells you nothing about that. */}
+        <p className="mt-3 mb-1.5 text-[10px] font-semibold tracking-wider text-ink-4 uppercase">
+          Neon
+        </p>
+        <div className="grid grid-cols-5 gap-1.5">
+          {NEON_SWATCHES.map((s) => {
+            const active = s.value.toLowerCase() === style.color.toLowerCase();
+            return (
+              <Tooltip key={s.value} label={s.name}>
+                <button
+                  type="button"
+                  aria-label={s.name}
+                  // Picking a neon ink turns neon on, on the tools that have
+                  // it. Choosing "Hot pink" and getting a flat pink box would
+                  // be the picker showing you one thing and drawing another.
+                  onClick={() => onChange({ color: s.value, neon: true })}
+                  className={clsx(
+                    "grid h-8 place-items-center rounded-lg transition-transform duration-100",
+                    "hover:scale-105 active:scale-95",
+                    active && "ring-2 ring-accent",
+                  )}
+                >
+                  <span
+                    className="size-[19px] rounded-full"
+                    style={{
+                      background: withAlpha(s.value, 0.35),
+                      border: `2px solid ${s.value}`,
+                      boxShadow: `0 0 6px ${s.value}, 0 0 12px ${s.value}`,
+                    }}
                   />
                 </button>
               </Tooltip>

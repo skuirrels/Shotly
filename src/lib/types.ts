@@ -134,6 +134,16 @@ export interface Style {
   dim: number;
   shadow: boolean;
   /**
+   * Draw this shape as a lit sign: a bright edge, a glow spilling off it, and
+   * a washed-down fill behind whatever the shape holds.
+   *
+   * A property of the shape rather than a tool of its own, so a callout you
+   * have already dragged out and typed into can become one — and so the same
+   * switch lights a bare rectangle or ellipse, where it draws the edge and no
+   * fill. See `neonPaint` for what the four layers are.
+   */
+  neon: boolean;
+  /**
    * What a measurement counts in.
    *
    * A Retina capture holds two pixels for every point that was on screen, so

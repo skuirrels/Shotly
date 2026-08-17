@@ -201,6 +201,82 @@ export function calloutLayout(
   return { lines, lineHeight, needed: lines.length * lineHeight + CALLOUT_PADDING * 2 };
 }
 
+// ------------------------------------------------------------------- neon
+
+/** A hex colour laid down at an opacity, so one swatch can paint three layers. */
+export function withAlpha(hex: string, alpha: number): string {
+  const raw = hex.replace("#", "");
+  const full =
+    raw.length === 3
+      ? raw
+          .split("")
+          .map((c) => c + c)
+          .join("")
+      : raw;
+  const [r, g, b] = [0, 2, 4].map((i) => parseInt(full.slice(i, i + 2), 16) || 0);
+  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+}
+
+export interface NeonPaint {
+  /** Near-black wash under the tint. See below — this is the legibility half. */
+  scrim: string;
+  /** The swatch colour, thin, over the scrim. */
+  tint: string;
+  /** The bright edge, in the swatch colour at full strength. */
+  border: number;
+  /** How far the light spills past that edge. */
+  glow: number;
+  /** Text on a neon fill is always white; the scrim is what guarantees it. */
+  ink: string;
+}
+
+/**
+ * The recipe for a neon box, in one place because two renderers draw it.
+ *
+ * Four layers, in order: a near-black scrim, a thin wash of the colour, the
+ * bright border, and the glow spilling off it. Anything that changes here has
+ * to change once — the SVG in the editor and the Canvas2D on export both read
+ * these numbers, and a neon box that exports differently from its preview is
+ * the one bug this whole module exists to prevent.
+ *
+ * **The scrim is not decoration.** A translucent tint alone looks right over
+ * the dark screenshots these boxes were designed against and turns white text
+ * into pale-on-pale over a bright one — and a screenshot tool cannot know
+ * which it is about to be dropped on. Washing the area down first means the
+ * ink is white against something dark whatever is underneath, which is why the
+ * ink here is a constant rather than `contrastInk`.
+ */
+export function neonPaint(color: string, border: number): NeonPaint {
+  const width = Math.max(2, border);
+  return {
+    scrim: "rgba(9, 10, 13, 0.62)",
+    tint: withAlpha(color, 0.3),
+    border: width,
+    glow: Math.max(6, width * 3),
+    ink: "#FFFFFF",
+  };
+}
+
+/**
+ * How thick a neon border is on a box whose only size control is its type.
+ *
+ * A callout has no stroke slider — see `styleControlsFor` — so the edge takes
+ * its weight from the text it surrounds, the same way the padding does.
+ */
+export const neonBorderForFont = (fontSize: number) => Math.max(2, fontSize * 0.09);
+
+/**
+ * A neon box is rounder than a plain callout.
+ *
+ * The reference these were drawn from is a lozenge, and at the callout's flat
+ * cap of 10px a large box reads as a rectangle with a lit edge rather than as
+ * a sign. Still clamped to half the shorter side, or a small box turns into a
+ * pill without being asked to.
+ */
+export function neonRadius(width: number, height: number): number {
+  return Math.min(width / 2, height / 2, Math.max(10, height * 0.2));
+}
+
 /**
  * Black or white text, whichever survives on this fill.
  *

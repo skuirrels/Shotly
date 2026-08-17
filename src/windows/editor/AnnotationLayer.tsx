@@ -8,6 +8,9 @@ import {
   freehandPath,
   measureGeometry,
   measureText,
+  neonBorderForFont,
+  neonPaint,
+  neonRadius,
   polygonToPath,
   stepFontSize,
   TEXT_PADDING,
@@ -108,6 +111,23 @@ export function AnnotationLayer({
           />
         ))}
     </svg>
+  );
+}
+
+/**
+ * The glow, as a CSS filter.
+ *
+ * Two drop-shadows rather than one: a tight halo that reads as the edge being
+ * bright, and a wide one that reads as light in the air around it. A single
+ * pass gives you one or the other. CSS filter lengths on an SVG element are in
+ * user units, so this scales with the zoom and matches the export, where the
+ * canvas does the same thing with `shadowBlur` — see `withGlow` in `export.ts`.
+ */
+function glow(style: Annotation["style"]): string {
+  const paint = neonPaint(style.color, style.strokeWidth);
+  return (
+    `drop-shadow(0 0 ${paint.glow}px ${style.color}) ` +
+    `drop-shadow(0 0 ${paint.glow * 2}px ${style.color})`
   );
 }
 
@@ -292,12 +312,21 @@ function Shape({ a, doc, hidden }: { a: Annotation; doc: Doc; hidden: boolean })
           y={b.y}
           width={b.width}
           height={b.height}
-          rx={Math.min(4, b.width / 2, b.height / 2)}
+          rx={
+            a.style.neon
+              ? neonRadius(b.width, b.height)
+              : Math.min(4, b.width / 2, b.height / 2)
+          }
           fill={a.style.fillOpacity > 0 ? a.style.color : "transparent"}
           fillOpacity={a.style.fillOpacity}
           stroke={a.style.color}
           strokeWidth={a.style.strokeWidth}
-          filter={shadow}
+          // A lit edge instead of a cast shadow: the two fight, and a sign
+          // that also drops a shadow reads as a sticker rather than a light.
+          // No scrim under a bare rectangle either — a ring drawn round part
+          // of a screenshot must not wash down the thing it is ringing.
+          filter={a.style.neon ? undefined : shadow}
+          style={a.style.neon ? { filter: glow(a.style) } : undefined}
         />
       );
 
@@ -312,7 +341,8 @@ function Shape({ a, doc, hidden }: { a: Annotation; doc: Doc; hidden: boolean })
           fillOpacity={a.style.fillOpacity}
           stroke={a.style.color}
           strokeWidth={a.style.strokeWidth}
-          filter={shadow}
+          filter={a.style.neon ? undefined : shadow}
+          style={a.style.neon ? { filter: glow(a.style) } : undefined}
         />
       );
 
@@ -378,22 +408,53 @@ function Shape({ a, doc, hidden }: { a: Annotation; doc: Doc; hidden: boolean })
 
     case "callout": {
       const { lines, lineHeight } = calloutLayout(a.text ?? "", a.style.fontSize, b.width);
-      const ink = contrastInk(a.style.color);
+      const paint = neonPaint(a.style.color, neonBorderForFont(a.style.fontSize));
+      const ink = a.style.neon ? paint.ink : contrastInk(a.style.color);
       // Centred in the box rather than run from the top: a callout is usually
       // two or three words, and left-aligned short text in a wide box reads as
       // a mistake.
       const first = b.y + b.height / 2 - ((lines.length - 1) * lineHeight) / 2;
 
+      const radius = a.style.neon
+        ? neonRadius(b.width, b.height)
+        : Math.min(10, b.width / 2, b.height / 2);
+
       return (
-        <g filter={shadow}>
-          <rect
-            x={b.x}
-            y={b.y}
-            width={b.width}
-            height={b.height}
-            rx={Math.min(10, b.width / 2, b.height / 2)}
-            fill={a.style.color}
-          />
+        <g filter={a.style.neon ? undefined : shadow}>
+          {a.style.neon ? (
+            // Four layers, in the order `neonPaint` describes them: the scrim
+            // that keeps white text readable over any screenshot, a wash of
+            // the colour over it, then the lit edge carrying the glow. Only
+            // the edge glows — a glowing fill would smear the words.
+            <>
+              <rect x={b.x} y={b.y} width={b.width} height={b.height} rx={radius} fill={paint.scrim} />
+              <rect x={b.x} y={b.y} width={b.width} height={b.height} rx={radius} fill={paint.tint} />
+              <rect
+                x={b.x + paint.border / 2}
+                y={b.y + paint.border / 2}
+                width={Math.max(0, b.width - paint.border)}
+                height={Math.max(0, b.height - paint.border)}
+                rx={Math.max(0, radius - paint.border / 2)}
+                fill="none"
+                stroke={a.style.color}
+                strokeWidth={paint.border}
+                style={{
+                  filter:
+                    `drop-shadow(0 0 ${paint.glow}px ${a.style.color}) ` +
+                    `drop-shadow(0 0 ${paint.glow * 2}px ${a.style.color})`,
+                }}
+              />
+            </>
+          ) : (
+            <rect
+              x={b.x}
+              y={b.y}
+              width={b.width}
+              height={b.height}
+              rx={radius}
+              fill={a.style.color}
+            />
+          )}
           {!hidden && (
             <text
               x={b.x + b.width / 2}

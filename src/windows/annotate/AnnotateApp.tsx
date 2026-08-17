@@ -1387,7 +1387,8 @@ function StrokeShape({ stroke, hitArea = false }: { stroke: Stroke; hitArea?: bo
               blurRadius: 0,
               dim: 0,
               shadow: false,
-            measureUnits: "pt",
+              neon: false,
+              measureUnits: "pt",
             },
           }),
         )}

@@ -543,6 +543,40 @@ Everything else is in the component:
   test clip. What it cannot reach is the asset protocol, which is exactly the
   half that the two config lines above govern — check that in the app.
 
+## Neon — one recipe, two renderers
+
+The lit boxes are a `Style` flag, not a tool: a callout you have already dragged
+out and typed into can become one, and the same switch turns a rectangle or an
+ellipse into a glowing ring. What they look like lives in **one** function,
+`neonPaint` in `shapes.ts`, because two renderers draw it and a glow is the
+easiest thing in this codebase to get subtly different — CSS `drop-shadow` and
+canvas `shadowBlur` are not the same primitive. `harness/neon.html` draws the
+same shapes through both, one above the other, so a drift shows up as two boxes
+that do not match.
+
+Two things there are load-bearing:
+
+* **The scrim.** A neon box is four layers — near-black wash, thin colour wash,
+  bright border, glow — and the wash is not decoration. Tint alone looks right
+  over the dark screenshots the style was designed against and turns white text
+  into pale-on-pale over a bright one, and a capture tool cannot know which it
+  is about to be dropped on. With the scrim, the ink is a constant `#FFFFFF`
+  rather than `contrastInk`. Measured over a bright blue screenshot, the fill
+  comes out at luma 66/255 — white text on it is about 9:1.
+
+  A bare neon rect or ellipse gets **no** scrim, deliberately: it is a ring
+  drawn around something, and washing down the thing you are pointing at would
+  defeat it.
+
+* **`shadowBlur` ignores the transform.** Same trap as the backdrop's shadow —
+  see `shadowScale`. `withGlow` scales by hand, or a halved export comes back
+  with a glow at twice the size it should be.
+
+The neon inks are a second row in the picker rather than a replacement, and
+picking one switches neon on: a swatch that shows you a lit chip and then draws
+a flat box is the picker lying about what it does. They carry no ⌘-digit
+shortcuts, which stay with the original nine.
+
 ## Window level and Spaces — the rule for every overlay
 
 A window created while a full-screen app is in front belongs to the **desktop**

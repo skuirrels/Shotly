@@ -46,8 +46,14 @@ export interface MarkupDoc {
  * does the expanded canvas, most of all: an older build would read the wider
  * crop, fail to draw anything in the part with no capture behind it, and hand
  * back a picture with a hole in it.
+ *
+ * 8 added the neon style. An older build reading it would find a `neon` flag it
+ * has no branch for, ignore it, and draw a flat opaque callout where a lit sign
+ * with a translucent fill belongs — the same shape in the same place, saying
+ * something else. That is a different picture, so it earns the bump like the
+ * rest.
  */
-const VERSION = 7;
+const VERSION = 8;
 
 export function serialize(doc: Omit<MarkupDoc, "version">): string {
   return JSON.stringify({ version: VERSION, ...doc });
