@@ -487,7 +487,19 @@ answer, both handled without a new dependency:
 * **The poster frame** comes from `qlmanage -t`, so it is the same picture
   Finder shows, at the size asked for, with no codec decisions of ours. It
   lands in the same mtime-keyed thumbnail cache as everything else, so it is
-  generated once per recording.
+  generated once per recording — and once more, in the background, the moment a
+  recording is saved, because the next thing that happens is usually the grid
+  opening.
+
+  **`library_thumbnail` is `async` and that is load-bearing.** A synchronous
+  `#[tauri::command]` runs on the main thread — see the `Blocking` default in
+  tauri-macros' `wrapper.rs` — and this one shells out to QuickLook, measured at
+  3.1 seconds the first time after login. The library asks for one per card as
+  the editor opens, so with a recording in the library that was a frozen
+  interface on every launch, reported as "hangs on startup". The work now goes
+  through `spawn_blocking`, and `qlmanage` itself is given a deadline and killed
+  if it overruns: it is somebody else's process, backed by a daemon, and a
+  thumbnail is not worth waiting on for ever.
 
 Double-clicking a recording opens it in whatever plays movies
 (`commands::open_externally`). **Playing it inline would need two things it does

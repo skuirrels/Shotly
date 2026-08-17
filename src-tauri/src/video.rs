@@ -12,6 +12,9 @@ use std::process::Command;
 /// Extensions the library treats as movies.
 pub const EXTENSIONS: [&str; 3] = ["mov", "mp4", "m4v"];
 
+/// How long QuickLook may take over one poster frame.
+const TIMEOUT: std::time::Duration = std::time::Duration::from_secs(20);
+
 pub fn is_video(path: &Path) -> bool {
     path.extension()
         .and_then(|e| e.to_str())
@@ -84,15 +87,20 @@ fn find_atom(
         }
 
         // A size that does not advance would spin here for ever; a size past
-        // the end is a truncated file. Neither is worth guessing through.
-        if size < 8 || at + size > to {
+        // the end is a truncated file. Neither is worth guessing through — and
+        // the addition is checked because a recording that was interrupted
+        // mid-write is exactly the file most likely to claim an atom the size
+        // of the address space, where `at + size` would wrap and pass a plain
+        // comparison. That spin would be on the main thread.
+        let next = at.checked_add(size).filter(|end| *end <= to)?;
+        if size < 8 {
             return None;
         }
 
         if kind == want {
-            return Some((body, at + size - body));
+            return Some((body, next - body));
         }
-        at += size;
+        at = next;
     }
     None
 }
@@ -141,13 +149,14 @@ fn scan<'a>(body: &'a [u8], want: &[u8; 4]) -> Option<&'a [u8]> {
     while at + 8 <= body.len() {
         let size = u32::from_be_bytes(body[at..at + 4].try_into().ok()?) as usize;
         let kind = &body[at + 4..at + 8];
-        if size < 8 || at + size > body.len() {
+        let next = at.checked_add(size).filter(|end| *end <= body.len())?;
+        if size < 8 {
             return None;
         }
         if kind == want {
-            return body.get(at + 8..at + size);
+            return body.get(at + 8..next);
         }
-        at += size;
+        at = next;
     }
     None
 }
@@ -168,29 +177,62 @@ fn be64(bytes: &[u8], at: usize) -> Option<u64> {
 /// the capture layer. It writes `<name>.png` beside wherever it is pointed, so
 /// it is pointed at a directory of its own and the result moved into place.
 pub fn poster(source: &Path, dest: &Path, max: u32) -> Result<(), String> {
+    // A directory of its own per call, not per process: thumbnails are asked
+    // for concurrently now that they are off the main thread, and this one is
+    // deleted when it is done — a shared one would be deleted out from under
+    // whichever poster was still being written into it.
     let scratch = dest
         .parent()
         .ok_or("no cache directory")?
-        .join(format!("ql-{}", std::process::id()));
+        .join(format!(
+            "ql-{}",
+            dest.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default()
+        ));
     std::fs::create_dir_all(&scratch).map_err(|e| e.to_string())?;
 
-    let status = Command::new("/usr/bin/qlmanage")
+    let mut child = Command::new("/usr/bin/qlmanage")
         .args(["-t", "-s", &max.to_string(), "-o"])
         .arg(&scratch)
         .arg(source)
-        .output()
+        // No pipes: `output()` waits for the pipes to close rather than for the
+        // process to end, and QuickLook is a daemon-backed thing whose helpers
+        // can outlive the command. Whether it worked is answered by whether the
+        // file appeared, which needs no output at all.
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
         .map_err(|e| format!("could not run qlmanage: {e}"))?;
+
+    // A deadline, because this is somebody else's process. It normally takes
+    // well under a second — three seconds the first time after login, while
+    // QuickLook warms up — and a thumbnail is never worth waiting longer than
+    // this for.
+    let deadline = std::time::Instant::now() + TIMEOUT;
+    let finished = loop {
+        match child.try_wait() {
+            Ok(Some(_)) => break true,
+            Ok(None) if std::time::Instant::now() < deadline => {
+                std::thread::sleep(std::time::Duration::from_millis(25));
+            }
+            Ok(None) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                break false;
+            }
+            Err(_) => break false,
+        }
+    };
 
     let name = source.file_name().ok_or("no file name")?;
     let produced = scratch.join(format!("{}.png", name.to_string_lossy()));
 
     if !produced.exists() {
         let _ = std::fs::remove_dir_all(&scratch);
-        let stderr = String::from_utf8_lossy(&status.stderr).trim().to_string();
-        return Err(if stderr.is_empty() {
+        return Err(if finished {
             "QuickLook produced no thumbnail".into()
         } else {
-            stderr
+            "QuickLook took too long over the thumbnail".into()
         });
     }
 

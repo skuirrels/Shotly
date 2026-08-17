@@ -765,7 +765,27 @@ pub fn capture_window(app: AppHandle, window_id: u32) -> CmdResult<CaptureResult
 }
 
 #[tauri::command]
-pub fn library_thumbnail(path: String, max: u32) -> CmdResult<String> {
+pub async fn library_thumbnail(path: String, max: u32) -> CmdResult<String> {
+    // `async`, and this is not decoration: a synchronous `#[tauri::command]`
+    // runs on the main thread, and this one decodes images and — for a
+    // recording — shells out to QuickLook, which measured 3.1 seconds the
+    // first time after launch while the whole interface sat frozen. The
+    // library asks for one of these per card the moment the editor opens, so
+    // that was a hang on startup for anyone with a recording in their library.
+    tauri::async_runtime::spawn_blocking(move || thumbnail(path, max))
+        .await
+        .map_err(|e| format!("the thumbnail task failed: {e}"))?
+}
+
+/// Generate a capture's thumbnail ahead of anybody asking for it.
+///
+/// The size matches what the library requests, or the cache key would not
+/// match and the work would be done twice. See `libraryThumbnail` in ipc.ts.
+pub fn warm_thumbnail(path: &str) -> CmdResult<String> {
+    thumbnail(path.to_string(), 480)
+}
+
+fn thumbnail(path: String, max: u32) -> CmdResult<String> {
     use std::hash::{Hash, Hasher};
 
     let source = std::path::Path::new(&path);

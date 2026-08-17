@@ -534,6 +534,17 @@ fn finish(app: &AppHandle, keep: bool) -> Result<Option<String>, String> {
 
     let stem = crate::commands::stamped_stem("Recording");
     let path = crate::commands::move_into_library(app, &session.path, &stem, "mov")?;
+
+    // Ask for the poster frame now, while nobody is waiting for it. The library
+    // would otherwise generate it the first time the grid is opened — which is
+    // usually the next thing that happens, and QuickLook takes its time.
+    let warm = path.clone();
+    std::thread::spawn(move || {
+        if let Err(err) = crate::commands::warm_thumbnail(&warm) {
+            eprintln!("[shotly] no poster frame for the recording yet: {err}");
+        }
+    });
+
     Ok(Some(path))
 }
 
