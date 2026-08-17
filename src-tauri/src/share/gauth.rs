@@ -491,6 +491,25 @@ mod tests {
     /// before anything could read it, so the app showed "could not reach
     /// Google: http status: 400" for a request that had reached Google and been
     /// answered. The exchange now asks for the body regardless of status.
+    /// Widening this scope is close to irreversible, so it is pinned.
+    ///
+    /// Google's OAuth user cap — 100 accounts, for the lifetime of the project,
+    /// unresettable — binds as soon as an app requests an *unapproved sensitive
+    /// or restricted* scope. `drive.file` is non-sensitive, so the cap shown in
+    /// the Cloud console does not apply to Shotly and the shared links
+    /// themselves are unaffected either way (whoever opens one never signs in).
+    ///
+    /// Asking for `drive`, `drive.readonly`, Gmail or Calendar would start the
+    /// counter, permanently, on a project that cannot be cleaned up afterwards.
+    /// If a future feature genuinely needs more, that is a decision to take
+    /// deliberately and probably in a fresh project — not something to discover
+    /// from a support thread at user 101.
+    #[test]
+    fn the_scope_stays_the_non_sensitive_one() {
+        assert_eq!(SCOPE, "https://www.googleapis.com/auth/drive.file");
+        assert!(!SCOPE.ends_with("/drive"), "the wide Drive scope is restricted");
+    }
+
     /// The store has to survive a round trip, because it is now the only copy
     /// of a sign-in — there is no keychain to fall back on.
     #[test]
