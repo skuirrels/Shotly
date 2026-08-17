@@ -216,6 +216,17 @@ cheat sheet. Adding a command wires up all four.
 Global hotkeys are on **Ctrl**+Shift+3/4/5 rather than Cmd+Shift, because macOS
 already owns the Cmd variants for its own screenshot tools.
 
+They are the user's to change, in **Settings → Hotkeys** — `GlobalHotkeys.tsx`
+recording the combination, `hotkeys.rs` registering it and writing it to
+`hotkeys.json` in the app config directory. The tray and the Shotly menu both
+open that tab through `request_settings`, because the editor window is usually
+hidden and its ⌘, cannot be pressed from a window you cannot see. Both menu
+items land in the tray's `on_menu_event`: Tauri hands every menu event to every
+registered listener, app menu and tray alike.
+
+The ⌘/ sheet lists the global hotkeys read-only and links here. Two panels that
+can both record the same key is one panel too many.
+
 ## Two keys that cannot be tested from a script
 
 Worth knowing before you go hunting for a bug that isn't there.

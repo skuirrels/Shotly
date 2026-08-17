@@ -207,14 +207,20 @@ saving and reopening.
 
 ## Changing the keys
 
-<kbd>⌘/</kbd> → **System-wide**. Click any shortcut and press a new combination.
-It takes effect immediately.
+**Settings → Hotkeys** — from the menu bar icon, the Shotly menu, or
+<kbd>⌘,</kbd>. Click any shortcut and press a new combination. It takes effect
+immediately, with no restart.
 
 Worth knowing: macOS lets two programs claim the same key combination without
 telling either one, and whichever is listening closest to the hardware wins. If
 a shortcut seems dead, something else on your Mac has taken it. **Press it while
 that panel is open — the row lights up when the key reaches Shotly.** If it
 never lights up, pick a different combination.
+
+macOS keeps <kbd>⌘⇧3</kbd>, <kbd>⌘⇧4</kbd> and <kbd>⌘⇧5</kbd> for its own
+screenshot tools, which is why Shotly ships on <kbd>⌃⇧</kbd>. To hand those keys
+to Shotly, switch them off in System Settings first — there's a button on the
+Hotkeys tab that opens the right pane.
 
 ---
 
@@ -229,7 +235,8 @@ never lights up, pick a different combination.
 <kbd>[</kbd> <kbd>]</kbd> smaller/larger · <kbd>F</kbd> fill ·
 <kbd>⇧S</kbd> shadow · <kbd>⌘]</kbd> <kbd>⌘[</kbd> forward/backward ·
 <kbd>⏎</kbd> apply crop · <kbd>⌘=</kbd> <kbd>⌘−</kbd> zoom ·
-<kbd>⌘0</kbd> fit · <kbd>⌘1</kbd> actual size · <kbd>⌘L</kbd> back to library
+<kbd>⌘0</kbd> fit · <kbd>⌘1</kbd> actual size · <kbd>⌘L</kbd> back to library ·
+<kbd>⌘,</kbd> settings
 
 **Drawing on the screen:** tool letters as above · <kbd>1</kbd>–<kbd>6</kbd>
 colours · <kbd>[</kbd> <kbd>]</kbd> size · <kbd>D</kbd> move the toolbar ·

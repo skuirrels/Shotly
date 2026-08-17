@@ -20,6 +20,8 @@ export function assetUrl(path: string): string {
 export const capturePermissionStatus = () => invoke<boolean>("capture_permission_status");
 export const requestCapturePermission = () => invoke<boolean>("request_capture_permission");
 export const openScreenRecordingSettings = () => invoke<void>("open_screen_recording_settings");
+/** System Settings → Keyboard → Keyboard Shortcuts, where macOS's own screenshot keys live. */
+export const openKeyboardSettings = () => invoke<void>("open_keyboard_settings");
 export const restartApp = () => invoke<void>("restart_app");
 
 export const beginCapture = (mode: CaptureMode) => invoke<void>("begin_capture", { mode });

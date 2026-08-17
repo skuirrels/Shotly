@@ -1,8 +1,10 @@
+import { useEffect, useState } from "react";
 import { Kbd } from "@/components/ui/Kbd";
 import { IconClose } from "@/components/icons";
 import { IconButton } from "@/components/ui/IconButton";
+import * as ipc from "@/lib/ipc";
 import type { Command, CommandGroup } from "@/lib/keys/types";
-import { GlobalHotkeys } from "./GlobalHotkeys";
+import type { HotkeyBinding } from "@/lib/types";
 
 const ORDER: CommandGroup[] = ["Tools", "Edit", "Style", "Arrange", "View", "Capture", "Export"];
 
@@ -31,7 +33,15 @@ const NOTES: string[] = [
  * The full keymap, generated from the same command list that binds the keys —
  * so it can't fall out of date with what the app actually does.
  */
-export function ShortcutSheet({ commands, onClose }: { commands: Command[]; onClose: () => void }) {
+export function ShortcutSheet({
+  commands,
+  onEditHotkeys,
+  onClose,
+}: {
+  commands: Command[];
+  onEditHotkeys: () => void;
+  onClose: () => void;
+}) {
   const groups = ORDER.map((group) => ({
     group,
     items: commands.filter((c) => c.group === group && c.shortcut && !c.hidden),
@@ -54,8 +64,10 @@ export function ShortcutSheet({ commands, onClose }: { commands: Command[]; onCl
 
         <div className="grid grid-cols-1 gap-x-8 gap-y-5 overflow-y-auto p-4 sm:grid-cols-2">
           {/* First, because these are the only ones that are the user's to
-              change — and the only ones another app can quietly steal. */}
-          <GlobalHotkeys />
+              change — and the only ones another app can quietly steal. Changed
+              in Settings, not here: this sheet is a reference, and a panel you
+              can type into is a poor thing to read a keymap off. */}
+          <SystemWide onEdit={onEditHotkeys} />
 
           {groups.map(({ group, items }) => (
             <section key={group}>
@@ -108,5 +120,52 @@ export function ShortcutSheet({ commands, onClose }: { commands: Command[]; onCl
         </div>
       </div>
     </div>
+  );
+}
+
+/**
+ * The hotkeys that work with any app in front, as they stand right now.
+ *
+ * Read from Rust rather than from the command list: these are the user's to
+ * change, so nothing hard-coded here could stay true.
+ */
+function SystemWide({ onEdit }: { onEdit: () => void }) {
+  const [bindings, setBindings] = useState<HotkeyBinding[] | null>(null);
+
+  useEffect(() => {
+    void ipc.hotkeysList().then(setBindings).catch(() => setBindings([]));
+  }, []);
+
+  if (!bindings) return null;
+
+  return (
+    <section className="sm:col-span-2">
+      <div className="mb-1.5 flex items-baseline justify-between gap-4">
+        <h3 className="text-[11px] font-semibold tracking-wider text-ink-4 uppercase">
+          System-wide
+        </h3>
+        <button type="button" onClick={onEdit} className="text-[11px] text-ink-4 hover:text-ink-2">
+          Change these…
+        </button>
+      </div>
+
+      <dl className="grid gap-x-8 gap-y-0.5 sm:grid-cols-2">
+        {bindings.map((b) => (
+          <div
+            key={b.action}
+            className="flex items-center justify-between gap-4 rounded-md px-1.5 py-1 hover:bg-white/[0.04]"
+          >
+            <dt className="truncate text-[12.5px] text-ink-2">{b.label}</dt>
+            <dd className="shrink-0">
+              {b.accelerator ? (
+                <Kbd shortcut={b.accelerator} />
+              ) : (
+                <span className="text-[11px] text-ink-4">Off</span>
+              )}
+            </dd>
+          </div>
+        ))}
+      </dl>
+    </section>
   );
 }

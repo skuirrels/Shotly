@@ -120,6 +120,7 @@ pub fn run() {
             commands::capture_permission_status,
             commands::request_capture_permission,
             commands::open_screen_recording_settings,
+            commands::open_keyboard_settings,
             commands::restart_app,
             commands::begin_capture,
             commands::cancel_capture,
@@ -227,7 +228,8 @@ pub fn run() {
         .expect("error while running Shotly");
 }
 
-/// Swap the About item for one that says which build is running.
+/// Swap the About item for one that says which build is running, and put
+/// Settings where macOS users already reach for it.
 ///
 /// Surgery on the default menu rather than a menu of our own: the default
 /// carries the whole standard set — Services, Hide Others, and an Edit menu
@@ -241,6 +243,14 @@ fn build_menu(app: &tauri::AppHandle) -> tauri::Result<()> {
         let about = PredefinedMenuItem::about(app, None, Some(about_metadata(app)))?;
         app_menu.remove_at(0)?;
         app_menu.insert(&about, 0)?;
+
+        // Directly under About, separated — the slot every Mac app puts it in,
+        // ⌘, and all. The editor answers ⌘, itself as well, but only while it
+        // has focus, and this menu item claims the key for the whole app.
+        let sep = PredefinedMenuItem::separator(app)?;
+        let settings = MenuItem::with_id(app, "settings", "Settings…", true, Some("Cmd+,"))?;
+        app_menu.insert(&sep, 1)?;
+        app_menu.insert(&settings, 2)?;
     }
 
     app.set_menu(menu)?;
@@ -308,6 +318,10 @@ fn tray_menu(app: &tauri::AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
         None::<&str>,
     )?;
     let updates = MenuItem::with_id(app, "update", "Check for Updates…", true, None::<&str>)?;
+    // The way to the hotkeys from here, which is where anyone whose key has
+    // gone missing will look: the editor window is often hidden, and its own
+    // ⌘, is no use from a window you cannot see.
+    let settings = MenuItem::with_id(app, "tray-settings", "Settings…", true, None::<&str>)?;
     let sep = PredefinedMenuItem::separator(app)?;
     let quit = MenuItem::with_id(app, "quit", "Quit Shotly", true, Some("Cmd+Q"))?;
 
@@ -317,6 +331,7 @@ fn tray_menu(app: &tauri::AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
     if !crate::ax::trusted() {
         items.push(&accessibility);
     }
+    items.push(&settings);
     items.push(&updates);
     items.push(&quit);
 
@@ -383,6 +398,14 @@ fn build_tray(app: &tauri::AppHandle) -> tauri::Result<()> {
             "annotate" => {
                 if let Err(err) = annotate::toggle(app) {
                     eprintln!("[shotly] annotation toggle failed: {err}");
+                }
+            }
+            // Both menus land here: Tauri hands every menu event to every
+            // registered handler, tray or app menu, so this one closure is the
+            // whole dispatch. The ids differ only to keep them tellable apart.
+            "settings" | "tray-settings" => {
+                if let Err(err) = commands::request_settings(app, "hotkeys") {
+                    eprintln!("[shotly] could not open settings: {err}");
                 }
             }
             "stop-annotate" => annotate::stop(app),

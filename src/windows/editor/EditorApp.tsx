@@ -45,7 +45,7 @@ import { CommandPalette } from "./CommandPalette";
 import { EmptyLibrary, PermissionNotice } from "./EmptyState";
 import { Library } from "./Library";
 import { RecentStrip } from "./RecentStrip";
-import { Settings } from "./Settings";
+import { Settings, type SettingsTab } from "./Settings";
 import { WindowPicker } from "./WindowPicker";
 import { ShortcutSheet } from "./ShortcutSheet";
 import { ScanResult } from "./ScanResult";
@@ -77,7 +77,8 @@ export function EditorApp() {
   const doc = useEditor((s) => s.doc);
   const [palette, setPalette] = useState(false);
   const [sheet, setSheet] = useState(false);
-  const [settings, setSettings] = useState(false);
+  /** Which Settings tab is showing, or `null` while the dialog is closed. */
+  const [settings, setSettings] = useState<SettingsTab | null>(null);
   /**
    * The window picker, opened by window capture.
    *
@@ -226,10 +227,17 @@ export function EditorApp() {
     // brings this window forward and hands the choosing back to us.
     const pickUnlisten = listen("editor:pick-window", () => setPicking((n) => n + 1));
 
+    // The menu bar and the app menu both ask for Settings this way, having
+    // first brought this window back from wherever it was hidden.
+    const settingsUnlisten = listen<SettingsTab>("editor:settings", (event) =>
+      setSettings(event.payload ?? "hotkeys"),
+    );
+
     return () => {
       void openUnlisten.then((fn) => fn());
       void errorUnlisten.then((fn) => fn());
       void pickUnlisten.then((fn) => fn());
+      void settingsUnlisten.then((fn) => fn());
     };
   }, [notify, describe]);
 
@@ -1156,9 +1164,9 @@ export function EditorApp() {
         group: "View",
         shortcut: "Mod+,",
         icon: <IconGear />,
-        keywords: "preferences backup google drive dropbox copy folder",
+        keywords: "preferences hotkeys shortcuts keys backup google drive dropbox copy folder",
         allowWhileTyping: true,
-        run: () => setSettings(true),
+        run: () => setSettings("hotkeys"),
       },
       {
         id: "capture.pin",
@@ -1399,9 +1407,18 @@ export function EditorApp() {
       <UpdateNotice status={updates.status} onCheck={updates.check} onDismiss={updates.dismiss} />
 
       {palette && <CommandPalette commands={commands} onClose={() => setPalette(false)} />}
-      {sheet && <ShortcutSheet commands={commands} onClose={() => setSheet(false)} />}
+      {sheet && (
+        <ShortcutSheet
+          commands={commands}
+          onEditHotkeys={() => {
+            setSheet(false);
+            setSettings("hotkeys");
+          }}
+          onClose={() => setSheet(false)}
+        />
+      )}
 
-      {settings && <Settings onClose={() => setSettings(false)} />}
+      {settings && <Settings tab={settings} onClose={() => setSettings(null)} />}
 
       {picking > 0 && (
         <WindowPicker

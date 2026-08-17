@@ -131,6 +131,20 @@ pub fn open_screen_recording_settings(app: AppHandle) -> CmdResult<()> {
         .map_err(|e| e.to_string())
 }
 
+/// The Keyboard Shortcuts pane, where macOS's own screenshot keys are turned
+/// off — the one thing that has to happen elsewhere before ⌘⇧4 can be recorded
+/// as a Shotly hotkey.
+#[tauri::command]
+pub fn open_keyboard_settings(app: AppHandle) -> CmdResult<()> {
+    use tauri_plugin_opener::OpenerExt;
+    app.opener()
+        .open_url(
+            "x-apple.systempreferences:com.apple.preference.keyboard?Shortcuts",
+            None::<&str>,
+        )
+        .map_err(|e| e.to_string())
+}
+
 // -------------------------------------------------------------- capture entry
 
 /// Run an interactive capture and hand the result to the editor.
@@ -224,6 +238,21 @@ pub fn request_window_pick(app: &AppHandle) -> CmdResult<()> {
     editor.show().map_err(|e| e.to_string())?;
     editor.set_focus().map_err(|e| e.to_string())?;
     app.emit_to("editor", "editor:pick-window", ()).map_err(|e| e.to_string())
+}
+
+/// Bring the editor forward with Settings open on one of its tabs.
+///
+/// The way in from the menu bar, which is where someone whose hotkey has been
+/// stolen by another app has to start: the editor window may well be hidden,
+/// and its own ⌘, cannot be reached from a window you cannot see.
+pub fn request_settings(app: &AppHandle, tab: &str) -> CmdResult<()> {
+    let editor = app.get_webview_window("editor").ok_or("editor window missing")?;
+    *app.state::<AppState>().hid_editor.lock().unwrap() = false;
+    platform::set_accessory_mode(app, false);
+    editor.show().map_err(|e| e.to_string())?;
+    editor.set_focus().map_err(|e| e.to_string())?;
+    app.emit_to("editor", "editor:settings", tab)
+        .map_err(|e| e.to_string())
 }
 
 /// Abandon an in-flight capture and restore the editor.

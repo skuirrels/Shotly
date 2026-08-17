@@ -90,7 +90,12 @@ function record(e: KeyboardEvent): Recorded {
   return { kind: "accelerator", value: [...mods, token].join("+") };
 }
 
-export function GlobalHotkeys() {
+/**
+ * `onRecording` says when a row is listening for a combination. The dialog
+ * around this needs to know: while a row is recording, Escape means "stop
+ * recording" and must not also be read as "close the dialog".
+ */
+export function GlobalHotkeys({ onRecording }: { onRecording?: (active: boolean) => void }) {
   const [bindings, setBindings] = useState<HotkeyBinding[] | null>(null);
   const [recording, setRecording] = useState<HotkeyAction | null>(null);
   const [error, setError] = useState<{ action: HotkeyAction; message: string } | null>(null);
@@ -103,6 +108,13 @@ export function GlobalHotkeys() {
   );
 
   useEffect(refresh, [refresh]);
+
+  useEffect(() => {
+    onRecording?.(recording !== null);
+    // Recording cannot outlive this list: an unmount mid-record has to hand
+    // the key back, or Escape stays swallowed with nothing listening for it.
+    return () => onRecording?.(false);
+  }, [recording, onRecording]);
 
   // Rust says so on every hotkey it receives, whichever window has focus.
   useEffect(() => {
@@ -166,7 +178,7 @@ export function GlobalHotkeys() {
   if (!bindings) return null;
 
   return (
-    <section className="sm:col-span-2">
+    <section>
       <div className="mb-1.5 flex items-baseline justify-between gap-4">
         <h3 className="text-[11px] font-semibold tracking-wider text-ink-4 uppercase">
           System-wide

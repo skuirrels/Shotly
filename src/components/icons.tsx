@@ -129,6 +129,15 @@ export const IconGear = (p: SVGProps<SVGSVGElement>) => (
   </Icon>
 );
 
+/** A keyboard: two rows of keys and a space bar under them. */
+export const IconKeyboard = (p: SVGProps<SVGSVGElement>) => (
+  <Icon {...p}>
+    <rect x="1.4" y="3.4" width="13.2" height="9.2" rx="1.8" />
+    <path d="M4 6.2h.01M7 6.2h.01M10 6.2h.01M12.6 6.2h.01M3.4 8.8h.01M6 8.8h.01" />
+    <path d="M5.2 10.9h5.6" />
+  </Icon>
+);
+
 /**
  * A picture inside a margin: an outer frame with an inner one set well in,
  * which is exactly what a backdrop does to a capture.
