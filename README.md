@@ -105,17 +105,26 @@ and the player switches to it, so sharing or copying next picks up the short
 one. Your original is never touched.
 
 **Sending one to someone** is a link, not an attachment — a few minutes of
-screen is hundreds of megabytes. With Backup pointed at Google Drive, **Copy
-Drive link** (in the library's right-click menu, and on the player) puts a link
-to the copy in your Drive on the clipboard. Connect a Google account in
-**Settings → Backup** — one click, pick the account, done — and Shotly uploads
-the capture to a `Shotly` folder in your Drive, shares that one file, and puts
-the link on your clipboard. It can only see what it put there; the rest of your
-Drive stays invisible to it.
+screen is hundreds of megabytes. **Copy share link**, in the library's
+right-click menu and on the player, uploads that one capture and puts a working
+link on your clipboard.
 
-Without an account it still copies a link to the backed-up copy, but that one
-opens for nobody until you share the folder yourself — the same pane has a
-button that takes you there.
+Connect an account first, in **Settings → Sharing** — one click, pick the
+account, done. Google Drive is the only one today. From then on Shotly uploads
+the capture you asked to share into a `ShotlyShared` folder, shares that one
+file so the link opens for whoever you send it to, and copies the link. Without
+an account there is nothing to upload to, and it says so rather than copying a
+link that would open for nobody.
+
+Only what you deliberately share goes up: Shotly asks Google for the narrowest
+permission there is, which lets it see the files it created and nothing else.
+The rest of your Drive is invisible to it, and so is every capture you never
+pressed that button on.
+
+This is separate from **Backup** below, which is a copy of *everything* you
+capture, dropped in a folder something else syncs. The two use different
+folders on purpose — `ShotlyShared` for what you handed out, `Shotly` for the
+second copy of everything.
 
 The panel does not appear in the recording, so you can leave it where it is.
 There is no audio: this records the screen, not the room.
