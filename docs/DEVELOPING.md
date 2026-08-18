@@ -655,12 +655,16 @@ What it costs is measured, not guessed:
 | | 13 s recording | 7 min recording |
 |---|---|---|
 | `Fast` (passthrough) | 0.6 s | 0.6 s |
-| `Exact` (HEVC) | 5.9 s | **354 s** |
+| `Exact` (H.264, `encode`) | ~6 s | **334 s** |
 
-So it is asked for, never assumed. The player defaults to `Fast` and offers
-`Exact` from the very sentence that explains why the cut is being rounded —
-"to the next keyframe" is a button. A note you can act on beats a note plus a
-control somewhere else, in a row that has already been too narrow once.
+`Exact` is the **default**. It started as the opt-in — the 500× cost difference
+seemed decisive — but the surprise runs the other way around: someone reaching
+for scissors expects the cut to land where they marked it, and "it takes a
+minute" is a better surprise than "it took two seconds more than I asked and
+left a hidden tail". `Fast` is one click away in the summary — the mode note is
+a button, because a note you can act on beats a note plus a control somewhere
+else, in a row that has already been too narrow once. Choosing it makes the
+striped overshoot appear at once, so the trade is visible before it is paid.
 
 **Written by hand, not by preset.** `AVAssetExportSession` only takes named
 presets, and a preset chooses the picture as well as the codec:

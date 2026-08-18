@@ -98,27 +98,25 @@ Then choose which side goes:
 The timeline shows which it is before you commit: whatever survives stays lit,
 and what is going is dimmed.
 
-**Cut out reaches a little past the red handle**, and the timeline shows how
-far. Video is only cut cleanly at a keyframe — about one a second in a screen
-recording — and Shotly resumes a couple of keyframes beyond your mark rather
-than at the nearest one. That is deliberate: resuming any earlier would leave the last
-second of what you cut sitting in the file, invisible in every normal player but
-still there. If you are cutting something out because it should not be seen,
-this is the difference between it being gone and it being merely hidden.
+**The cut lands exactly where you marked it.** Shotly re-encodes the video to
+make that true, which takes roughly as long as the recording itself — seconds
+for a short one, a few minutes for a long one, with the button filling as it
+works. The result is an ordinary H.264 `.mov` at the same size and frame rate;
+only the frames are new, and nothing you cut survives anywhere in the file.
 
-If that extra second matters, click **to the next keyframe** in the summary and
-Shotly will cut exactly on your mark instead. It does that by encoding the video
-again rather than copying it, so it takes roughly as long as the recording
-itself — seconds for a short one, a few minutes for a long one. The result is
-still an ordinary H.264 `.mov` at the same size and frame rate; only the frames
-are new. Worth it when the mark has to be the mark, not worth waiting for
-otherwise, which is why copying is what happens unless you ask.
+If the wait matters more than the mark, click **exact, slower to write** in the
+summary and Shotly copies the video instead of re-encoding it — near-instant
+whatever the length, and lossless. The catch is that video only cuts cleanly at
+a keyframe, about one a second in a screen recording, so a quick cut runs a
+couple of seconds past your mark to the next safe spot. The timeline shows
+exactly how far with a striped stretch after the red handle, so you see the
+trade before you commit. It rounds *away* from your mark on purpose: rounding
+the other way would leave the last second of what you cut sitting in the file,
+invisible in every normal player but still there.
 
-Either way the cut is lossless and takes about as long as copying the file — a
-few seconds even on a recording of several hundred megabytes — because nothing
-is re-encoded. The result is filed beside the original as *Recording … trimmed*
-and the player switches to it, so sharing or copying next picks up the short
-one. Your original is never touched.
+Either way the result is filed beside the original as *Recording … trimmed* and
+the player switches to it, so sharing or copying next picks up the short one.
+Your original is never touched.
 
 **Sending one to someone** is a link, not an attachment — a few minutes of
 screen is hundreds of megabytes. **Copy share link**, in the library's

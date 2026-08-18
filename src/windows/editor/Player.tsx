@@ -107,13 +107,16 @@ export function Player({ movie, startAt = 0, onLeave, onClose, onTrimmed, onErro
   /** Which side of the marks goes. */
   const [mode, setMode] = useState<TrimMode>("keep");
   /**
-   * Copy the samples, or encode them again.
+   * Encode the frames again, or copy the samples.
    *
-   * Fast by default, because it is instant and lossless and the rounding it
-   * costs does not matter to most cuts. Exact is one click away, from the very
-   * sentence that explains why the rounding is there.
+   * Exact by default: the cut lands on the mark and nothing hidden survives,
+   * which is what someone reaching for scissors expects — the surprise should
+   * be "this takes a minute", not "it took two seconds more than I marked".
+   * Fast is one click away in the summary, for when the wait is the thing
+   * that matters; the striped overshoot appears the moment it is chosen, so
+   * the trade is visible before it is paid.
    */
-  const [precision, setPrecision] = useState<TrimPrecision>("fast");
+  const [precision, setPrecision] = useState<TrimPrecision>("exact");
   /**
    * Instants a segment may begin at — the recording's keyframes.
    *

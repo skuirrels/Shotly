@@ -119,7 +119,7 @@ export function TopBar({
     // stay clickable without any opt-out of their own.
     <header
       data-tauri-drag-region
-      className="titlebar-drag relative z-30 flex h-12 shrink-0 items-center gap-1 border-b border-line-subtle bg-surface pr-2.5 pl-[86px]"
+      className="titlebar-drag relative z-30 flex h-[58px] shrink-0 items-center gap-1 border-b border-line-subtle bg-surface pr-2.5 pl-[86px]"
     >
       <ViewSwitch view={view} canEdit={canEdit} canPlay={player !== null} onView={onView} />
 
@@ -367,7 +367,11 @@ function ViewSwitch({
         disabled={!enabled}
         onClick={() => onView(target)}
         className={clsx(
-          "no-drag flex h-[30px] items-center gap-1.5 rounded-md px-2.5 text-[12.5px] font-medium transition-colors",
+          // Icon over label rather than beside it. The three tabs are the
+          // app's top-level places, and stacking gives each a shape to aim at
+          // rather than a word to read — which is what the header grew for.
+          "no-drag flex h-[46px] w-[64px] flex-col items-center justify-center gap-1 rounded-md",
+          "text-[10.5px] leading-none font-medium transition-colors",
           view === target
             ? "bg-white/[0.10] text-ink"
             : "text-ink-3 hover:text-ink disabled:hover:text-ink-3",
