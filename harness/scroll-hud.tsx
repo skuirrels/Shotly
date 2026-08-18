@@ -4,16 +4,41 @@ import { ScrollApp } from "@/windows/scroll/ScrollApp";
 
 createRoot(document.getElementById("root")!).render(<ScrollApp />);
 
+/** A strip of "page", for the preview and the anchor. */
+function strip(width: number, height: number) {
+  const c = document.createElement("canvas");
+  c.width = width;
+  c.height = height;
+  const g = c.getContext("2d")!;
+  g.fillStyle = "#fff";
+  g.fillRect(0, 0, width, height);
+  g.fillStyle = "#888";
+  for (let y = 8; y < height - 8; y += 14)
+    g.fillRect(10, y, width * 0.73 + (y % 3) * 8, 6);
+  return c.toDataURL();
+}
+
 // Walk it through its phases with plausible progress.
 setTimeout(() => (window as any).EMIT("scroll:phase", "hud"), 300);
 setTimeout(() => {
-  const c = document.createElement("canvas");
-  c.width = 148; c.height = 240;
-  const g = c.getContext("2d")!;
-  g.fillStyle = "#fff"; g.fillRect(0, 0, 148, 240);
-  g.fillStyle = "#888";
-  for (let y = 8; y < 232; y += 14) g.fillRect(10, y, 108 + (y % 3) * 8, 6);
   (window as any).EMIT("scroll:progress", {
-    frames: 14, height: 4212, preview: c.toDataURL(), stalled: false,
+    frames: 14,
+    height: 4212,
+    preview: strip(148, 240),
+    stalled: false,
   });
 }, 600);
+
+// And then into the state it spends its worst moments in. Worth having in the
+// harness precisely because it is the hard one to reach in the real app — it
+// takes a scroll fast enough to break the thread — and it is the panel a user
+// reads when the capture has gone wrong, so its layout has to hold.
+setTimeout(() => {
+  (window as any).EMIT("scroll:progress", {
+    frames: 31,
+    height: 4212,
+    preview: strip(148, 240),
+    stalled: true,
+    anchor: strip(220, 46),
+  });
+}, 1600);

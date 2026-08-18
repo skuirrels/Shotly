@@ -197,16 +197,19 @@ function Hud() {
           />
         ) : (
           <p className="self-center px-4 text-center text-[12px] text-ink-4">
-            Scroll the content behind the area you chose. Any speed is fine —
-            it will say so if it loses track.
+            Scroll the content behind the area you chose. Any speed is fine — it
+            will say so if it loses track.
           </p>
         )}
       </div>
 
       <div className="shrink-0 border-t border-white/8 px-3 py-2">
-        <p className="mb-2 h-[15px] text-[11px] text-ink-4">
+        {/* One line, always: the panel is 260pt wide and this sits directly
+            above the buttons, so a string long enough to wrap lands on top of
+            them. Truncation is the guard; keeping the copy short is the fix. */}
+        <p className="mb-2 h-[15px] truncate text-[11px] text-ink-4">
           {progress?.stalled
-            ? "Waiting for the page to come back into view…"
+            ? "Waiting for the page to reappear…"
             : progress
               ? `${progress.frames} ${progress.frames === 1 ? "look" : "looks"} so far · keep scrolling`
               : "Starting…"}

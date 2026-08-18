@@ -14,6 +14,17 @@
 //! strips from the middle of the frame keeps a sticky header or footer from
 //! pinning the match at zero.
 //!
+//! There is a speed past which none of that can help: a scroll that carries
+//! the page further than one frame can bridge leaves a gap no amount of
+//! matching will close, and the only honest answer is to say so. Saying so is
+//! the harder half, because the failure is normally silent — a flick that big
+//! is over inside a single shutter interval, so there is no run of unmatchable
+//! moving frames to notice, just a screen sitting perfectly still somewhere
+//! the canvas cannot reach. That is pixel-for-pixel what a user pausing to
+//! read looks like. `Stitcher::holds_tail` is what tells the two apart, and
+//! without it a session photographs the screen for as long as the user's
+//! patience lasts while the panel says to keep scrolling.
+//!
 //! # Safety model
 //!
 //! The selection phase is a full-screen, always-on-top window that accepts the
@@ -362,8 +373,13 @@ fn find_offset(tail: &[Sig], frame: &[Sig], moving: &[bool]) -> Option<i64> {
 pub enum Push {
     /// `rows` new rows were appended.
     Appended { rows: u32 },
-    /// Nothing on screen moved. The user is reading, not scrolling.
+    /// Nothing on screen moved, and what is on screen is where the capture
+    /// ends. The user is reading, not scrolling.
     Idle,
+    /// Nothing on screen moved, and it is not the page we left off at: the
+    /// content has been carried somewhere the canvas cannot reach and parked
+    /// there. See `Stitcher::holds_tail`.
+    Adrift,
     /// The page moved, but onto ground the canvas already holds.
     Unchanged,
     /// The frame did not line up anywhere — a popup, a page change, or a
@@ -422,9 +438,11 @@ impl Stitcher {
         let moved = moving.iter().filter(|m| **m).count();
         self.prev_sigs = frame_sigs.clone();
 
-        // Nothing moved at all: the user is reading, not scrolling.
+        // Nothing moved between this frame and the last. That is the user
+        // reading rather than scrolling — but only if what they are reading is
+        // where the capture ends, so ask before assuming it.
         if moved < min_evidence(h) / 2 {
-            return Push::Idle;
+            return if self.holds_tail(&frame_sigs) { Push::Idle } else { Push::Adrift };
         }
 
         // The canvas tail the frame is matched against: its last `h` rows.
@@ -448,6 +466,25 @@ impl Stitcher {
         self.height += offset as u32;
 
         Push::Appended { rows: offset as u32 }
+    }
+
+    /// Whether what is on screen is still the bottom of the canvas.
+    ///
+    /// In a healthy session this is an invariant rather than a guess: after an
+    /// append the canvas' last rows *are* the frame that was just pushed, and
+    /// a frame that changed nothing is that same picture again. So when it
+    /// fails on a motionless screen, there is only one thing it can mean — the
+    /// page was carried past what the stitcher could bridge and left there.
+    ///
+    /// Worth stating because a still frame is otherwise indistinguishable from
+    /// a pause, and that is the whole failure: a fast enough scroll moves the
+    /// page in a single shutter interval, so there is no run of unmatchable
+    /// *moving* frames to notice — one miss, and then a screen sitting
+    /// perfectly still somewhere the capture can never reach.
+    fn holds_tail(&self, frame: &[Sig]) -> bool {
+        let tail = &self.sigs[self.sigs.len() - frame.len()..];
+        let total: f32 = frame.iter().zip(tail).map(|(a, b)| row_distance(a, b)).sum();
+        total / frame.len() as f32 <= MATCH_THRESHOLD
     }
 
     pub fn into_image(self) -> Option<RgbaImage> {
@@ -883,6 +920,12 @@ fn run_session(
                         // Reading, not scrolling. Says nothing either way, so
                         // it must not clear a stall the user has not fixed.
                         Push::Idle => {}
+                        // Still, and parked out of reach. The commonest way
+                        // this feature fails — one flick past what a frame can
+                        // bridge — and before this was counted it looked
+                        // exactly like a user pausing to read: the panel said
+                        // "keep scrolling" for as long as they cared to.
+                        Push::Adrift => missed += 1,
                         // The page moved and none of it was captured. One of
                         // these is a scroll back over old ground; several in a
                         // row means the page has run away from us — which is
@@ -1033,6 +1076,26 @@ mod tests {
         let mut st = Stitcher::new(window(&page, 0, 400));
         assert_eq!(st.push(window(&page, 0, 400)), Push::Idle);
         assert_eq!(st.size().1, 400);
+    }
+
+    #[test]
+    fn a_page_parked_out_of_reach_is_not_a_pause() {
+        let page = page(320, 3000);
+        let h = 400;
+        let mut st = Stitcher::new(window(&page, 0, h));
+
+        // A flick lands somewhere the canvas cannot reach: unmatchable.
+        assert_eq!(st.push(window(&page, 1500, h)), Push::NoMatch);
+
+        // And now the hand comes off the trackpad. Every frame from here is
+        // identical to the last, which is what "the user is reading" looks
+        // like — but they are reading a part of the page the capture never
+        // saw, and calling that healthy is what leaves the session quietly
+        // photographing nothing while the panel says to keep scrolling.
+        for _ in 0..5 {
+            assert_eq!(st.push(window(&page, 1500, h)), Push::Adrift);
+        }
+        assert_eq!(st.size().1, h);
     }
 
     #[test]
