@@ -142,6 +142,29 @@ export function TrimTrack({
   /** How far a cut really reaches: its resume point, or the end of the movie. */
   const losesUntil = extentOf(mode, precision, range, syncPoints, duration);
 
+  /** True when the cut reaches past the red handle, which only Fast does. */
+  const rounding = losesUntil > range.end + 0.01;
+
+  /**
+   * Whether two labels are close enough to run into each other.
+   *
+   * A tenth of the track is about two labels wide at every window size the
+   * editor allows, so below that they are pushed to opposite sides of their
+   * marks instead of both sitting centred — which is how `0:06.9` and `0:08.1`
+   * came to be rendered as `0:06.90:08.1`.
+   */
+  const near = (a: number, b: number) =>
+    duration > 0 && (b - a) / duration < 0.1;
+  const tightSelection = near(range.start, range.end);
+  const tightRounding = rounding && near(range.end, losesUntil);
+  /**
+   * Crowded from both sides, and then three labels will not fit however they
+   * are nudged: the middle one has nowhere to go. The resume point is the one
+   * to drop — it is derived rather than set, the stripe above still shows the
+   * overshoot, and the summary still gives the number.
+   */
+  const showResume = rounding && !(tightSelection && tightRounding);
+
   /** A label's position, kept far enough inside that it is not half cut off. */
   const clamped = (seconds: number) =>
     duration > 0
@@ -239,22 +262,38 @@ export function TrimTrack({
 
         {/* The middle — the other way round. Which is the whole difference
           between the two modes, and the reason the track is worth looking at
-          before pressing the button.
-
-          In Cut it runs past the red handle to where playback really resumes.
-          Drawing it only as far as the handle would understate the cut by up
-          to two seconds, which is the kind of quiet difference that makes
-          people stop trusting a tool. */}
+          before pressing the button. This part runs handle to handle, so each
+          handle is the edge of something. */}
         <div
           className={clsx("absolute inset-y-0", surface(mode === "keep"))}
           style={{
             left: percent(range.start),
-            right: `calc(100% - ${percent(losesUntil)})`,
+            right: `calc(100% - ${percent(range.end)})`,
           }}
         />
 
+        {/* And the overshoot, drawn as its own thing rather than folded into
+            the band above.
+
+            A Fast cut cannot resume mid-keyframe, so it reaches past the red
+            handle — by up to three seconds. Drawn as one flat band with the
+            rest, the handle sat in the middle of it as the edge of nothing,
+            which reads as a bug rather than as rounding. Striped, it says what
+            it is: this is going too, and it is not something you asked for. */}
+        {rounding && (
+          <div
+            className="pointer-events-none absolute inset-y-0 opacity-70"
+            style={{
+              left: percent(range.end),
+              right: `calc(100% - ${percent(losesUntil)})`,
+              backgroundImage:
+                "repeating-linear-gradient(-45deg, var(--color-accent) 0 1px, transparent 1px 5px)",
+            }}
+          />
+        )}
+
         {/* Where the recording picks up again, when that is not the handle. */}
-        {mode === "cut" && losesUntil > range.end + 0.01 && (
+        {rounding && (
           <div
             className="pointer-events-none absolute inset-y-0 w-0.5 rounded bg-accent"
             style={{ left: percent(losesUntil) }}
@@ -297,21 +336,31 @@ export function TrimTrack({
           want to read is below your thumb. */}
       <div className="pointer-events-none relative h-3.5 pt-1 font-mono text-[9.5px] leading-none tabular-nums">
         <span
-          className="absolute -translate-x-1/2 whitespace-nowrap text-[#3ecf6a]"
+          className={clsx(
+            "absolute whitespace-nowrap text-[#3ecf6a]",
+            anchor(-1, tightSelection),
+          )}
           style={{ left: clamped(range.start) }}
         >
           {markLabel(range.start)}
         </span>
         <span
-          className="absolute -translate-x-1/2 whitespace-nowrap text-[#f2564d]"
+          className={clsx(
+            "absolute whitespace-nowrap text-[#f2564d]",
+            // Pushed off-centre away from whichever neighbour is crowding it.
+            anchor(tightSelection ? 1 : -1, tightSelection || tightRounding),
+          )}
           style={{ left: clamped(range.end) }}
         >
           {markLabel(range.end)}
         </span>
         {/* And where a Fast cut really resumes, which is not the red handle. */}
-        {losesUntil > range.end + 0.05 && (
+        {showResume && (
           <span
-            className="absolute -translate-x-1/2 whitespace-nowrap text-accent"
+            className={clsx(
+              "absolute whitespace-nowrap text-accent",
+              anchor(1, tightRounding),
+            )}
             style={{ left: clamped(losesUntil) }}
           >
             {markLabel(losesUntil)}
@@ -321,6 +370,17 @@ export function TrimTrack({
     </div>
   );
 }
+
+/**
+ * Where a label sits relative to its mark: centred, or pushed to one side.
+ *
+ * `side` is -1 for the left of the mark and 1 for the right; `pushed` decides
+ * whether it moves at all. Centred is the honest position — the label points at
+ * its own handle — so it only gives that up when the alternative is two labels
+ * printed on top of each other.
+ */
+const anchor = (side: -1 | 1, pushed: boolean) =>
+  !pushed ? "-translate-x-1/2" : side < 0 ? "-translate-x-full pr-1" : "pl-1";
 
 /**
  * How a stretch of the timeline is painted: lit if it survives, dimmed if not.

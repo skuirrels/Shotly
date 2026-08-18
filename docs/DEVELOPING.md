@@ -637,6 +637,12 @@ It costs up to three keyframe intervals — about three seconds, since
 `screencapture -v` writes a keyframe a second — so the player draws the real
 extent rather than the mark.
 
+The overshoot is drawn as its own **striped** stretch rather than folded into
+the removal band. Drawn as one flat band, the red handle sat in the middle of
+it as the edge of nothing, which reads as a bug rather than as rounding — it
+was reported as one. Handle to handle is solid, handle to resume point is
+striped, and each handle is the edge of something again.
+
 #### Or don't round at all: `Precision::Exact`
 
 The rounding is only needed because passthrough copies compressed samples. Ask
