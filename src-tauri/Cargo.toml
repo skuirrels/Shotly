@@ -39,6 +39,7 @@ arboard = { version = "3", features = ["image-data"] }
 ureq = { version = "3.4.0", default-features = false, features = ["json", "rustls"] }
 sha2 = "0.11.0"
 keyring = { version = "3", default-features = false, features = ["apple-native"] }
+objc2-core-video = "0.3"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 core-graphics = "0.25"

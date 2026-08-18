@@ -36,12 +36,22 @@
 use std::path::Path;
 
 use block2::StackBlock;
+use objc2::rc::Retained;
+use objc2::runtime::AnyObject;
 use objc2_av_foundation::{
-    AVAssetExportPresetHEVCHighestQuality, AVAssetExportPresetPassthrough, AVAssetExportSession, AVAssetExportSessionStatus, AVFileType,
-    AVFileTypeMPEG4, AVFileTypeQuickTimeMovie, AVMediaTypeVideo, AVMutableComposition, AVURLAsset,
+    AVAssetExportPresetPassthrough, AVAssetExportSession, AVAssetExportSessionStatus, AVAssetReader,
+    AVAssetReaderStatus, AVAssetReaderTrackOutput, AVAssetWriter, AVAssetWriterInput,
+    AVAssetWriterStatus, AVFileType, AVFileTypeMPEG4, AVFileTypeQuickTimeMovie, AVMediaType,
+    AVMediaTypeAudio, AVMediaTypeVideo, AVMutableComposition, AVURLAsset, AVVideoAverageBitRateKey,
+    AVVideoCodecKey, AVVideoCodecTypeH264, AVVideoCompressionPropertiesKey,
+    AVVideoExpectedSourceFrameRateKey, AVVideoHeightKey, AVVideoMaxKeyFrameIntervalDurationKey,
+    AVVideoWidthKey,
 };
 use objc2_core_media::{CMTime, CMTimeRange};
-use objc2_foundation::{NSString, NSURL};
+use objc2_core_video::{
+    kCVPixelBufferPixelFormatTypeKey, kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange,
+};
+use objc2_foundation::{NSMutableDictionary, NSNumber, NSString, NSURL};
 
 /// The timescale times are built at.
 ///
@@ -76,10 +86,13 @@ pub enum Precision {
     /// result carries no edit list and nothing hidden — verified as one
     /// segment and zero unshown frames.
     ///
-    /// It costs what encoding costs, which is not a little: 5.9 s for a
-    /// thirteen-second recording and **354 s** for a seven-minute one, against
-    /// 0.6 s either way for `Fast`. That is why it is asked for rather than
-    /// assumed.
+    /// It costs what encoding costs, which is not a little — seconds on a short
+    /// recording, minutes on a long one — which is why it is asked for rather
+    /// than assumed.
+    ///
+    /// Written through `AVAssetReader`/`AVAssetWriter` rather than an export
+    /// preset, so the result stays H.264 at the source's own size and frame
+    /// rate. See `encode`.
     Exact,
 }
 
@@ -137,30 +150,19 @@ pub fn write(
                 .map_err(|e| format!("could not assemble the recording: {}", describe(&e)))?;
         }
 
-        // HEVC rather than the H.264 preset, and measured rather than assumed:
-        // `AVAssetExportPresetHighestQuality` silently downscaled a 4096x2304
-        // recording to 3840x2160 *and* halved its frame rate, 53.7 fps down to
-        // 28.6. HEVC held both exactly. A screen recorder that quietly softens
-        // a Retina capture to shorten a cut has traded away the wrong thing.
-        let preset = match precision {
-            Precision::Fast => AVAssetExportPresetPassthrough,
-            Precision::Exact => AVAssetExportPresetHEVCHighestQuality,
-        };
-        let session =
-            AVAssetExportSession::exportSessionWithAsset_presetName(&composition, preset)
-                .ok_or("this recording cannot be shortened on this Mac")?;
-
-        // Encoding "at highest quality" pays no attention to how cheap the
-        // source was, and a screen recording is very cheap indeed — mostly
-        // still pixels. Left alone it turned a 237 MB recording into 350 MB.
-        // The budget is the share of the original the kept part represents, so
-        // it does nothing when the encode is already tighter than that and
-        // reins it in when it is not.
+        // Exact does not go through an export session at all: presets choose
+        // the picture as well as the codec, and every H.264 one degraded it.
+        // See `encode`.
         if precision == Precision::Exact {
-            if let Some(budget) = budget_for(source, keep) {
-                session.setFileLengthLimit(budget);
-            }
+            let seconds: f64 = keep.iter().map(|part| part.seconds).sum();
+            return encode(&composition, dest, bitrate_for(source), seconds, progress);
         }
+
+        let session = AVAssetExportSession::exportSessionWithAsset_presetName(
+            &composition,
+            AVAssetExportPresetPassthrough,
+        )
+        .ok_or("this recording cannot be shortened on this Mac")?;
 
         session.setOutputURL(Some(&url_for(dest)));
         session.setOutputFileType(file_type(dest));
@@ -252,18 +254,24 @@ pub fn sync_points(source: &Path) -> Vec<f64> {
     points
 }
 
-/// Roughly what the kept part of `source` occupied in it, in bytes.
+/// The bit rate to encode at: whatever the source was already using.
 ///
-/// `None` when the recording cannot be measured, which the caller reads as
-/// "no budget" — an unconstrained encode is a worse answer than a failed one.
-fn budget_for(source: &Path, keep: &[Segment]) -> Option<i64> {
-    let whole = crate::video::probe(source)?.seconds;
-    if whole <= 0.0 {
+/// Asked for explicitly because the encoder's own idea of "highest quality"
+/// pays no attention to how cheap the source was, and a screen recording is
+/// very cheap indeed — mostly still pixels. Left to choose for itself it turned
+/// a 237 MB recording into 350 MB. Matching the source keeps the result about
+/// the size of the part it came from, which is the only budget anyone has an
+/// intuition for.
+///
+/// `None` when the recording cannot be measured, and then the encoder is left
+/// to its own devices — a big file is a worse answer than a failed one.
+fn bitrate_for(source: &Path) -> Option<i32> {
+    let seconds = crate::video::probe(source)?.seconds;
+    if seconds <= 0.0 {
         return None;
     }
     let bytes = std::fs::metadata(source).ok()?.len() as f64;
-    let kept: f64 = keep.iter().map(|part| part.seconds).sum();
-    Some((bytes * (kept / whole).clamp(0.0, 1.0)) as i64)
+    Some((bytes * 8.0 / seconds) as i32)
 }
 
 /// A `file:` URL for a path, which is the only kind AVFoundation takes here.
@@ -362,4 +370,271 @@ mod tests {
     fn a_recording_with_nothing_left_in_it_is_refused() {
         assert!(write(&sample(), &scratch("shotly-compose-none.mov"), &[], Precision::Fast, &mut |_| {}).is_err());
     }
+}
+
+// ---------------------------------------------------------------- encoding
+
+/// The pixel format frames are decoded into on the way to the encoder.
+///
+/// 4:2:0 bi-planar, video range — what `screencapture` records and what the
+/// H.264 encoder wants, so nothing is converted at either end of the trip.
+const PIXEL_FORMAT: i32 = kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange as i32;
+
+/// How often the encoder is told to start a fresh keyframe, in seconds.
+///
+/// Matches what `screencapture -v` writes. Keyframes are what seeking lands on
+/// and what a later `Fast` cut has to round to, so a result that is sparser
+/// than its source would quietly make the next edit coarser.
+const KEYFRAME_SECONDS: f64 = 1.0;
+
+/// How long to wait when an input will not take more data yet.
+const BACKOFF: std::time::Duration = std::time::Duration::from_millis(2);
+
+/// Re-encode `composition` into `dest`, keeping the source's own shape.
+///
+/// The reason this exists rather than an export preset: presets choose the
+/// codec *and* the picture. `AVAssetExportPresetHighestQuality` — the only
+/// H.264 one — silently downscaled a 4096x2304 recording to 3840x2160 and
+/// halved its frame rate, 53.7 fps to 28.6. The HEVC preset held both but
+/// changed the codec, which matters for a file whose point is to be sent to
+/// somebody. Written by hand, the output is H.264 at the source's own size and
+/// frame rate, and the only thing that changes is that the frames are new.
+///
+/// Audio comes across untouched. Shotly's own recordings are silent, but the
+/// library will hold whatever is put in it, and dropping someone's audio
+/// because our recorder never makes any would be a poor way to find that out.
+unsafe fn encode(
+    composition: &AVMutableComposition,
+    dest: &Path,
+    bitrate: Option<i32>,
+    seconds: f64,
+    progress: &mut dyn FnMut(f32),
+) -> Result<(), String> {
+    let reader = AVAssetReader::assetReaderWithAsset_error(composition)
+        .map_err(|e| format!("could not read the recording: {}", describe(&e)))?;
+    let writer = AVAssetWriter::assetWriterWithURL_fileType_error(
+        &url_for(dest),
+        file_type(dest).ok_or("no container for that name")?,
+    )
+    .map_err(|e| format!("could not write the recording: {}", describe(&e)))?;
+
+    let video = first_track(composition, AVMediaTypeVideo)
+        .ok_or("that recording has no video track")?;
+    let size = video.naturalSize();
+    let rate = video.nominalFrameRate();
+
+    // Decoded frames in, compressed frames out.
+    let decoded = AVAssetReaderTrackOutput::assetReaderTrackOutputWithTrack_outputSettings(
+        &video,
+        Some(&number_settings(&[(pixel_format_key(), PIXEL_FORMAT)])),
+    );
+    decoded.setAlwaysCopiesSampleData(false);
+    reader.addOutput(&decoded);
+
+    let encoded = AVAssetWriterInput::assetWriterInputWithMediaType_outputSettings(
+        AVMediaTypeVideo.ok_or("no video media type")?,
+        Some(&video_settings(size.width as i32, size.height as i32, rate, bitrate)),
+    );
+    encoded.setExpectsMediaDataInRealTime(false);
+    writer.addInput(&encoded);
+
+    // Audio, if there is any, is copied rather than re-encoded: nil settings on
+    // both sides means the samples go across as they are.
+    let audio = first_track(composition, AVMediaTypeAudio).map(|track| {
+        let out = AVAssetReaderTrackOutput::assetReaderTrackOutputWithTrack_outputSettings(
+            &track, None,
+        );
+        out.setAlwaysCopiesSampleData(false);
+        reader.addOutput(&out);
+        let input = AVAssetWriterInput::assetWriterInputWithMediaType_outputSettings(
+            AVMediaTypeAudio.expect("audio media type"),
+            None,
+        );
+        input.setExpectsMediaDataInRealTime(false);
+        writer.addInput(&input);
+        (out, input)
+    });
+
+    if !writer.startWriting() {
+        return Err(match writer.error() {
+            Some(e) => format!("could not start writing: {}", describe(&e)),
+            None => "could not start writing the recording".into(),
+        });
+    }
+    writer.startSessionAtSourceTime(CMTime::with_seconds(0.0, TIMESCALE));
+    if !reader.startReading() {
+        return Err(match reader.error() {
+            Some(e) => format!("could not start reading: {}", describe(&e)),
+            None => "could not start reading the recording".into(),
+        });
+    }
+
+    // Both tracks are pumped in one loop rather than one after the other, so
+    // the writer interleaves them the way a player wants to read them back.
+    let mut video_done = false;
+    let mut audio_done = audio.is_none();
+    let deadline = std::time::Instant::now() + TIMEOUT;
+
+    while !video_done || !audio_done {
+        if std::time::Instant::now() >= deadline {
+            reader.cancelReading();
+            writer.cancelWriting();
+            return Err("that recording took too long to write out".into());
+        }
+
+        let mut moved = false;
+
+        if !video_done && encoded.isReadyForMoreMediaData() {
+            match decoded.copyNextSampleBuffer() {
+                Some(sample) => {
+                    let at = sample.presentation_time_stamp();
+                    if !encoded.appendSampleBuffer(&sample) {
+                        break;
+                    }
+                    if seconds > 0.0 {
+                        progress((at.seconds() / seconds).clamp(0.0, 1.0) as f32);
+                    }
+                    moved = true;
+                }
+                None => {
+                    encoded.markAsFinished();
+                    video_done = true;
+                }
+            }
+        }
+
+        if let Some((out, input)) = &audio {
+            if !audio_done && input.isReadyForMoreMediaData() {
+                match out.copyNextSampleBuffer() {
+                    Some(sample) => {
+                        if !input.appendSampleBuffer(&sample) {
+                            break;
+                        }
+                        moved = true;
+                    }
+                    None => {
+                        input.markAsFinished();
+                        audio_done = true;
+                    }
+                }
+            }
+        }
+
+        // Neither input wanted anything: the encoder is busy, so wait rather
+        // than spinning a core on `isReadyForMoreMediaData`.
+        if !moved {
+            std::thread::sleep(BACKOFF);
+        }
+    }
+
+    if reader.status() == AVAssetReaderStatus::Failed {
+        reader.cancelReading();
+        writer.cancelWriting();
+        return Err(match reader.error() {
+            Some(e) => format!("could not read the recording: {}", describe(&e)),
+            None => "could not read the recording".into(),
+        });
+    }
+
+    writer.finishWritingWithCompletionHandler(&StackBlock::new(|| {}));
+    loop {
+        match writer.status() {
+            AVAssetWriterStatus::Completed => return Ok(()),
+            AVAssetWriterStatus::Failed => {
+                return Err(match writer.error() {
+                    Some(e) => format!("could not write the recording: {}", describe(&e)),
+                    None => "could not write the recording".into(),
+                })
+            }
+            AVAssetWriterStatus::Cancelled => return Err("the export was cancelled".into()),
+            _ if std::time::Instant::now() >= deadline => {
+                writer.cancelWriting();
+                return Err("that recording took too long to finish writing".into());
+            }
+            _ => std::thread::sleep(BACKOFF),
+        }
+    }
+}
+
+/// The first track of a kind, if the composition has one.
+unsafe fn first_track(
+    composition: &AVMutableComposition,
+    kind: Option<&'static AVMediaType>,
+) -> Option<Retained<objc2_av_foundation::AVMutableCompositionTrack>> {
+    #[allow(deprecated)]
+    composition.tracksWithMediaType(kind?).firstObject()
+}
+
+/// `kCVPixelBufferPixelFormatTypeKey` as the `NSString` a settings dictionary
+/// wants. CFString and NSString are the same object; the cast is the bridge.
+fn pixel_format_key() -> &'static NSString {
+    // SAFETY: toll-free bridging, which is what makes this key usable from
+    // both CoreFoundation and Foundation APIs in the first place.
+    unsafe { &*(kCVPixelBufferPixelFormatTypeKey as *const _ as *const NSString) }
+}
+
+/// What the encoder is told to produce: the source's own shape, in H.264.
+///
+/// Every value here is stated rather than left to a default, because the
+/// defaults are what an export preset would have chosen and those are exactly
+/// what this function exists to avoid — one of them downscaled a 4K recording
+/// and halved its frame rate without saying so.
+///
+/// The keyframe interval is set in *seconds* rather than frames so it does not
+/// change meaning with the frame rate, and matches what `screencapture -v`
+/// writes — keyframes are what seeking lands on and what a later `Fast` cut has
+/// to round to, so a sparser result would quietly make the next edit coarser.
+unsafe fn video_settings(
+    width: i32,
+    height: i32,
+    rate: f32,
+    bitrate: Option<i32>,
+) -> Retained<NSMutableDictionary<NSString, AnyObject>> {
+    let compression = NSMutableDictionary::<NSString, AnyObject>::new();
+    if let Some(bits) = bitrate.filter(|b| *b > 0) {
+        put(&compression, AVVideoAverageBitRateKey, &*NSNumber::numberWithInt(bits));
+    }
+    if rate > 0.0 {
+        put(&compression, AVVideoExpectedSourceFrameRateKey, &*NSNumber::numberWithFloat(rate));
+    }
+    put(
+        &compression,
+        AVVideoMaxKeyFrameIntervalDurationKey,
+        &*NSNumber::numberWithDouble(KEYFRAME_SECONDS),
+    );
+
+    let settings = NSMutableDictionary::<NSString, AnyObject>::new();
+    put(&settings, AVVideoCodecKey, AVVideoCodecTypeH264.expect("H.264 is always available"));
+    put(&settings, AVVideoWidthKey, &*NSNumber::numberWithInt(width));
+    put(&settings, AVVideoHeightKey, &*NSNumber::numberWithInt(height));
+    put(&settings, AVVideoCompressionPropertiesKey, &*compression);
+    settings
+}
+
+/// Put one object in a settings dictionary under one of AVFoundation's keys.
+unsafe fn put<T: objc2::Message>(
+    settings: &NSMutableDictionary<NSString, AnyObject>,
+    key: Option<&'static NSString>,
+    value: &T,
+) {
+    let Some(key) = key else { return };
+    // SAFETY: both are objects; the dictionary copies the key and retains the
+    // value, which is what every settings dictionary in AVFoundation expects.
+    unsafe {
+        let value: &AnyObject = &*(value as *const T as *const AnyObject);
+        settings.setObject_forKey(value, objc2::runtime::ProtocolObject::from_ref(key));
+    }
+}
+
+/// A settings dictionary of plain numbers.
+fn number_settings(pairs: &[(&NSString, i32)]) -> Retained<NSMutableDictionary<NSString, AnyObject>> {
+    let settings = NSMutableDictionary::<NSString, AnyObject>::new();
+    for (key, value) in pairs {
+        let number = NSNumber::numberWithInt(*value);
+        // SAFETY: an NSNumber is an object, and the dictionary holds objects.
+        // SAFETY: an NSNumber is an object, and the dictionary holds objects.
+        let value: &AnyObject = unsafe { &*(Retained::as_ptr(&number) as *const AnyObject) };
+        unsafe { settings.setObject_forKey(value, objc2::runtime::ProtocolObject::from_ref(*key)) };
+    }
+    settings
 }

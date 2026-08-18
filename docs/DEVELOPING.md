@@ -656,24 +656,30 @@ So it is asked for, never assumed. The player defaults to `Fast` and offers
 "to the next keyframe" is a button. A note you can act on beats a note plus a
 control somewhere else, in a row that has already been too narrow once.
 
-**HEVC, and not the H.264 preset.** `AVAssetExportPresetHighestQuality` silently
-downscaled a 4096×2304 recording to 3840×2160 *and* halved its frame rate, 53.7
-fps down to 28.6. `AVAssetExportPresetHEVCHighestQuality` held both exactly. A
-screen recorder that quietly softens a Retina capture to shorten a cut has
-traded away the wrong thing.
+**Written by hand, not by preset.** `AVAssetExportSession` only takes named
+presets, and a preset chooses the picture as well as the codec:
+`AVAssetExportPresetHighestQuality` — the only H.264 one — silently downscaled a
+4096×2304 recording to 3840×2160 *and* halved its frame rate, 53.7 fps down to
+28.6. The HEVC preset held both but changed the codec, which matters for a file
+whose whole point is to be sent to somebody.
 
-**And a size budget, because "highest quality" pays no attention to how cheap
-the source was.** A screen recording is mostly still pixels and compresses
-extremely well; re-encoded unconstrained, a 237 MB recording came back **350
-MB**. `setFileLengthLimit` is set to the share of the original the kept part
-represents, so it does nothing when the encode is already tighter than that and
-reins it in when it is not. Measured on a real cut afterwards: 2.54 MB against
-passthrough's 2.52 MB.
+So `encode` drives `AVAssetReader` and `AVAssetWriter` directly: decoded frames
+out of the composition, H.264 back in at the source's own width, height and
+frame rate, with the bit rate the source was already using and a keyframe a
+second to match `screencapture -v`. Every value is stated rather than defaulted,
+because the defaults are exactly what the presets chose. Verified on two
+recordings: 3944×2062 at 56.35 fps and 3160×1926 at 57.33 fps, against sources
+at 56.55 and 56.98 — same codec, same size, same rate, one segment, zero unshown
+frames.
 
-**One caveat worth keeping in mind.** An exact cut comes out HEVC while the
-source was H.264. macOS, Safari and Drive handle that; a recipient on older
-hardware may not. Nothing in Shotly depends on it, but it is the reason `Fast`
-stays the default rather than a mere speed preference.
+Audio is copied rather than re-encoded — nil settings on both the reader output
+and the writer input. Shotly's own recordings are silent, but the library holds
+whatever is put in it, and dropping someone's audio because our recorder never
+makes any would be a poor way to find that out. Checked on a clip with an AAC
+track: 20 s in, 15 s out, both streams.
+
+Both tracks are pumped in one loop rather than one after the other, so the
+writer interleaves them the way a player wants to read them back.
 
 Two consequences worth holding on to:
 

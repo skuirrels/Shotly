@@ -108,10 +108,11 @@ this is the difference between it being gone and it being merely hidden.
 
 If that extra second matters, click **to the next keyframe** in the summary and
 Shotly will cut exactly on your mark instead. It does that by encoding the video
-again rather than copying it, so it takes real time — seconds on a short
-recording, a few minutes on a long one. Worth it when the mark has to be the
-mark; not worth waiting for otherwise, which is why copying is what happens
-unless you ask.
+again rather than copying it, so it takes roughly as long as the recording
+itself — seconds for a short one, a few minutes for a long one. The result is
+still an ordinary H.264 `.mov` at the same size and frame rate; only the frames
+are new. Worth it when the mark has to be the mark, not worth waiting for
+otherwise, which is why copying is what happens unless you ask.
 
 Either way the cut is lossless and takes about as long as copying the file — a
 few seconds even on a recording of several hundred megabytes — because nothing
