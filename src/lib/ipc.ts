@@ -13,6 +13,7 @@ import type {
   ShareProvider,
   Trimmed,
   TrimMode,
+  TrimPrecision,
   WindowInfo,
 } from "./types";
 
@@ -258,8 +259,13 @@ export const combineCaptures = (
  * file. Reports `trim:progress` (0..1) while it runs. See
  * `src-tauri/src/trim.rs`.
  */
-export const videoTrim = (path: string, start: number, end: number, mode: TrimMode) =>
-  invoke<Trimmed>("video_trim", { path, start, end, mode });
+export const videoTrim = (
+  path: string,
+  start: number,
+  end: number,
+  mode: TrimMode,
+  precision: TrimPrecision,
+) => invoke<Trimmed>("video_trim", { path, start, end, mode, precision });
 
 /**
  * The instants a trim mark may sit on: the recording's keyframes, in seconds.

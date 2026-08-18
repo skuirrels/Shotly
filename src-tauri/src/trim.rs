@@ -62,7 +62,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter};
 
-use crate::compose::Segment;
+use crate::compose::{Precision, Segment};
 
 /// The shortest part worth keeping, and the closest two marks may get.
 ///
@@ -111,8 +111,9 @@ pub async fn video_trim(
     start: f64,
     end: f64,
     mode: Mode,
+    precision: Precision,
 ) -> Result<Trimmed, String> {
-    tauri::async_runtime::spawn_blocking(move || cut(&app, &path, start, end, mode))
+    tauri::async_runtime::spawn_blocking(move || cut(&app, &path, start, end, mode, precision))
         .await
         .map_err(|e| format!("the trim did not finish: {e}"))?
 }
@@ -135,7 +136,14 @@ pub async fn video_sync_points(path: String) -> Result<Vec<f64>, String> {
 }
 
 /// Everything the command does, off the main thread.
-fn cut(app: &AppHandle, path: &str, start: f64, end: f64, mode: Mode) -> Result<Trimmed, String> {
+fn cut(
+    app: &AppHandle,
+    path: &str,
+    start: f64,
+    end: f64,
+    mode: Mode,
+    precision: Precision,
+) -> Result<Trimmed, String> {
     let source = PathBuf::from(path);
     if !crate::video::is_video(&source) {
         return Err("that file is not a recording".into());
@@ -149,7 +157,13 @@ fn cut(app: &AppHandle, path: &str, start: f64, end: f64, mode: Mode) -> Result<
     // range of somebody's recording; a file that will not measure gives zero,
     // which `plan` reads as "no known end".
     let whole = crate::video::probe(&source).map(|info| info.seconds).unwrap_or(0.0);
-    let keep = plan(mode, start, end, whole, &crate::compose::sync_points(&source))?;
+    // Only a Fast cut has to be rounded away from the mark, and only then is
+    // there any point reading the keyframes.
+    let sync = match precision {
+        Precision::Fast => crate::compose::sync_points(&source),
+        Precision::Exact => Vec::new(),
+    };
+    let keep = plan(mode, start, end, whole, &sync)?;
     let seconds = keep.iter().map(|part| part.seconds).sum();
 
     let scratch = scratch_path(&source)?;
@@ -157,7 +171,7 @@ fn cut(app: &AppHandle, path: &str, start: f64, end: f64, mode: Mode) -> Result<
     // short recording can finish inside one tick, and a progress bar that only
     // ever appears for slow trims is a progress bar nobody trusts.
     let _ = app.emit("trim:progress", 0.0_f32);
-    let written = crate::compose::write(&source, &scratch, &keep, &mut |fraction| {
+    let written = crate::compose::write(&source, &scratch, &keep, precision, &mut |fraction| {
         let _ = app.emit("trim:progress", fraction);
     });
     if written.is_err() {
@@ -226,10 +240,19 @@ fn plan(
             }
             // The head begins at zero and so needs no run-up at all. The tail
             // is the one that does, and `resume` puts that run-up past the
-            // mark. Nothing far enough along means there is no tail: the cut
-            // runs to the end of the recording, and the empty second part is
-            // dropped below.
-            let resumes_at = resume(sync, end).unwrap_or(whole);
+            // mark.
+            //
+            // No keyframes *at all* means there is nothing to round to — an
+            // Exact cut, or a recording that would not give them up — so the
+            // mark is used as set. That is a different thing from having
+            // keyframes but none far enough along, which means the cut runs
+            // off the end and there is no tail. Treating the two alike dropped
+            // everything after the mark.
+            let resumes_at = if sync.is_empty() {
+                end
+            } else {
+                resume(sync, end).unwrap_or(whole)
+            };
             vec![
                 Segment { start: 0.0, seconds: start },
                 Segment { start: resumes_at, seconds: whole - resumes_at },
@@ -451,14 +474,15 @@ mod tests {
         assert_eq!(resume(NONE, 3.0), None);
     }
 
-    /// A recording that will not give up its sync samples still trims, on the
-    /// old terms. Refusing would be a worse answer than a run-up.
+    /// An Exact cut passes no keyframes in, because it does not round: the
+    /// marks are used as set, which is the whole reason to ask for one.
     #[test]
-    fn a_recording_without_keyframe_information_is_still_trimmable() {
+    fn an_exact_cut_uses_the_marks_as_they_were_set() {
+        assert_eq!(
+            plan(Mode::Cut, 10.4, 20.2, 40.0, NONE),
+            Ok(vec![seg(0.0, 10.4), seg(20.2, 19.8)])
+        );
         assert_eq!(plan(Mode::Keep, 3.4, 36.6, 40.0, NONE), Ok(vec![seg(3.4, 33.2)]));
-        // No keyframes means no resume point, so the cut runs to the end
-        // rather than guessing at one — the safe way to be wrong.
-        assert_eq!(plan(Mode::Cut, 10.4, 20.2, 40.0, NONE), Ok(vec![seg(0.0, 10.4)]));
     }
 
     /// A cut marked near the end has nowhere to resume, so there is no tail:
@@ -486,6 +510,7 @@ mod tests {
         assert_eq!(scratch_path(Path::new("/x/R.mov")).unwrap().extension().unwrap(), "mov");
     }
 }
+
 
 
 

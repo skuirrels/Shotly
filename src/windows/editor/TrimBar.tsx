@@ -1,6 +1,6 @@
 import { useCallback, useRef, useState } from "react";
 import clsx from "clsx";
-import type { TrimMode } from "@/lib/types";
+import type { TrimMode, TrimPrecision } from "@/lib/types";
 import { formatDuration } from "./format";
 
 /**
@@ -46,6 +46,25 @@ export const MIN_SELECTION = 0.2;
  * chose; the resume point is a consequence of it. Snapping the handle here
  * would throw the mark away, and the next drag would round it on again.
  */
+/**
+ * How far a shortening really reaches, which is not always the red handle.
+ *
+ * A Fast cut has to resume on a keyframe past the mark, so it takes more than
+ * it was asked for; an Exact cut re-encodes and lands on the mark. Everything
+ * that draws or describes the selection goes through here, so the band, the
+ * summary and the file cannot disagree with each other.
+ */
+export function extentOf(
+  mode: TrimMode,
+  precision: TrimPrecision,
+  range: Range,
+  syncPoints: number[],
+  duration: number,
+): number {
+  if (mode !== "cut" || precision === "exact") return range.end;
+  return resumePoint(syncPoints, range.end) ?? duration;
+}
+
 export function resumePoint(points: number[], mark: number): number | null {
   const EPSILON = 0.001;
   const first = points.find((p) => p >= mark - EPSILON);
@@ -61,6 +80,8 @@ interface TrackProps {
   range: Range;
   /** Which side of the marks is being thrown away. */
   mode: TrimMode;
+  /** Copy the samples, or encode them again. Only Fast has to round. */
+  precision: TrimPrecision;
   /** Instants a segment may begin at. Empty means snapping is off. */
   syncPoints: number[];
   onRange: (range: Range) => void;
@@ -80,6 +101,7 @@ export function TrimTrack({
   time,
   range,
   mode,
+  precision,
   syncPoints,
   onRange,
   onSeek,
@@ -104,8 +126,7 @@ export function TrimTrack({
       : "0%";
 
   /** How far a cut really reaches: its resume point, or the end of the movie. */
-  const losesUntil =
-    mode === "cut" ? (resumePoint(syncPoints, range.end) ?? duration) : range.end;
+  const losesUntil = extentOf(mode, precision, range, syncPoints, duration);
 
   const grab =
     (which: "start" | "end") => (e: React.PointerEvent<HTMLElement>) => {
@@ -313,6 +334,8 @@ interface ActionsProps {
   range: Range;
   duration: number;
   mode: TrimMode;
+  precision: TrimPrecision;
+  onPrecision: (precision: TrimPrecision) => void;
   /** Instants a cut may resume at, so the summary can say the real extent. */
   syncPoints: number[];
   onMode: (mode: TrimMode) => void;
@@ -336,6 +359,8 @@ export function TrimActions({
   range,
   duration,
   mode,
+  precision,
+  onPrecision,
   syncPoints,
   onMode,
   progress,
@@ -345,9 +370,8 @@ export function TrimActions({
   // A cut runs to its resume point, not to the handle. Everything the row says
   // is worked out from that, so the numbers agree with the shading above them
   // and with the file that comes out.
-  const losesUntil =
-    mode === "cut" ? (resumePoint(syncPoints, range.end) ?? duration) : range.end;
-  const rounded = mode === "cut" && losesUntil > range.end + 0.01;
+  const losesUntil = extentOf(mode, precision, range, syncPoints, duration);
+  const rounded = losesUntil > range.end + 0.01;
   const selected = losesUntil - range.start;
   const kept = mode === "keep" ? selected : Math.max(0, duration - selected);
   const dropped = Math.max(0, duration - kept);
@@ -385,10 +409,28 @@ export function TrimActions({
                 · losing {formatDuration(dropped)}
               </span>
             )}
-            {/* Said out loud rather than left to be noticed: a cut has to
-                resume on a keyframe, so it reaches a little past where the
-                handle was put. The band above shows the same thing. */}
-            {rounded && <span className="text-ink-4"> · to the next keyframe</span>}
+            {/* The rounding is said out loud rather than left to be noticed —
+                and the sentence that explains it is also the way to switch it
+                off. A note you can act on beats a note plus a control
+                somewhere else, in a row this narrow. */}
+            {(rounded || precision === "exact") && (
+              <>
+                {" · "}
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={() => onPrecision(precision === "exact" ? "fast" : "exact")}
+                  title={
+                    precision === "exact"
+                      ? "Cutting on the mark, by encoding the video again. Slower to write — several minutes on a long recording. Click for the quick way."
+                      : "Video only cuts cleanly at a keyframe, so this reaches past your mark. Click to cut exactly there instead, which takes longer to write."
+                  }
+                  className="rounded text-ink-4 underline decoration-dotted underline-offset-2 transition-colors hover:text-ink disabled:no-underline disabled:opacity-60"
+                >
+                  {precision === "exact" ? "exact, slower to write" : "to the next keyframe"}
+                </button>
+              </>
+            )}
           </>
         )}
       </p>

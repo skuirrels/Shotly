@@ -16,7 +16,7 @@ import { IconButton } from "@/components/ui/IconButton";
 import { Popover } from "@/components/ui/Popover";
 import { Tooltip } from "@/components/ui/Tooltip";
 import * as ipc from "@/lib/ipc";
-import type { Trimmed, TrimMode } from "@/lib/types";
+import type { Trimmed, TrimMode, TrimPrecision } from "@/lib/types";
 import { formatDuration } from "./format";
 import { useThumbnail } from "./thumbnails";
 import { MIN_SELECTION, TrimActions, TrimTrack, type Range } from "./TrimBar";
@@ -106,6 +106,14 @@ export function Player({ movie, startAt = 0, onLeave, onClose, onTrimmed, onErro
   const [range, setRange] = useState<Range | null>(null);
   /** Which side of the marks goes. */
   const [mode, setMode] = useState<TrimMode>("keep");
+  /**
+   * Copy the samples, or encode them again.
+   *
+   * Fast by default, because it is instant and lossless and the rounding it
+   * costs does not matter to most cuts. Exact is one click away, from the very
+   * sentence that explains why the rounding is there.
+   */
+  const [precision, setPrecision] = useState<TrimPrecision>("fast");
   /**
    * Instants a segment may begin at — the recording's keyframes.
    *
@@ -226,7 +234,7 @@ export function Player({ movie, startAt = 0, onLeave, onClose, onTrimmed, onErro
     video.current?.pause();
     setProgress(0);
     try {
-      const trimmed = await ipc.videoTrim(movie.path, range.start, range.end, mode);
+      const trimmed = await ipc.videoTrim(movie.path, range.start, range.end, mode, precision);
       setRange(null);
       onTrimmed?.(trimmed);
     } catch (err) {
@@ -234,7 +242,7 @@ export function Player({ movie, startAt = 0, onLeave, onClose, onTrimmed, onErro
     } finally {
       setProgress(null);
     }
-  }, [mode, movie.path, onError, onTrimmed, progress, range]);
+  }, [mode, movie.path, onError, onTrimmed, precision, progress, range]);
 
   // ------------------------------------------------------------- keyboard
 
@@ -453,6 +461,7 @@ export function Player({ movie, startAt = 0, onLeave, onClose, onTrimmed, onErro
                   time={time}
                   range={range}
                   mode={mode}
+                  precision={precision}
                   syncPoints={syncPoints}
                   onRange={setRange}
                   onSeek={seek}
@@ -578,6 +587,8 @@ export function Player({ movie, startAt = 0, onLeave, onClose, onTrimmed, onErro
                 range={range}
                 duration={duration}
                 mode={mode}
+                precision={precision}
+                onPrecision={setPrecision}
                 syncPoints={syncPoints}
                 onMode={setMode}
                 progress={progress}

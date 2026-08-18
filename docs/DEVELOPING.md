@@ -635,10 +635,45 @@ keyframe: every run-up lands clear of its mark, with 1.0–2.2 s to spare.
 
 It costs up to three keyframe intervals — about three seconds, since
 `screencapture -v` writes a keyframe a second — so the player draws the real
-extent rather than the mark. The dimmed band runs past the red handle to the
-resume point, an accent line marks where playback picks up, and the summary says
-"to the next keyframe". A cut that quietly took a second more than the handle
-showed would be its own kind of lie.
+extent rather than the mark.
+
+#### Or don't round at all: `Precision::Exact`
+
+The rounding is only needed because passthrough copies compressed samples. Ask
+`compose` to encode the frames again and the whole problem goes away: the cut
+lands on the mark, the output has **one segment, no edit list and zero unshown
+frames** — verified — and no keyframes are consulted at all.
+
+What it costs is measured, not guessed:
+
+| | 13 s recording | 7 min recording |
+|---|---|---|
+| `Fast` (passthrough) | 0.6 s | 0.6 s |
+| `Exact` (HEVC) | 5.9 s | **354 s** |
+
+So it is asked for, never assumed. The player defaults to `Fast` and offers
+`Exact` from the very sentence that explains why the cut is being rounded —
+"to the next keyframe" is a button. A note you can act on beats a note plus a
+control somewhere else, in a row that has already been too narrow once.
+
+**HEVC, and not the H.264 preset.** `AVAssetExportPresetHighestQuality` silently
+downscaled a 4096×2304 recording to 3840×2160 *and* halved its frame rate, 53.7
+fps down to 28.6. `AVAssetExportPresetHEVCHighestQuality` held both exactly. A
+screen recorder that quietly softens a Retina capture to shorten a cut has
+traded away the wrong thing.
+
+**And a size budget, because "highest quality" pays no attention to how cheap
+the source was.** A screen recording is mostly still pixels and compresses
+extremely well; re-encoded unconstrained, a 237 MB recording came back **350
+MB**. `setFileLengthLimit` is set to the share of the original the kept part
+represents, so it does nothing when the encode is already tighter than that and
+reins it in when it is not. Measured on a real cut afterwards: 2.54 MB against
+passthrough's 2.52 MB.
+
+**One caveat worth keeping in mind.** An exact cut comes out HEVC while the
+source was H.264. macOS, Safari and Drive handle that; a recipient on older
+hardware may not. Nothing in Shotly depends on it, but it is the reason `Fast`
+stays the default rather than a mere speed preference.
 
 Two consequences worth holding on to:
 

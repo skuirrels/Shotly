@@ -113,11 +113,13 @@ export async function invoke<T>(cmd: string, args?: Record<string, unknown>): Pr
     const selected = end - start;
     if (selected < 0.2) throw new Error("that selection is too short");
     // Report progress the way the export does, so the filling button can be
-    // watched here rather than only on a real recording.
-    for (let step = 0; step <= 10; step++) {
-      setTimeout(() => (window as any).EMIT?.("trim:progress", step / 10), step * 120);
+    // watched here rather than only on a real recording. An exact cut encodes
+    // every frame, so it takes noticeably longer — worth feeling in the harness.
+    const steps = args?.precision === "exact" ? 24 : 10;
+    for (let step = 0; step <= steps; step++) {
+      setTimeout(() => (window as any).EMIT?.("trim:progress", step / steps), step * 120);
     }
-    await new Promise((done) => setTimeout(done, 1400));
+    await new Promise((done) => setTimeout(done, steps * 120 + 200));
     return {
       path: "/lib/Recording 2026-08-17 at 13.58.12 trimmed.mov",
       name: "Recording 2026-08-17 at 13.58.12 trimmed.mov",

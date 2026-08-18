@@ -91,6 +91,17 @@ export interface ShareProvider {
 export type TrimMode = "keep" | "cut";
 
 /**
+ * How a shortened recording gets written, and what that costs.
+ *
+ * `fast` copies the samples — lossless and about as quick as copying the file,
+ * but the format forces a cut to round away from the mark by up to about three
+ * seconds. `exact` encodes the frames again: the cut lands on the mark and
+ * nothing is left hidden, at the cost of real time (measured at six minutes for
+ * a seven-minute recording). See `src-tauri/src/compose.rs`.
+ */
+export type TrimPrecision = "fast" | "exact";
+
+/**
  * A recording that has had its dead air cut off.
  *
  * A new capture rather than an edit in place — see `src-tauri/src/trim.rs` for

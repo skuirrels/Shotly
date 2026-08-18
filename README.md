@@ -106,6 +106,13 @@ second of what you cut sitting in the file, invisible in every normal player but
 still there. If you are cutting something out because it should not be seen,
 this is the difference between it being gone and it being merely hidden.
 
+If that extra second matters, click **to the next keyframe** in the summary and
+Shotly will cut exactly on your mark instead. It does that by encoding the video
+again rather than copying it, so it takes real time — seconds on a short
+recording, a few minutes on a long one. Worth it when the mark has to be the
+mark; not worth waiting for otherwise, which is why copying is what happens
+unless you ask.
+
 Either way the cut is lossless and takes about as long as copying the file — a
 few seconds even on a recording of several hundred megabytes — because nothing
 is re-encoded. The result is filed beside the original as *Recording … trimmed*
