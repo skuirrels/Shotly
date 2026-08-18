@@ -39,6 +39,21 @@ setTimeout(() => {
     height: 4212,
     preview: strip(148, 240),
     stalled: true,
+    behind: false,
     anchor: strip(220, 46),
   });
 }, 1600);
+
+// The other way of getting stuck: scrolled back over page already captured,
+// where the way on is down rather than back. Same panel, opposite advice —
+// which is the whole reason it is worth being able to see both.
+setTimeout(() => {
+  (window as any).EMIT("scroll:progress", {
+    frames: 46,
+    height: 4212,
+    preview: strip(148, 240),
+    stalled: true,
+    behind: true,
+    anchor: strip(220, 46),
+  });
+}, 3200);

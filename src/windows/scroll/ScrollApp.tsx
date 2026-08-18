@@ -37,6 +37,9 @@ interface Progress {
   height: number;
   preview?: string;
   stalled: boolean;
+  /** While stalled: the page is on ground already captured, so the way on is
+      down rather than back. */
+  behind: boolean;
   /** The bottom of what has been captured. Sent only while stalled. */
   anchor?: string;
 }
@@ -174,11 +177,23 @@ function Hud() {
       <div className="flex min-h-0 flex-1 items-end justify-center overflow-hidden bg-inset p-2">
         {progress?.stalled && progress.anchor ? (
           <div className="flex h-full flex-col justify-center gap-1.5 px-1">
-            <p className="text-center text-[11.5px] leading-snug text-danger">
-              Scrolled too fast — nothing is being captured.
+            {/* Both states stopped capturing, but they are not the same
+                trouble and the way out of one is the way further into the
+                other. Scrolling back over captured page is something people do
+                on purpose, so it is told plainly rather than in alarm. */}
+            <p
+              className={`text-center text-[11.5px] leading-snug ${
+                progress.behind ? "text-ink-2" : "text-danger"
+              }`}
+            >
+              {progress.behind
+                ? "This is where the capture ended."
+                : "Scrolled too fast — nothing is being captured."}
             </p>
             <p className="text-center text-[11px] leading-snug text-ink-3">
-              Scroll back up until this is on screen again:
+              {progress.behind
+                ? "Scroll down past it to carry on:"
+                : "Scroll back until this is on screen again:"}
             </p>
             {/* A picture of where the capture ends. "Scroll back a little" was
                 the old advice and it was wrong as often as right — how far
@@ -186,7 +201,11 @@ function Hud() {
             <img
               src={progress.anchor}
               alt="The bottom of what has been captured"
-              className="w-full rounded-sm shadow-[0_0_0_1px_var(--color-danger)]"
+              className={`w-full rounded-sm ${
+                progress.behind
+                  ? "shadow-[0_0_0_1px_var(--color-accent)]"
+                  : "shadow-[0_0_0_1px_var(--color-danger)]"
+              }`}
             />
           </div>
         ) : preview.current ? (
@@ -209,7 +228,9 @@ function Hud() {
             them. Truncation is the guard; keeping the copy short is the fix. */}
         <p className="mb-2 h-[15px] truncate text-[11px] text-ink-4">
           {progress?.stalled
-            ? "Waiting for the page to reappear…"
+            ? progress.behind
+              ? "Waiting for new page below…"
+              : "Waiting for the page to reappear…"
             : progress
               ? `${progress.frames} ${progress.frames === 1 ? "look" : "looks"} so far · keep scrolling`
               : "Starting…"}

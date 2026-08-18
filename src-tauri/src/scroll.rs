@@ -559,6 +559,9 @@ struct Progress {
     preview: Option<String>,
     /// Set when several frames running have contributed nothing.
     stalled: bool,
+    /// While stalled: the page is sitting on ground the canvas already holds,
+    /// so the way out is forward rather than back. See `Stall`.
+    behind: bool,
     /// The bottom of what has been captured, as a data URL — the thing to
     /// scroll back to. Only sent while stalled, since it costs an encode.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -890,6 +893,62 @@ fn shoot(region: &Rect) -> Result<RgbaImage, String> {
     Ok(img)
 }
 
+/// Whether to warn that nothing is being captured, and which way to point.
+///
+/// Two different failures wear the same face — a screen that is not moving —
+/// and they want opposite advice. A page flicked past what a frame can bridge
+/// has to be brought *back* into view. A page scrolled back over ground the
+/// canvas already holds has to be carried *forward*. Getting that backwards is
+/// worse than saying nothing: the user does as they are told, the capture
+/// stays exactly as stuck, and the panel repeats itself.
+///
+/// Only a frame that moved can tell the two apart, so the verdict of the last
+/// moving frame is what is remembered. A motionless screen is `Idle` or
+/// `Adrift` depending on where it sits, and neither says which way the page
+/// went — so neither is allowed to change the advice.
+#[derive(Default)]
+struct Stall {
+    /// Frames that have contributed nothing since the last append.
+    missed: u32,
+    /// The last moving frame landed on page the canvas already holds.
+    behind: bool,
+}
+
+impl Stall {
+    fn saw(&mut self, push: &Push) {
+        match push {
+            Push::Appended { .. } => {
+                self.missed = 0;
+                self.behind = false;
+            }
+            // Reading, not scrolling. Says nothing either way, so it must not
+            // clear a stall the user has not fixed.
+            Push::Idle => {}
+            // Still, and not where the capture ends. The commonest way this
+            // feature fails — one flick past what a frame can bridge — and
+            // before it was counted it looked exactly like a user pausing to
+            // read: the panel said "keep scrolling" for as long as they cared
+            // to. It cannot say *where* the page went, so it leaves that be.
+            Push::Adrift => self.missed += 1,
+            // Moved, and landed on ground already captured: they have scrolled
+            // back too far, and the way on is down.
+            Push::Unchanged => {
+                self.missed += 1;
+                self.behind = true;
+            }
+            // Moved, and nothing lined up anywhere: the page has run away.
+            Push::NoMatch => {
+                self.missed += 1;
+                self.behind = false;
+            }
+        }
+    }
+
+    fn stalled(&self) -> bool {
+        self.missed >= STALL_AFTER
+    }
+}
+
 fn run_session(
     app: &AppHandle,
     region: Rect,
@@ -899,8 +958,7 @@ fn run_session(
 ) {
     let mut stitcher: Option<Stitcher> = None;
     let mut frames = 0u32;
-    // Consecutive frames that moved without contributing anything.
-    let mut missed = 0u32;
+    let mut stall = Stall::default();
 
     while !stop.load(Ordering::Relaxed) {
         let started = std::time::Instant::now();
@@ -912,30 +970,14 @@ fn run_session(
                 let mut changed = frames == 1;
                 match stitcher.as_mut() {
                     None => stitcher = Some(Stitcher::new(img)),
-                    Some(s) => match s.push(img) {
-                        Push::Appended { .. } => {
-                            changed = true;
-                            missed = 0;
-                        }
-                        // Reading, not scrolling. Says nothing either way, so
-                        // it must not clear a stall the user has not fixed.
-                        Push::Idle => {}
-                        // Still, and parked out of reach. The commonest way
-                        // this feature fails — one flick past what a frame can
-                        // bridge — and before this was counted it looked
-                        // exactly like a user pausing to read: the panel said
-                        // "keep scrolling" for as long as they cared to.
-                        Push::Adrift => missed += 1,
-                        // The page moved and none of it was captured. One of
-                        // these is a scroll back over old ground; several in a
-                        // row means the page has run away from us — which is
-                        // exactly the state the first version reported as
-                        // healthy progress.
-                        Push::Unchanged | Push::NoMatch => missed += 1,
-                    },
+                    Some(s) => {
+                        let push = s.push(img);
+                        changed |= matches!(push, Push::Appended { .. });
+                        stall.saw(&push);
+                    }
                 }
 
-                let stalled = missed >= STALL_AFTER;
+                let stalled = stall.stalled();
 
                 if let Some(s) = &stitcher {
                     let (_, height) = s.size();
@@ -944,9 +986,12 @@ fn run_session(
                         height,
                         preview: changed.then(|| s.preview(148)).flatten(),
                         stalled,
-                        // What the user has to scroll back to, shown only when
-                        // they need it: a picture of where the capture ends is
-                        // the one instruction that cannot be misread.
+                        behind: stall.behind,
+                        // Where the capture ends, shown only when they need
+                        // it: a picture of it is the one instruction that
+                        // cannot be misread — which is more than can be said
+                        // for the sentence next to it, so `behind` decides
+                        // whether that sentence says back or forward.
                         anchor: stalled.then(|| s.anchor_strip(220)).flatten(),
                     };
                     let _ = app.emit_to(LABEL, "scroll:progress", &progress);
@@ -1076,6 +1121,32 @@ mod tests {
         let mut st = Stitcher::new(window(&page, 0, 400));
         assert_eq!(st.push(window(&page, 0, 400)), Push::Idle);
         assert_eq!(st.size().1, 400);
+    }
+
+    #[test]
+    fn the_advice_follows_the_last_frame_that_moved() {
+        let mut stall = Stall::default();
+        for _ in 0..STALL_AFTER {
+            stall.saw(&Push::NoMatch);
+        }
+        assert!(stall.stalled());
+        assert!(!stall.behind, "the page ran away: the way out is back");
+
+        // A motionless screen cannot say which way the page went, and must not
+        // be allowed to answer as though it could.
+        stall.saw(&Push::Adrift);
+        assert!(!stall.behind);
+
+        // Moving onto ground already captured can, and does.
+        stall.saw(&Push::Unchanged);
+        assert!(stall.behind, "scrolled back too far: the way out is forward");
+        stall.saw(&Push::Idle);
+        assert!(stall.behind, "a pause must not flip the advice either");
+
+        // And capturing again ends the whole conversation.
+        stall.saw(&Push::Appended { rows: 12 });
+        assert!(!stall.stalled());
+        assert!(!stall.behind);
     }
 
     #[test]
