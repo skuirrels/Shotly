@@ -209,6 +209,13 @@ function Handle({
       tabIndex={0}
       aria-label={kind === "start" ? "Trim start" : "Trim end"}
       aria-valuetext={formatDuration(seconds)}
+      // A second way to find the keys. The hint below says them once, and once
+      // is easy to miss on a control you came to with the mouse.
+      title={
+        kind === "start"
+          ? "Start of the selection — drag it, or press I to put it where the playhead is"
+          : "End of the selection — drag it, or press O to put it where the playhead is"
+      }
       style={{ left: at }}
       className={clsx(
         "absolute inset-y-0 -ml-[5px] w-2.5 cursor-ew-resize touch-none rounded-[3px]",
@@ -264,14 +271,17 @@ export function TrimActions({
   const busy = progress !== null;
 
   return (
-    <div className="flex items-center gap-2 border-t border-line px-1.5 pt-1.5">
+    <div className="flex items-start gap-2 border-t border-line px-1.5 pt-2">
       <Modes mode={mode} onMode={onMode} disabled={busy} />
 
-      <p className="min-w-0 flex-1 truncate text-[11.5px] text-ink-3">
+      {/* Never `truncate`. This line is the only place the two keys are named,
+          and the first version clipped it to "…press I and O to mar…" — which
+          is worse than not mentioning them, because it tells you something is
+          being kept from you. It wraps instead, and the bar grows by a line. */}
+      <p className="min-w-0 flex-1 text-[11.5px] leading-snug text-ink-3">
         {untouched ? (
           <>
-            Drag the handles{mode === "keep" ? " to choose what to keep" : " around the bit to lose"}{" "}
-            — or press <Key>I</Key> and <Key>O</Key> to mark where you are
+            Drag a handle, or press <Key>I</Key> / <Key>O</Key> to mark where you are
           </>
         ) : (
           <>
