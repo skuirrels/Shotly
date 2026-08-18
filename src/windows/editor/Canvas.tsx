@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { listen } from "@tauri-apps/api/event";
 import clsx from "clsx";
 import {
   calloutLayout,
@@ -108,6 +109,8 @@ export function Canvas({ onNotify, actions, onScan }: CanvasProps) {
 
   const [fitZoom, setFitZoom] = useState(1);
   const [editingId, setEditingId] = useState<string | null>(null);
+  /** The last press on any shape, for the hand-rolled double-press above. */
+  const lastShapePress = useRef<{ id: string; at: number } | null>(null);
   /** Alt turns a press on a shape into a draw-through — see `onShapePointerDown`. */
   const [altDown, setAltDown] = useState(false);
   /** The eyedropper's live readout: what is under the cursor right now. */
@@ -392,6 +395,29 @@ export function Canvas({ onNotify, actions, onScan }: CanvasProps) {
     // fall through to the stage rather than pick the shape up.
     if (tool === "pick") return;
     if (e.altKey && tool !== "select") return;
+
+    // Double-press on a text box, detected by hand. The container's
+    // onDoubleClick below works in a plain browser but not in WKWebView, where
+    // the first press selects the shape, the selection handles re-render it,
+    // and the click counter dies with the old element — so in the shipped app
+    // a text annotation could be selected, moved, deleted, but never edited
+    // again. Two presses on the same shape inside the double-click window are
+    // the same gesture, whatever the engine makes of it.
+    const now = Date.now();
+    const again =
+      lastShapePress.current !== null &&
+      lastShapePress.current.id === id &&
+      now - lastShapePress.current.at < 450;
+    lastShapePress.current = { id, at: now };
+    if (again) {
+      const target = annotations.find((a) => a.id === id);
+      if (target && (target.kind === "text" || target.kind === "callout")) {
+        e.stopPropagation();
+        setEditingId(id);
+        return;
+      }
+    }
+
     e.stopPropagation();
     (e.currentTarget as Element).setPointerCapture?.(e.pointerId);
 
@@ -1104,6 +1130,62 @@ function TextEditor({
   }, []);
 
   /**
+   * The typing's own little history, so ⌘Z while editing undoes *words*, not
+   * the whole box.
+   *
+   * It has to live here and it has to be hand-rolled, for reasons that are
+   * each one step from obvious. ⌘Z never arrives as a keydown — the Edit menu
+   * owns the accelerator and the app re-emits it as `editor:edit` — so the
+   * textarea's native undo stack is unreachable. And this is a controlled
+   * textarea, whose native stack is broken anyway: React rewrites `value` on
+   * every change, which WebKit's undo manager treats as somebody else's edit.
+   * So bursts of typing are snapshotted here, coalesced at a pause the way an
+   * editor's typing-undo is, and popped when the menu event lands while this
+   * textarea has focus. The store never sees any of it: one committed box is
+   * one history entry there, whatever the journey.
+   */
+  const edits = useRef<{ undo: string[]; redo: string[]; lastPush: number }>({
+    undo: [],
+    redo: [],
+    lastPush: 0,
+  });
+  const latest = useRef(value);
+  latest.current = value;
+  const changeRef = useRef(onChange);
+  changeRef.current = onChange;
+
+  useEffect(() => {
+    const unlisten = listen<"undo" | "redo">("editor:edit", (event) => {
+      if (document.activeElement !== ref.current) return;
+      const h = edits.current;
+      if (event.payload === "undo") {
+        const prev = h.undo.pop();
+        if (prev === undefined) return;
+        h.redo.push(latest.current);
+        changeRef.current(prev);
+      } else {
+        const next = h.redo.pop();
+        if (next === undefined) return;
+        h.undo.push(latest.current);
+        changeRef.current(next);
+      }
+    });
+    return () => void unlisten.then((fn) => fn());
+  }, []);
+
+  /** A change, with the value it replaces remembered at burst boundaries. */
+  const edit = (next: string) => {
+    const h = edits.current;
+    const now = Date.now();
+    // A pause in the typing starts a new undo step, so ⌘Z walks back through
+    // phrases rather than one letter or the whole text.
+    if (now - h.lastPush > 900) h.undo.push(latest.current);
+    h.lastPush = now;
+    h.redo = [];
+    onChange(next);
+  };
+
+  /**
    * Ignore a blur that lands in the same beat as mounting.
    *
    * Belt and braces alongside the `preventDefault` on the creating click: a
@@ -1130,7 +1212,7 @@ function TextEditor({
       ref={ref}
       value={value}
       spellCheck={false}
-      onChange={(e) => onChange(e.target.value)}
+      onChange={(e) => edit(e.target.value)}
       onBlur={onBlur}
       onKeyDown={(e) => {
         // Escape commits; Enter inserts a newline, since annotations are often

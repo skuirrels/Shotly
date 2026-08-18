@@ -13,6 +13,7 @@ import {
   IconLink,
   IconPlay,
   IconRedo,
+  IconRecord,
   IconRegion,
   IconSave,
   IconScroll,
@@ -535,6 +536,55 @@ function CaptureMenu({
               </span>
               <Kbd shortcut="Ctrl+Shift+6" muted />
             </button>
+
+            {/* The tray has offered both of these since recording shipped; the
+                app's own capture menu never did, so anyone who found capture
+                here reasonably concluded Shotly could not record at all. Same
+                commands as the tray items, same picker, same panel. */}
+            <button
+              type="button"
+              onClick={() => {
+                close();
+                void ipc.recordBegin();
+              }}
+              className="flex w-full items-center gap-2.5 rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-hover"
+            >
+              <span className="text-ink-2">
+                <IconRecord />
+              </span>
+              <span className="min-w-0 flex-1">
+                <span className="block text-[12.5px] font-medium text-ink">
+                  Record area or window
+                </span>
+                <span className="block text-[11px] text-ink-4">
+                  Frame it like a capture; the same key stops it
+                </span>
+              </span>
+              <Kbd shortcut="Ctrl+Shift+R" muted />
+            </button>
+
+            <button
+              type="button"
+              onClick={() => {
+                close();
+                void ipc.recordScreen();
+              }}
+              className="flex w-full items-center gap-2.5 rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-hover"
+            >
+              <span className="text-ink-2">
+                <IconDisplay />
+              </span>
+              <span className="min-w-0 flex-1">
+                <span className="block text-[12.5px] font-medium text-ink">
+                  Record whole screen
+                </span>
+                <span className="block text-[11px] text-ink-4">
+                  The display under the cursor, until you stop it
+                </span>
+              </span>
+            </button>
+
+            <div className="my-1.5 h-px bg-line" />
 
             {/* Works with no permission at all — the editor doesn't need the OS. */}
             <button

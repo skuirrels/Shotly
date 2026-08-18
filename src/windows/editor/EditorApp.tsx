@@ -31,6 +31,7 @@ import {
   IconUndo,
 } from "@/components/icons";
 import { useKeymap } from "@/lib/keys/useKeymap";
+import { isEditingText } from "@/lib/keys/keys";
 import type { Command } from "@/lib/keys/types";
 import { renderToPng } from "@/lib/export";
 import * as ipc from "@/lib/ipc";
@@ -270,15 +271,14 @@ export function EditorApp() {
     // webview's *text* undo manager → nowhere. Found by pressing ⌘Z over a
     // fresh crop and watching nothing happen.
     //
-    // This listener does exactly what the keymap's `edit.undo` and `edit.redo`
-    // always declared, `allowWhileTyping: true` included: the canvas history,
-    // whatever has focus. No text-field special case — the commands never made
-    // one, and a menu route that behaved differently from the keymap it stands
-    // in for would be a third undo to reason about.
+    // While a text box is being edited, the keys mean the *typing*: the
+    // TextEditor under the caret keeps its own burst-coalesced history and
+    // answers the same event itself. Everywhere else they mean the canvas.
     const editUnlisten = listen<"undo" | "redo">("editor:edit", (event) => {
       // App-wide accelerator, one listener: ignore it unless this window is
       // the one the user is looking at.
       if (!document.hasFocus()) return;
+      if (isEditingText(document.activeElement)) return;
       const state = useEditor.getState();
       if (event.payload === "redo") state.redo();
       else state.undo();
