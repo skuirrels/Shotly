@@ -100,8 +100,8 @@ and what is going is dimmed.
 
 **Cut out reaches a little past the red handle**, and the timeline shows how
 far. Video is only cut cleanly at a keyframe — about one a second in a screen
-recording — and Shotly resumes at the first safe one beyond your mark rather
-than the nearest. That is deliberate: resuming any earlier would leave the last
+recording — and Shotly resumes a couple of keyframes beyond your mark rather
+than at the nearest one. That is deliberate: resuming any earlier would leave the last
 second of what you cut sitting in the file, invisible in every normal player but
 still there. If you are cutting something out because it should not be seen,
 this is the difference between it being gone and it being merely hidden.

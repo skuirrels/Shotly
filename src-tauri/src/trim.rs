@@ -33,13 +33,13 @@
 //! was removed. Its position cannot be argued with; only the segment start can
 //! be moved.
 //!
-//! So a cut resumes at the sync sample *after* the first one past the mark.
-//! That puts the whole run-up later than the mark, which is what makes it
-//! footage nobody asked to lose rather than the tail of what they did. It
-//! costs up to two keyframe intervals — about two seconds for
-//! `screencapture -v`, which writes one a second — and `resume` is where that
-//! is decided. The player draws the real extent, because a cut that quietly
-//! takes a second more than the handle shows would be its own kind of lie.
+//! So a cut resumes two sync samples past the first one at or after the mark.
+//! That is the nearest point at which the run-up provably cannot reach back
+//! past the mark — `resume` sets out the argument. It costs up to three
+//! keyframe intervals, about three seconds for `screencapture -v`, which
+//! writes one a second. The player draws the real extent, because a cut that
+//! quietly took seconds more than the handle showed would be its own kind of
+//! lie.
 //!
 //! Only **Cut** pays this. Trimming with **Keep** discards the ends, where the
 //! hidden run-up is the dead air being trimmed off — nothing anybody is trying
@@ -252,12 +252,28 @@ fn plan(
 
 /// Where a cut resumes, given the mark someone put the handle on.
 ///
-/// The sync sample *after* the first one at or past `mark` — deliberately one
-/// further than it needs to be to decode. That second step is the whole point:
-/// the export's hidden run-up spans the keyframe before the resume point up to
-/// the resume point, so stepping once more puts the entire run-up later than
-/// `mark`. Nothing on the far side of the handle survives anywhere in the file,
-/// visible or not.
+/// **Two** sync samples past the first one at or after `mark`, and each step is
+/// there for a reason worth keeping straight.
+///
+/// The export copies a hidden run-up before whatever keyframe the tail starts
+/// on — measured at exactly one frame before it, on three cuts across two
+/// recordings. So the run-up begins somewhere inside the keyframe interval
+/// *before* the resume point. Call the first keyframe at or after the mark k0,
+/// and the ones after it k1 and k2:
+///
+/// * Resuming at k1 puts the run-up inside `k0-1 .. k0` — before the mark.
+///   Measured: marking 7.103 (itself a keyframe) left 15 ms of the marked
+///   footage in the file.
+/// * Resuming at k2 puts it inside `k0 .. k1`. A sample cannot begin before the
+///   keyframe preceding it, so the run-up cannot begin before k0 — and k0 is at
+///   or after the mark. Nothing marked survives, whatever the frame rate.
+///
+/// The second step is what makes that an argument rather than a measurement. A
+/// guard of "one frame" would have worked on these recordings and quietly
+/// failed on a slower one.
+///
+/// `None` when the recording has no sync sample far enough along — the mark is
+/// near the end — which the caller reads as "there is no tail worth keeping".
 ///
 /// `None` when the recording has no sync sample far enough along — the mark is
 /// near the end — which the caller reads as "there is no tail worth keeping".
@@ -271,8 +287,9 @@ fn resume(points: &[f64], mark: f64) -> Option<f64> {
     /// sit on a sync sample can come back a hair either side of it.
     const EPSILON: f64 = 0.001;
 
-    let first = points.iter().copied().find(|p| *p >= mark - EPSILON)?;
-    points.iter().copied().find(|p| *p > first + EPSILON)
+    let k0 = points.iter().copied().find(|p| *p >= mark - EPSILON)?;
+    let k1 = points.iter().copied().find(|p| *p > k0 + EPSILON)?;
+    points.iter().copied().find(|p| *p > k1 + EPSILON)
 }
 
 /// The name a shortened recording is filed under, given the original's.
@@ -347,7 +364,7 @@ mod tests {
     /// resumes past the mark — see `a_cut_resumes_past_its_own_hidden_run_up`.
     #[test]
     fn cutting_the_middle_out_leaves_the_two_ends() {
-        assert_eq!(cut_out(10.0, 20.0, 40.0), Ok(vec![seg(0.0, 10.0), seg(21.0, 19.0)]));
+        assert_eq!(cut_out(10.0, 20.0, 40.0), Ok(vec![seg(0.0, 10.0), seg(22.0, 18.0)]));
     }
 
     /// A cut against one end of the recording is a trim, and must come out as
@@ -356,12 +373,12 @@ mod tests {
     fn a_cut_that_reaches_an_end_is_simply_a_trim() {
         // Nothing before the first mark: only the tail survives, resuming past
         // the mark as every cut does.
-        assert_eq!(cut_out(0.0, 12.0, 40.0), Ok(vec![seg(13.0, 27.0)]));
+        assert_eq!(cut_out(0.0, 12.0, 40.0), Ok(vec![seg(14.0, 26.0)]));
         // Nothing after the second: only the head — which is never rounded,
         // because a segment starting at zero needs no run-up.
         assert_eq!(cut_out(28.0, 40.0, 40.0), Ok(vec![seg(0.0, 28.0)]));
         // A head too short to be worth a frame is dropped, not written.
-        assert_eq!(cut_out(0.05, 12.0, 40.0), Ok(vec![seg(13.0, 27.0)]));
+        assert_eq!(cut_out(0.05, 12.0, 40.0), Ok(vec![seg(14.0, 26.0)]));
     }
 
     #[test]
@@ -400,12 +417,13 @@ mod tests {
     /// someone pointed at and asked to lose.
     #[test]
     fn a_cut_resumes_past_its_own_hidden_run_up() {
-        // Marked 20.2; first keyframe past it is 21, so the tail resumes at 22
-        // and the run-up spans 21..22 — all of it later than the mark.
-        assert_eq!(cut_out(10.4, 20.2, 40.0), Ok(vec![seg(0.0, 10.4), seg(22.0, 18.0)]));
-        // A mark sitting exactly on a keyframe steps twice all the same: a
-        // run-up before 20 would be 19..20, which is inside what was marked.
-        assert_eq!(cut_out(10.0, 20.0, 40.0), Ok(vec![seg(0.0, 10.0), seg(21.0, 19.0)]));
+        // Marked 20.2. k0 is 21, so the tail resumes at k2 = 23 and the run-up
+        // lies inside 21..22 — every bit of it later than the mark.
+        assert_eq!(cut_out(10.4, 20.2, 40.0), Ok(vec![seg(0.0, 10.4), seg(23.0, 17.0)]));
+        // A mark sitting exactly on a keyframe is the case that caught this:
+        // with one step the run-up reached 15 ms back past the mark on a real
+        // recording. k0 is 20 itself, so the tail resumes at 22.
+        assert_eq!(cut_out(10.0, 20.0, 40.0), Ok(vec![seg(0.0, 10.0), seg(22.0, 18.0)]));
     }
 
     /// Keep pays none of it. What a Keep throws away is the dead air at the
@@ -419,13 +437,17 @@ mod tests {
 
     #[test]
     fn a_resume_point_is_two_keyframes_on_and_never_idempotent() {
-        assert_eq!(resume(&grid(), 3.05), Some(5.0));
-        assert_eq!(resume(&grid(), 3.0), Some(4.0));
+        // k0 = 4, so k2 = 6.
+        assert_eq!(resume(&grid(), 3.05), Some(6.0));
+        // A mark on a keyframe: k0 is the mark itself, so k2 = 5.
+        assert_eq!(resume(&grid(), 3.0), Some(5.0));
         // Deliberately not idempotent: fed its own answer it steps again, which
         // is why the mark is what gets stored and passed about, never this.
-        assert_eq!(resume(&grid(), 4.0), Some(5.0));
+        assert_eq!(resume(&grid(), 5.0), Some(7.0));
         // Nothing far enough along: the caller reads that as "no tail left".
+        // Nothing far enough along: two steps are needed, not one.
         assert_eq!(resume(&grid(), 39.5), None);
+        assert_eq!(resume(&grid(), 38.5), None);
         assert_eq!(resume(NONE, 3.0), None);
     }
 
@@ -464,5 +486,6 @@ mod tests {
         assert_eq!(scratch_path(Path::new("/x/R.mov")).unwrap().extension().unwrap(), "mov");
     }
 }
+
 
 

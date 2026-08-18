@@ -616,12 +616,24 @@ at the segment start, which is exactly the edge of what was removed. Its
 position relative to the segment cannot be argued with; only the segment start
 can be moved.
 
-So a cut resumes at the sync sample **after** the first one past the mark. That
-puts the whole run-up later than the mark, making it footage nobody asked to
-lose rather than the tail of what they did. Verified: marking 4.0–8.0 gives a
-run-up spanning 8.102–9.120, with no overlap at all.
+Measured precisely, the copied media starts **one frame before** that keyframe —
+1.02, 0.87 and 0.96 frames across three cuts on two recordings. So the run-up
+begins somewhere inside the keyframe interval *before* the resume point. Naming
+the first keyframe at or after the mark k0, and the next two k1 and k2:
 
-It costs up to two keyframe intervals — about two seconds, since
+* Resuming at **k1** puts the run-up inside `k0-1 .. k0`, which is before the
+  mark. Measured: marking 7.103 — itself a keyframe — left 15 ms of the marked
+  footage in the file. A one-step rule looks right on paper and leaks.
+* Resuming at **k2** puts it inside `k0 .. k1`. A sample cannot begin before the
+  keyframe preceding it, so the run-up cannot begin before k0, and k0 is at or
+  after the mark. That is an argument rather than a measurement, and it holds at
+  any frame rate — a guard of "one frame" would have worked on these recordings
+  and quietly failed on a slower one.
+
+Verified on both recordings, four marks including one sitting exactly on a
+keyframe: every run-up lands clear of its mark, with 1.0–2.2 s to spare.
+
+It costs up to three keyframe intervals — about three seconds, since
 `screencapture -v` writes a keyframe a second — so the player draws the real
 extent rather than the mark. The dimmed band runs past the red handle to the
 resume point, an accent line marks where playback picks up, and the summary says
