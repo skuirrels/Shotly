@@ -261,6 +261,15 @@ export const combineCaptures = (
 export const videoTrim = (path: string, start: number, end: number, mode: TrimMode) =>
   invoke<Trimmed>("video_trim", { path, start, end, mode });
 
+/**
+ * The instants a trim mark may sit on: the recording's keyframes, in seconds.
+ *
+ * A cut can only begin where a frame decodes on its own, so the player snaps
+ * its handles to these — which is what keeps the mark you can see and the mark
+ * that gets used the same number. See `src-tauri/src/trim.rs`.
+ */
+export const videoSyncPoints = (path: string) => invoke<number[]>("video_sync_points", { path });
+
 /** Cloud sync folders this Mac has, to offer as one-click backup choices. */
 export const backupTargets = () => invoke<BackupTarget[]>("backup_targets");
 

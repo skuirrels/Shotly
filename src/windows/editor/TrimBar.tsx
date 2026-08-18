@@ -30,6 +30,30 @@ export interface Range {
  */
 export const MIN_SELECTION = 0.2;
 
+/**
+ * Where a cut actually resumes, given the mark the handle is on.
+ *
+ * The keyframe *after* the first one past `mark`, matching `resume` in
+ * `trim.rs` — see that module for why it is two keyframes and not one. In
+ * short: the export hides a run-up spanning the keyframe before the resume
+ * point up to it, and only the second step puts that run-up entirely on the
+ * far side of the mark, where it holds nothing anybody asked to lose.
+ *
+ * `null` when nothing is far enough along — the cut then runs to the end of the
+ * recording — and when the recording gave up no keyframes at all.
+ *
+ * The handle is deliberately **not** moved onto this. The mark is what somebody
+ * chose; the resume point is a consequence of it. Snapping the handle here
+ * would throw the mark away, and the next drag would round it on again.
+ */
+export function resumePoint(points: number[], mark: number): number | null {
+  const EPSILON = 0.001;
+  const first = points.find((p) => p >= mark - EPSILON);
+  if (first === undefined) return null;
+  return points.find((p) => p > first + EPSILON) ?? null;
+}
+
+
 interface TrackProps {
   duration: number;
   /** Where the playhead is, in seconds. */
@@ -37,6 +61,8 @@ interface TrackProps {
   range: Range;
   /** Which side of the marks is being thrown away. */
   mode: TrimMode;
+  /** Instants a segment may begin at. Empty means snapping is off. */
+  syncPoints: number[];
   onRange: (range: Range) => void;
   /** Called as a handle moves, so the picture follows it. */
   onSeek: (seconds: number) => void;
@@ -49,7 +75,15 @@ interface TrackProps {
  * strip that is otherwise six pixels of decoration, and the extra height is
  * what makes the handles hittable without a steady hand.
  */
-export function TrimTrack({ duration, time, range, mode, onRange, onSeek }: TrackProps) {
+export function TrimTrack({
+  duration,
+  time,
+  range,
+  mode,
+  syncPoints,
+  onRange,
+  onSeek,
+}: TrackProps) {
   const track = useRef<HTMLDivElement>(null);
   const [dragging, setDragging] = useState<"start" | "end" | null>(null);
 
@@ -65,31 +99,44 @@ export function TrimTrack({ duration, time, range, mode, onRange, onSeek }: Trac
   );
 
   const percent = (seconds: number) =>
-    duration > 0 ? `${Math.max(0, Math.min(100, (seconds / duration) * 100))}%` : "0%";
+    duration > 0
+      ? `${Math.max(0, Math.min(100, (seconds / duration) * 100))}%`
+      : "0%";
 
-  const grab = (which: "start" | "end") => (e: React.PointerEvent<HTMLElement>) => {
-    // Without this the press falls through to the track below, which would
-    // seek — so grabbing a handle would jump the playhead away from it.
-    e.preventDefault();
-    e.stopPropagation();
-    e.currentTarget.setPointerCapture(e.pointerId);
-    setDragging(which);
-  };
+  /** How far a cut really reaches: its resume point, or the end of the movie. */
+  const losesUntil =
+    mode === "cut" ? (resumePoint(syncPoints, range.end) ?? duration) : range.end;
 
-  const drag = (which: "start" | "end") => (e: React.PointerEvent<HTMLElement>) => {
-    if (dragging !== which) return;
-    const at = secondsAt(e.clientX);
+  const grab =
+    (which: "start" | "end") => (e: React.PointerEvent<HTMLElement>) => {
+      // Without this the press falls through to the track below, which would
+      // seek — so grabbing a handle would jump the playhead away from it.
+      e.preventDefault();
+      e.stopPropagation();
+      e.currentTarget.setPointerCapture(e.pointerId);
+      setDragging(which);
+    };
 
-    // The handles cannot pass each other, and cannot meet: a selection of
-    // nothing is not a thing anyone means to drag out.
-    const next =
-      which === "start"
-        ? { start: Math.min(at, range.end - MIN_SELECTION), end: range.end }
-        : { start: range.start, end: Math.max(at, range.start + MIN_SELECTION) };
+  const drag =
+    (which: "start" | "end") => (e: React.PointerEvent<HTMLElement>) => {
+      if (dragging !== which) return;
+      // The handle goes exactly where it is dragged. It is the mark somebody
+      // chose; where a cut resumes is worked out from it and drawn separately.
+      const at = secondsAt(e.clientX);
 
-    onRange(next);
-    onSeek(which === "start" ? next.start : next.end);
-  };
+      // The handles cannot pass each other, and cannot meet: a selection of
+      // nothing is not a thing anyone means to drag out.
+      const next =
+        which === "start"
+          ? { start: Math.min(at, range.end - MIN_SELECTION), end: range.end }
+          : {
+              start: range.start,
+              end: Math.max(at, range.start + MIN_SELECTION),
+            };
+
+      onRange(next);
+      onSeek(which === "start" ? next.start : next.end);
+    };
 
   const release = (e: React.PointerEvent<HTMLElement>) => {
     e.currentTarget.releasePointerCapture?.(e.pointerId);
@@ -99,7 +146,8 @@ export function TrimTrack({ duration, time, range, mode, onRange, onSeek }: Trac
   /** Arrow keys nudge a handle; ⇧ makes it a second, as it does everywhere else. */
   const nudge = (which: "start" | "end") => (e: React.KeyboardEvent) => {
     const step = e.shiftKey ? 1 : 0.1;
-    const delta = e.key === "ArrowLeft" ? -step : e.key === "ArrowRight" ? step : 0;
+    const delta =
+      e.key === "ArrowLeft" ? -step : e.key === "ArrowRight" ? step : 0;
     if (!delta) return;
     e.preventDefault();
     e.stopPropagation();
@@ -107,8 +155,14 @@ export function TrimTrack({ duration, time, range, mode, onRange, onSeek }: Trac
     const at = (which === "start" ? range.start : range.end) + delta;
     const next =
       which === "start"
-        ? { start: Math.max(0, Math.min(at, range.end - MIN_SELECTION)), end: range.end }
-        : { start: range.start, end: Math.min(duration, Math.max(at, range.start + MIN_SELECTION)) };
+        ? {
+            start: Math.max(0, Math.min(at, range.end - MIN_SELECTION)),
+            end: range.end,
+          }
+        : {
+            start: range.start,
+            end: Math.min(duration, Math.max(at, range.start + MIN_SELECTION)),
+          };
 
     onRange(next);
     onSeek(which === "start" ? next.start : next.end);
@@ -125,23 +179,45 @@ export function TrimTrack({ duration, time, range, mode, onRange, onSeek }: Trac
       {/* The strip everything else sits on. */}
       <div className="absolute inset-x-0 top-1/2 h-1.5 -translate-y-1/2 rounded-full bg-white/10" />
 
-{/* The two ends. Kept in Keep mode, thrown away in Cut. */}
+      {/* The two ends. Kept in Keep mode, thrown away in Cut. */}
       <div
-        className={clsx("absolute inset-y-0 left-0 rounded-l-md", surface(mode === "cut"))}
+        className={clsx(
+          "absolute inset-y-0 left-0 rounded-l-md",
+          surface(mode === "cut"),
+        )}
         style={{ width: percent(range.start) }}
       />
       <div
-        className={clsx("absolute inset-y-0 right-0 rounded-r-md", surface(mode === "cut"))}
-        style={{ left: percent(range.end) }}
+        className={clsx(
+          "absolute inset-y-0 right-0 rounded-r-md",
+          surface(mode === "cut"),
+        )}
+        style={{ left: percent(losesUntil) }}
       />
 
       {/* The middle — the other way round. Which is the whole difference
           between the two modes, and the reason the track is worth looking at
-          before pressing the button. */}
+          before pressing the button.
+
+          In Cut it runs past the red handle to where playback really resumes.
+          Drawing it only as far as the handle would understate the cut by up
+          to two seconds, which is the kind of quiet difference that makes
+          people stop trusting a tool. */}
       <div
         className={clsx("absolute inset-y-0", surface(mode === "keep"))}
-        style={{ left: percent(range.start), right: `calc(100% - ${percent(range.end)})` }}
+        style={{
+          left: percent(range.start),
+          right: `calc(100% - ${percent(losesUntil)})`,
+        }}
       />
+
+      {/* Where the recording picks up again, when that is not the handle. */}
+      {mode === "cut" && losesUntil > range.end + 0.01 && (
+        <div
+          className="pointer-events-none absolute inset-y-0 w-0.5 rounded bg-accent"
+          style={{ left: percent(losesUntil) }}
+        />
+      )}
 
       {/* The playhead, so the frame on screen has a place on the timeline. */}
       <div
@@ -237,6 +313,8 @@ interface ActionsProps {
   range: Range;
   duration: number;
   mode: TrimMode;
+  /** Instants a cut may resume at, so the summary can say the real extent. */
+  syncPoints: number[];
   onMode: (mode: TrimMode) => void;
   /** 0..1 while the export runs, or `null` when nothing is running. */
   progress: number | null;
@@ -258,12 +336,19 @@ export function TrimActions({
   range,
   duration,
   mode,
+  syncPoints,
   onMode,
   progress,
   onCancel,
   onTrim,
 }: ActionsProps) {
-  const selected = range.end - range.start;
+  // A cut runs to its resume point, not to the handle. Everything the row says
+  // is worked out from that, so the numbers agree with the shading above them
+  // and with the file that comes out.
+  const losesUntil =
+    mode === "cut" ? (resumePoint(syncPoints, range.end) ?? duration) : range.end;
+  const rounded = mode === "cut" && losesUntil > range.end + 0.01;
+  const selected = losesUntil - range.start;
   const kept = mode === "keep" ? selected : Math.max(0, duration - selected);
   const dropped = Math.max(0, duration - kept);
   /** Both marks still at the ends: nothing would come off. */
@@ -281,18 +366,29 @@ export function TrimActions({
       <p className="min-w-0 flex-1 text-[11.5px] leading-snug text-ink-3">
         {untouched ? (
           <>
-            Drag a handle, or press <Key>I</Key> / <Key>O</Key> to mark where you are
+            Drag a handle, or press <Key>I</Key> / <Key>O</Key> to mark where
+            you are
           </>
         ) : (
           <>
             <span className="text-ink">
-              {mode === "keep" ? "Keeping" : "Cutting"} {formatDuration(range.start)} –{" "}
-              {formatDuration(range.end)}
+              {mode === "keep" ? "Keeping" : "Cutting"}{" "}
+              {formatDuration(range.start)} – {formatDuration(losesUntil)}
             </span>
-            <span className="font-mono tabular-nums"> · {formatDuration(kept)} left</span>
+            <span className="font-mono tabular-nums">
+              {" "}
+              · {formatDuration(kept)} left
+            </span>
             {dropped >= 1 && (
-              <span className="text-ink-4"> · losing {formatDuration(dropped)}</span>
+              <span className="text-ink-4">
+                {" "}
+                · losing {formatDuration(dropped)}
+              </span>
             )}
+            {/* Said out loud rather than left to be noticed: a cut has to
+                resume on a keyframe, so it reaches a little past where the
+                handle was put. The band above shows the same thing. */}
+            {rounded && <span className="text-ink-4"> · to the next keyframe</span>}
           </>
         )}
       </p>
@@ -348,7 +444,10 @@ function Modes({
   disabled: boolean;
 }) {
   return (
-    <div className="flex shrink-0 rounded-lg bg-white/[0.06] p-0.5" role="group">
+    <div
+      className="flex shrink-0 rounded-lg bg-white/[0.06] p-0.5"
+      role="group"
+    >
       {(["keep", "cut"] as const).map((option) => (
         <button
           key={option}
@@ -363,7 +462,9 @@ function Modes({
           }
           className={clsx(
             "h-6 rounded-[6px] px-2 text-[11.5px] font-medium transition-colors disabled:opacity-40",
-            mode === option ? "bg-accent/20 text-accent" : "text-ink-3 hover:text-ink",
+            mode === option
+              ? "bg-accent/20 text-accent"
+              : "text-ink-3 hover:text-ink",
           )}
         >
           {option === "keep" ? "Keep" : "Cut out"}

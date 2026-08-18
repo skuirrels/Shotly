@@ -56,7 +56,6 @@ const WEBSITE: &str = "skuirrels.com/shotly";
 #[cfg(desktop)]
 const AUTOSTART_ARG: &str = "--opened-at-login";
 
-#[cfg_attr(mobile, tauri::mobile_entry_point)]
 /// Write panics somewhere they can be read afterwards.
 ///
 /// A packaged app has no terminal, so a panic's message — the one line that
@@ -102,6 +101,7 @@ fn log_panics() {
     }));
 }
 
+#[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     log_panics();
 
@@ -286,6 +286,7 @@ pub fn run() {
             record::record_cancel,
             record::record_running,
             trim::video_trim,
+            trim::video_sync_points,
             hotkeys::hotkeys_list,
             hotkeys::hotkeys_set,
             hotkeys::hotkeys_reset,

@@ -102,6 +102,11 @@ export async function invoke<T>(cmd: string, args?: Record<string, unknown>): Pr
   // Trimming. The export is the one part a browser cannot have, so the stub
   // reports progress for a beat and hands back the file it would have written —
   // enough for the marks, the preview loop and the filling button to be tried.
+  // Keyframes roughly every second, which is what `screencapture -v` writes,
+  // deliberately off the whole numbers so snapping is visible in the harness.
+  if (cmd === "video_sync_points") {
+    return [0, 1.07, 2.06, 3.09, 4.1, 5.11, 6.1, 7.1, 8.12, 9.12, 10.12, 11.11] as T;
+  }
   if (cmd === "video_trim") {
     const start = Number(args?.start ?? 0);
     const end = Number(args?.end ?? 0);

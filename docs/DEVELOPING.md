@@ -597,6 +597,52 @@ the player switches onto it. A screenshot can be taken again; thirty seconds of
 something happening on screen cannot. One suffix for both modes, so shortening
 a shortened recording gives `X trimmed (2)` rather than `X trimmed cut trimmed`.
 
+#### Why a cut resumes later than you asked
+
+Passthrough copies samples rather than re-encoding them, so the samples of a
+segment that starts anywhere but time zero are copied **from the previous sync
+sample onwards** — the first frame cannot be decoded otherwise — and the run-up
+is hidden behind an edit list rather than deleted. Measured on a real recording:
+cutting 4s out of the middle left **0.92 seconds of the cut footage in the
+file**, invisible in QuickTime, Safari, Chrome and Drive, and recoverable with
+`ffmpeg -ignore_editlist 1`.
+
+Snapping the segment onto a sync sample does **not** fix it, which was worth
+finding out the hard way. AVFoundation copies from the sync sample *before* the
+one a segment starts on, even when the segment starts exactly on one — measured,
+a segment beginning at 8.120 (itself a keyframe) had its media copied from
+7.085, the keyframe before it. The hidden run-up therefore always ends exactly
+at the segment start, which is exactly the edge of what was removed. Its
+position relative to the segment cannot be argued with; only the segment start
+can be moved.
+
+So a cut resumes at the sync sample **after** the first one past the mark. That
+puts the whole run-up later than the mark, making it footage nobody asked to
+lose rather than the tail of what they did. Verified: marking 4.0–8.0 gives a
+run-up spanning 8.102–9.120, with no overlap at all.
+
+It costs up to two keyframe intervals — about two seconds, since
+`screencapture -v` writes a keyframe a second — so the player draws the real
+extent rather than the mark. The dimmed band runs past the red handle to the
+resume point, an accent line marks where playback picks up, and the summary says
+"to the next keyframe". A cut that quietly took a second more than the handle
+showed would be its own kind of lie.
+
+Two consequences worth holding on to:
+
+* **`resume` is deliberately not idempotent.** Fed its own output it steps
+  again. The *mark* is what gets stored and passed about; the resume point is
+  derived from it every time. That is also why the handle is not snapped onto
+  it — snapping would throw the mark away and let the next drag round it on.
+* **Keep pays none of this.** What a Keep discards is the dead air at the ends,
+  so the run-up it hides is dead air too. Paying up to two seconds of the part
+  somebody wanted, to bury a second of what they did not, is the wrong way
+  round. `keeping_never_rounds_a_mark` pins that.
+
+Sync samples come from `compose::sync_points`, walking an `AVSampleCursor`.
+Under a millisecond on a short recording and about 17 ms on a seven-minute one,
+so the player reads them once when the scissors are pressed.
+
 #### Two things 0.9.5 got wrong, both worth not repeating
 
 **`video_trim` was synchronous.** A sync `#[tauri::command]` runs on the main

@@ -107,6 +107,16 @@ export function Player({ movie, startAt = 0, onLeave, onClose, onTrimmed, onErro
   /** Which side of the marks goes. */
   const [mode, setMode] = useState<TrimMode>("keep");
   /**
+   * Instants a segment may begin at — the recording's keyframes.
+   *
+   * Read once when the scissors are pressed, because a cut can only start
+   * where a frame decodes on its own and the handles have to land on those
+   * instants for what is shown to be what happens. Empty until it arrives, and
+   * empty for good if the recording will not give them up, in which case
+   * nothing snaps. Costs about 17 ms on a seven-minute recording.
+   */
+  const [syncPoints, setSyncPoints] = useState<number[]>([]);
+  /**
    * How far the export has got, 0..1, or `null` when none is running.
    *
    * One value for both questions — is it working, and how far — because two
@@ -171,9 +181,19 @@ export function Player({ movie, startAt = 0, onLeave, onClose, onTrimmed, onErro
     }
     video.current?.pause();
     setRange({ start: 0, end: length });
-  }, [duration, movie.seconds, onError]);
+    // Both ends of a fresh selection are already legal — zero is always a
+    // keyframe, and the far end is an end — so this is only needed by the time
+    // a handle moves, and the drag will read whatever has arrived by then.
+    void ipc
+      .videoSyncPoints(movie.path)
+      .then(setSyncPoints)
+      .catch(() => setSyncPoints([]));
+  }, [duration, movie.path, movie.seconds, onError]);
 
-  const cancelTrim = useCallback(() => setRange(null), []);
+  const cancelTrim = useCallback(() => {
+    setRange(null);
+    setSyncPoints([]);
+  }, []);
 
   // Rust says how far the export has got. Subscribed only while one is being
   // set up, so the player is not listening to an event nobody is sending for
@@ -276,22 +296,20 @@ export function Player({ movie, startAt = 0, onLeave, onClose, onTrimmed, onErro
         // In and out points, from every editor that has ever had them. They
         // set a mark without moving the picture, which is what makes "play
         // until it looks right, press o" work.
-        case "i":
+        case "i": {
           if (!range) break;
           handled();
-          setRange({
-            start: Math.min(el.currentTime, range.end - MIN_SELECTION),
-            end: range.end,
-          });
+          const at = el.currentTime;
+          setRange({ start: Math.min(at, range.end - MIN_SELECTION), end: range.end });
           break;
-        case "o":
+        }
+        case "o": {
           if (!range) break;
           handled();
-          setRange({
-            start: range.start,
-            end: Math.max(el.currentTime, range.start + MIN_SELECTION),
-          });
+          const at = el.currentTime;
+          setRange({ start: range.start, end: Math.max(at, range.start + MIN_SELECTION) });
           break;
+        }
         case "Escape":
           handled();
           // Escape backs out of one thing at a time. Marking a trim and then
@@ -435,6 +453,7 @@ export function Player({ movie, startAt = 0, onLeave, onClose, onTrimmed, onErro
                   time={time}
                   range={range}
                   mode={mode}
+                  syncPoints={syncPoints}
                   onRange={setRange}
                   onSeek={seek}
                 />
@@ -559,6 +578,7 @@ export function Player({ movie, startAt = 0, onLeave, onClose, onTrimmed, onErro
                 range={range}
                 duration={duration}
                 mode={mode}
+                syncPoints={syncPoints}
                 onMode={setMode}
                 progress={progress}
                 onCancel={cancelTrim}

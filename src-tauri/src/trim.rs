@@ -13,6 +13,38 @@
 //! to either lives in `plan`, which is where the ways a selection can be wrong
 //! are named, and which needs no file on disk to test.
 //!
+//! # Why a cut resumes later than you asked
+//!
+//! A passthrough export cannot re-encode, so the samples of a segment that
+//! begins anywhere but time zero are copied from the previous sync sample
+//! onwards — the first frame cannot be decoded otherwise — and the run-up is
+//! then hidden behind an edit list rather than deleted. Measured on a real
+//! recording: cutting 4s out of the middle left **0.92 seconds of the cut
+//! footage in the file**, invisible in every player that honours edit lists,
+//! recoverable from any that does not. For an operation whose whole point is
+//! "remove the bit I did not want seen", that is the wrong answer.
+//!
+//! Snapping the segment onto a sync sample does *not* fix it, which was worth
+//! finding out the hard way: AVFoundation copies from the sync sample *before*
+//! the one a segment starts on, even when the segment starts exactly on one.
+//! Measured — a segment beginning at 8.120, itself a keyframe, had its media
+//! copied from 7.085, the keyframe before it. The hidden run-up therefore
+//! always ends exactly at the segment start, which is exactly the edge of what
+//! was removed. Its position cannot be argued with; only the segment start can
+//! be moved.
+//!
+//! So a cut resumes at the sync sample *after* the first one past the mark.
+//! That puts the whole run-up later than the mark, which is what makes it
+//! footage nobody asked to lose rather than the tail of what they did. It
+//! costs up to two keyframe intervals — about two seconds for
+//! `screencapture -v`, which writes one a second — and `resume` is where that
+//! is decided. The player draws the real extent, because a cut that quietly
+//! takes a second more than the handle shows would be its own kind of lie.
+//!
+//! Only **Cut** pays this. Trimming with **Keep** discards the ends, where the
+//! hidden run-up is the dead air being trimmed off — nothing anybody is trying
+//! to get rid of, and not worth two seconds of the part they wanted.
+//!
 //! # Why a new file
 //!
 //! The original is never touched. A screenshot can be taken again; the thing
@@ -85,6 +117,23 @@ pub async fn video_trim(
         .map_err(|e| format!("the trim did not finish: {e}"))?
 }
 
+/// The instants a mark may sit on, in seconds — the recording's sync samples.
+///
+/// The page asks once, when the scissors are pressed, and snaps its handles to
+/// these for as long as they are on screen. That is what keeps the mark you can
+/// see and the mark that is used the same number; see the module docs for what
+/// happens when they differ.
+///
+/// Costs about 17 ms on a seven-minute recording, and under a millisecond on a
+/// short one — but `spawn_blocking` all the same, because it reads a file and
+/// this is not the module to make that mistake in twice.
+#[tauri::command]
+pub async fn video_sync_points(path: String) -> Result<Vec<f64>, String> {
+    tauri::async_runtime::spawn_blocking(move || crate::compose::sync_points(Path::new(&path)))
+        .await
+        .map_err(|e| format!("could not read that recording's keyframes: {e}"))
+}
+
 /// Everything the command does, off the main thread.
 fn cut(app: &AppHandle, path: &str, start: f64, end: f64, mode: Mode) -> Result<Trimmed, String> {
     let source = PathBuf::from(path);
@@ -100,7 +149,7 @@ fn cut(app: &AppHandle, path: &str, start: f64, end: f64, mode: Mode) -> Result<
     // range of somebody's recording; a file that will not measure gives zero,
     // which `plan` reads as "no known end".
     let whole = crate::video::probe(&source).map(|info| info.seconds).unwrap_or(0.0);
-    let keep = plan(mode, start, end, whole)?;
+    let keep = plan(mode, start, end, whole, &crate::compose::sync_points(&source))?;
     let seconds = keep.iter().map(|part| part.seconds).sum();
 
     let scratch = scratch_path(&source)?;
@@ -132,7 +181,13 @@ fn cut(app: &AppHandle, path: &str, start: f64, end: f64, mode: Mode) -> Result<
 /// way round, a selection of nothing, a selection that is the whole recording,
 /// a cut that would leave nothing behind — and none of them need a file on disk
 /// to find out about.
-fn plan(mode: Mode, start: f64, end: f64, whole: f64) -> Result<Vec<Segment>, String> {
+fn plan(
+    mode: Mode,
+    start: f64,
+    end: f64,
+    whole: f64,
+    sync: &[f64],
+) -> Result<Vec<Segment>, String> {
     if !start.is_finite() || !end.is_finite() {
         return Err("those marks are not numbers".into());
     }
@@ -159,15 +214,25 @@ fn plan(mode: Mode, start: f64, end: f64, whole: f64) -> Result<Vec<Segment>, St
                     "that is the whole recording — move a handle to trim something off".into()
                 );
             }
+            // No rounding here. What a Keep discards is the dead air at the
+            // ends, so the run-up the export hides is dead air too — and
+            // paying up to two seconds of the part someone wanted in order to
+            // bury a second of what they did not is the wrong way round.
             vec![Segment { start, seconds: end - start }]
         }
         Mode::Cut => {
             if whole <= 0.0 {
                 return Err("Shotly cannot measure that recording, so it cannot cut from the middle of it".into());
             }
+            // The head begins at zero and so needs no run-up at all. The tail
+            // is the one that does, and `resume` puts that run-up past the
+            // mark. Nothing far enough along means there is no tail: the cut
+            // runs to the end of the recording, and the empty second part is
+            // dropped below.
+            let resumes_at = resume(sync, end).unwrap_or(whole);
             vec![
                 Segment { start: 0.0, seconds: start },
-                Segment { start: end, seconds: whole - end },
+                Segment { start: resumes_at, seconds: whole - resumes_at },
             ]
         }
     };
@@ -183,6 +248,31 @@ fn plan(mode: Mode, start: f64, end: f64, whole: f64) -> Result<Vec<Segment>, St
         });
     }
     Ok(parts)
+}
+
+/// Where a cut resumes, given the mark someone put the handle on.
+///
+/// The sync sample *after* the first one at or past `mark` — deliberately one
+/// further than it needs to be to decode. That second step is the whole point:
+/// the export's hidden run-up spans the keyframe before the resume point up to
+/// the resume point, so stepping once more puts the entire run-up later than
+/// `mark`. Nothing on the far side of the handle survives anywhere in the file,
+/// visible or not.
+///
+/// `None` when the recording has no sync sample far enough along — the mark is
+/// near the end — which the caller reads as "there is no tail worth keeping".
+///
+/// Kept as a function of the *mark* rather than of its own output, because it
+/// is deliberately not idempotent: feeding it a resume point would step past it
+/// again. The mark is the thing to hold on to, which is also why the player
+/// leaves its handle where it was put and draws the resume point separately.
+fn resume(points: &[f64], mark: f64) -> Option<f64> {
+    /// The page hands back numbers that have been through JSON; a mark meant to
+    /// sit on a sync sample can come back a hair either side of it.
+    const EPSILON: f64 = 0.001;
+
+    let first = points.iter().copied().find(|p| *p >= mark - EPSILON)?;
+    points.iter().copied().find(|p| *p > first + EPSILON)
 }
 
 /// The name a shortened recording is filed under, given the original's.
@@ -223,11 +313,18 @@ fn scratch_path(source: &Path) -> Result<PathBuf, String> {
 mod tests {
     use super::*;
 
+    /// A keyframe every second, which is what `screencapture -v` writes.
+    fn grid() -> Vec<f64> {
+        (0..=40).map(|n| n as f64).collect()
+    }
+    /// No sync samples at all: a recording that would not give them up.
+    const NONE: &[f64] = &[];
+
     fn keep(start: f64, end: f64, whole: f64) -> Result<Vec<Segment>, String> {
-        plan(Mode::Keep, start, end, whole)
+        plan(Mode::Keep, start, end, whole, &grid())
     }
     fn cut_out(start: f64, end: f64, whole: f64) -> Result<Vec<Segment>, String> {
-        plan(Mode::Cut, start, end, whole)
+        plan(Mode::Cut, start, end, whole, &grid())
     }
     fn seg(start: f64, seconds: f64) -> Segment {
         Segment { start, seconds }
@@ -246,22 +343,25 @@ mod tests {
     }
 
     /// The operation that could not be done with a converter at all: two parts,
-    /// which `compose` joins into one movie with the gap closed.
+    /// which `compose` joins into one movie with the gap closed. The tail
+    /// resumes past the mark — see `a_cut_resumes_past_its_own_hidden_run_up`.
     #[test]
     fn cutting_the_middle_out_leaves_the_two_ends() {
-        assert_eq!(cut_out(10.0, 20.0, 40.0), Ok(vec![seg(0.0, 10.0), seg(20.0, 20.0)]));
+        assert_eq!(cut_out(10.0, 20.0, 40.0), Ok(vec![seg(0.0, 10.0), seg(21.0, 19.0)]));
     }
 
     /// A cut against one end of the recording is a trim, and must come out as
     /// one part rather than one part and a sliver.
     #[test]
     fn a_cut_that_reaches_an_end_is_simply_a_trim() {
-        // Nothing before the first mark: only the tail survives.
-        assert_eq!(cut_out(0.0, 12.0, 40.0), Ok(vec![seg(12.0, 28.0)]));
-        // Nothing after the second: only the head.
+        // Nothing before the first mark: only the tail survives, resuming past
+        // the mark as every cut does.
+        assert_eq!(cut_out(0.0, 12.0, 40.0), Ok(vec![seg(13.0, 27.0)]));
+        // Nothing after the second: only the head — which is never rounded,
+        // because a segment starting at zero needs no run-up.
         assert_eq!(cut_out(28.0, 40.0, 40.0), Ok(vec![seg(0.0, 28.0)]));
         // A head too short to be worth a frame is dropped, not written.
-        assert_eq!(cut_out(0.05, 12.0, 40.0), Ok(vec![seg(12.0, 28.0)]));
+        assert_eq!(cut_out(0.05, 12.0, 40.0), Ok(vec![seg(13.0, 27.0)]));
     }
 
     #[test]
@@ -293,6 +393,59 @@ mod tests {
         // the part after the second mark has no end to measure to.
         assert!(cut_out(1.0, 2.0, 0.0).is_err());
     }
+    /// A cut resumes one keyframe past the first one after the mark — and the
+    /// second step is the entire point. The export's hidden run-up spans the
+    /// keyframe before the resume point up to it, so one step would leave that
+    /// run-up sitting *behind* the mark, holding the tail of the very footage
+    /// someone pointed at and asked to lose.
+    #[test]
+    fn a_cut_resumes_past_its_own_hidden_run_up() {
+        // Marked 20.2; first keyframe past it is 21, so the tail resumes at 22
+        // and the run-up spans 21..22 — all of it later than the mark.
+        assert_eq!(cut_out(10.4, 20.2, 40.0), Ok(vec![seg(0.0, 10.4), seg(22.0, 18.0)]));
+        // A mark sitting exactly on a keyframe steps twice all the same: a
+        // run-up before 20 would be 19..20, which is inside what was marked.
+        assert_eq!(cut_out(10.0, 20.0, 40.0), Ok(vec![seg(0.0, 10.0), seg(21.0, 19.0)]));
+    }
+
+    /// Keep pays none of it. What a Keep throws away is the dead air at the
+    /// ends, so the run-up the export hides is dead air — not worth up to two
+    /// seconds of the part somebody actually wanted.
+    #[test]
+    fn keeping_never_rounds_a_mark() {
+        assert_eq!(keep(3.4, 36.6, 40.0), Ok(vec![seg(3.4, 33.2)]));
+        assert_eq!(keep(3.0, 36.0, 40.0), Ok(vec![seg(3.0, 33.0)]));
+    }
+
+    #[test]
+    fn a_resume_point_is_two_keyframes_on_and_never_idempotent() {
+        assert_eq!(resume(&grid(), 3.05), Some(5.0));
+        assert_eq!(resume(&grid(), 3.0), Some(4.0));
+        // Deliberately not idempotent: fed its own answer it steps again, which
+        // is why the mark is what gets stored and passed about, never this.
+        assert_eq!(resume(&grid(), 4.0), Some(5.0));
+        // Nothing far enough along: the caller reads that as "no tail left".
+        assert_eq!(resume(&grid(), 39.5), None);
+        assert_eq!(resume(NONE, 3.0), None);
+    }
+
+    /// A recording that will not give up its sync samples still trims, on the
+    /// old terms. Refusing would be a worse answer than a run-up.
+    #[test]
+    fn a_recording_without_keyframe_information_is_still_trimmable() {
+        assert_eq!(plan(Mode::Keep, 3.4, 36.6, 40.0, NONE), Ok(vec![seg(3.4, 33.2)]));
+        // No keyframes means no resume point, so the cut runs to the end
+        // rather than guessing at one — the safe way to be wrong.
+        assert_eq!(plan(Mode::Cut, 10.4, 20.2, 40.0, NONE), Ok(vec![seg(0.0, 10.4)]));
+    }
+
+    /// A cut marked near the end has nowhere to resume, so there is no tail:
+    /// the cut simply runs off the end of the recording.
+    #[test]
+    fn a_cut_with_no_room_to_resume_just_runs_to_the_end() {
+        assert_eq!(cut_out(10.0, 39.5, 40.0), Ok(vec![seg(0.0, 10.0)]));
+    }
+
 
     #[test]
     fn shortening_a_shortened_recording_does_not_stack_the_word_up() {
@@ -311,3 +464,5 @@ mod tests {
         assert_eq!(scratch_path(Path::new("/x/R.mov")).unwrap().extension().unwrap(), "mov");
     }
 }
+
+

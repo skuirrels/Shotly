@@ -38,7 +38,7 @@ use std::path::Path;
 use block2::StackBlock;
 use objc2_av_foundation::{
     AVAssetExportPresetPassthrough, AVAssetExportSession, AVAssetExportSessionStatus, AVFileType,
-    AVFileTypeMPEG4, AVFileTypeQuickTimeMovie, AVMutableComposition, AVURLAsset,
+    AVFileTypeMPEG4, AVFileTypeQuickTimeMovie, AVMediaTypeVideo, AVMutableComposition, AVURLAsset,
 };
 use objc2_core_media::{CMTime, CMTimeRange};
 use objc2_foundation::{NSString, NSURL};
@@ -154,6 +154,61 @@ pub fn write(
     }
 }
 
+/// Every instant a segment may begin at, in seconds, in order.
+///
+/// These are the track's **full sync samples** — the frames that can be decoded
+/// without reference to any other. They matter because a passthrough export
+/// cannot re-encode: a segment starting anywhere else has to carry the samples
+/// back to the preceding sync sample so the first frame can be decoded at all,
+/// and then hide them behind an edit list. That hidden run-up is real footage
+/// sitting in the file. Beginning every segment on one of these instants is
+/// what makes it not exist rather than merely not play. See `trim::plan`.
+///
+/// Empty if the track cannot be walked, which the caller reads as "do not
+/// snap": a recording that will not give up its sync samples should still be
+/// trimmable, on the old terms.
+pub fn sync_points(source: &Path) -> Vec<f64> {
+    let mut points = Vec::new();
+
+    // SAFETY: as `write` — messages to objects this function owns, none of them
+    // UI, on a thread of the caller's choosing.
+    unsafe {
+        let asset = AVURLAsset::URLAssetWithURL_options(&url_for(source), None);
+        let Some(media_type) = AVMediaTypeVideo else { return points };
+        // Deprecated in favour of an async, block-based variant. This whole
+        // function is synchronous by design — it runs on a worker thread and
+        // costs under a millisecond on a short recording — so the block would
+        // buy nothing but a way to get the lifetimes wrong.
+        #[allow(deprecated)]
+        let tracks = asset.tracksWithMediaType(media_type);
+        let Some(track) = tracks.firstObject() else { return points };
+
+        let zero = CMTime::with_seconds(0.0, TIMESCALE);
+        let Some(cursor) = track.makeSampleCursorWithPresentationTimeStamp(zero) else {
+            return points;
+        };
+
+        // Walked one sample at a time because AVFoundation offers no "next sync
+        // sample" jump. That is thousands of messages for a long recording and
+        // still costs milliseconds — but the bound is here anyway, because this
+        // runs on a worker thread and a cursor that never reports the end would
+        // otherwise spin for ever.
+        const LIMIT: usize = 500_000;
+        for _ in 0..LIMIT {
+            if cursor.currentSampleSyncInfo().sampleIsFullSync.as_bool() {
+                points.push(cursor.presentationTimeStamp().seconds());
+            }
+            if cursor.stepInPresentationOrderByCount(1) == 0 {
+                break;
+            }
+        }
+    }
+
+    // Presentation order is not decode order, and the caller wants a timeline.
+    points.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    points
+}
+
 /// A `file:` URL for a path, which is the only kind AVFoundation takes here.
 fn url_for(path: &Path) -> objc2::rc::Retained<NSURL> {
     NSURL::fileURLWithPath(&NSString::from_str(&path.to_string_lossy()))
@@ -250,3 +305,4 @@ mod tests {
         assert!(write(&sample(), &scratch("shotly-compose-none.mov"), &[], &mut |_| {}).is_err());
     }
 }
+
