@@ -65,13 +65,27 @@ export function extentOf(
   return resumePoint(syncPoints, range.end) ?? duration;
 }
 
+/**
+ * A mark written out to a tenth of a second: `0:06.4`.
+ *
+ * `formatDuration` rounds to whole seconds, which is right for a running time
+ * and wrong here — a handle nudged by a tenth would not appear to move, and the
+ * two marks either side of a one-second cut would read the same. The seconds
+ * part is floored rather than rounded so the tenth after it is the tenth that
+ * is actually there.
+ */
+export function markLabel(seconds: number): string {
+  const safe = Math.max(0, seconds);
+  const whole = Math.floor(safe);
+  return `${formatDuration(whole)}.${Math.floor((safe - whole) * 10)}`;
+}
+
 export function resumePoint(points: number[], mark: number): number | null {
   const EPSILON = 0.001;
   const first = points.find((p) => p >= mark - EPSILON);
   if (first === undefined) return null;
   return points.find((p) => p > first + EPSILON) ?? null;
 }
-
 
 interface TrackProps {
   duration: number;
@@ -127,6 +141,12 @@ export function TrimTrack({
 
   /** How far a cut really reaches: its resume point, or the end of the movie. */
   const losesUntil = extentOf(mode, precision, range, syncPoints, duration);
+
+  /** A label's position, kept far enough inside that it is not half cut off. */
+  const clamped = (seconds: number) =>
+    duration > 0
+      ? `${Math.max(6, Math.min(94, (seconds / duration) * 100))}%`
+      : "6%";
 
   const grab =
     (which: "start" | "end") => (e: React.PointerEvent<HTMLElement>) => {
@@ -190,33 +210,34 @@ export function TrimTrack({
   };
 
   return (
-    <div
-      ref={track}
-      // Clicking the track seeks, the way the scrubber does. Trimming should
-      // not cost you the ability to jump about and look at the recording.
-      onPointerDown={(e) => onSeek(secondsAt(e.clientX))}
-      className="relative mx-1 h-6 min-w-0 flex-1 cursor-pointer touch-none select-none"
-    >
-      {/* The strip everything else sits on. */}
-      <div className="absolute inset-x-0 top-1/2 h-1.5 -translate-y-1/2 rounded-full bg-white/10" />
-
-      {/* The two ends. Kept in Keep mode, thrown away in Cut. */}
+    <div className="mx-1 min-w-0 flex-1 select-none">
       <div
-        className={clsx(
-          "absolute inset-y-0 left-0 rounded-l-md",
-          surface(mode === "cut"),
-        )}
-        style={{ width: percent(range.start) }}
-      />
-      <div
-        className={clsx(
-          "absolute inset-y-0 right-0 rounded-r-md",
-          surface(mode === "cut"),
-        )}
-        style={{ left: percent(losesUntil) }}
-      />
+        ref={track}
+        // Clicking the track seeks, the way the scrubber does. Trimming should
+        // not cost you the ability to jump about and look at the recording.
+        onPointerDown={(e) => onSeek(secondsAt(e.clientX))}
+        className="relative h-6 cursor-pointer touch-none"
+      >
+        {/* The strip everything else sits on. */}
+        <div className="absolute inset-x-0 top-1/2 h-1.5 -translate-y-1/2 rounded-full bg-white/10" />
 
-      {/* The middle — the other way round. Which is the whole difference
+        {/* The two ends. Kept in Keep mode, thrown away in Cut. */}
+        <div
+          className={clsx(
+            "absolute inset-y-0 left-0 rounded-l-md",
+            surface(mode === "cut"),
+          )}
+          style={{ width: percent(range.start) }}
+        />
+        <div
+          className={clsx(
+            "absolute inset-y-0 right-0 rounded-r-md",
+            surface(mode === "cut"),
+          )}
+          style={{ left: percent(losesUntil) }}
+        />
+
+        {/* The middle — the other way round. Which is the whole difference
           between the two modes, and the reason the track is worth looking at
           before pressing the button.
 
@@ -224,50 +245,79 @@ export function TrimTrack({
           Drawing it only as far as the handle would understate the cut by up
           to two seconds, which is the kind of quiet difference that makes
           people stop trusting a tool. */}
-      <div
-        className={clsx("absolute inset-y-0", surface(mode === "keep"))}
-        style={{
-          left: percent(range.start),
-          right: `calc(100% - ${percent(losesUntil)})`,
-        }}
-      />
-
-      {/* Where the recording picks up again, when that is not the handle. */}
-      {mode === "cut" && losesUntil > range.end + 0.01 && (
         <div
-          className="pointer-events-none absolute inset-y-0 w-0.5 rounded bg-accent"
-          style={{ left: percent(losesUntil) }}
+          className={clsx("absolute inset-y-0", surface(mode === "keep"))}
+          style={{
+            left: percent(range.start),
+            right: `calc(100% - ${percent(losesUntil)})`,
+          }}
         />
-      )}
 
-      {/* The playhead, so the frame on screen has a place on the timeline. */}
-      <div
-        className="pointer-events-none absolute inset-y-0 w-px bg-white/90"
-        style={{ left: percent(time) }}
-      />
+        {/* Where the recording picks up again, when that is not the handle. */}
+        {mode === "cut" && losesUntil > range.end + 0.01 && (
+          <div
+            className="pointer-events-none absolute inset-y-0 w-0.5 rounded bg-accent"
+            style={{ left: percent(losesUntil) }}
+          />
+        )}
 
-      <Handle
-        kind="start"
-        at={percent(range.start)}
-        seconds={range.start}
-        dragging={dragging === "start"}
-        onPointerDown={grab("start")}
-        onPointerMove={drag("start")}
-        onPointerUp={release}
-        onPointerCancel={release}
-        onKeyDown={nudge("start")}
-      />
-      <Handle
-        kind="end"
-        at={percent(range.end)}
-        seconds={range.end}
-        dragging={dragging === "end"}
-        onPointerDown={grab("end")}
-        onPointerMove={drag("end")}
-        onPointerUp={release}
-        onPointerCancel={release}
-        onKeyDown={nudge("end")}
-      />
+        {/* The playhead, so the frame on screen has a place on the timeline. */}
+        <div
+          className="pointer-events-none absolute inset-y-0 w-px bg-white/90"
+          style={{ left: percent(time) }}
+        />
+
+        <Handle
+          kind="start"
+          at={percent(range.start)}
+          seconds={range.start}
+          dragging={dragging === "start"}
+          onPointerDown={grab("start")}
+          onPointerMove={drag("start")}
+          onPointerUp={release}
+          onPointerCancel={release}
+          onKeyDown={nudge("start")}
+        />
+        <Handle
+          kind="end"
+          at={percent(range.end)}
+          seconds={range.end}
+          dragging={dragging === "end"}
+          onPointerDown={grab("end")}
+          onPointerMove={drag("end")}
+          onPointerUp={release}
+          onPointerCancel={release}
+          onKeyDown={nudge("end")}
+        />
+      </div>
+
+      {/* Where the handles actually are, in time, directly under them. The
+          summary says the same numbers, but rounded to whole seconds and in a
+          sentence several inches away; while you are dragging, the thing you
+          want to read is below your thumb. */}
+      <div className="pointer-events-none relative h-3.5 pt-1 font-mono text-[9.5px] leading-none tabular-nums">
+        <span
+          className="absolute -translate-x-1/2 whitespace-nowrap text-[#3ecf6a]"
+          style={{ left: clamped(range.start) }}
+        >
+          {markLabel(range.start)}
+        </span>
+        <span
+          className="absolute -translate-x-1/2 whitespace-nowrap text-[#f2564d]"
+          style={{ left: clamped(range.end) }}
+        >
+          {markLabel(range.end)}
+        </span>
+        {/* And where a Fast cut really resumes, which is not the red handle. */}
+        {losesUntil > range.end + 0.05 && (
+          <span
+            className="absolute -translate-x-1/2 whitespace-nowrap text-accent"
+            style={{ left: clamped(losesUntil) }}
+          >
+            {markLabel(losesUntil)}
+          </span>
+        )}
+      </div>
     </div>
   );
 }
@@ -419,7 +469,9 @@ export function TrimActions({
                 <button
                   type="button"
                   disabled={busy}
-                  onClick={() => onPrecision(precision === "exact" ? "fast" : "exact")}
+                  onClick={() =>
+                    onPrecision(precision === "exact" ? "fast" : "exact")
+                  }
                   title={
                     precision === "exact"
                       ? "Cutting on the mark, by encoding the video again. Slower to write — several minutes on a long recording. Click for the quick way."
@@ -427,7 +479,9 @@ export function TrimActions({
                   }
                   className="rounded text-ink-4 underline decoration-dotted underline-offset-2 transition-colors hover:text-ink disabled:no-underline disabled:opacity-60"
                 >
-                  {precision === "exact" ? "exact, slower to write" : "to the next keyframe"}
+                  {precision === "exact"
+                    ? "exact, slower to write"
+                    : "to the next keyframe"}
                 </button>
               </>
             )}
