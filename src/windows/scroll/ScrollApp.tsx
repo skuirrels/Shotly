@@ -83,28 +83,52 @@ export function ScrollApp() {
 
 // ------------------------------------------------------------------ selection
 
+/** A window to snap to, with the id that lets Rust photograph it directly. */
+interface Snap extends Box {
+  id: number;
+}
+
+/** The topmost window that wholly contains the area, if any. */
+function holder(windows: Snap[], box: Box): Snap | undefined {
+  return windows.find(
+    (w) =>
+      box.x >= w.x - 1 &&
+      box.y >= w.y - 1 &&
+      box.x + box.width <= w.x + w.width + 1 &&
+      box.y + box.height <= w.y + w.height + 1,
+  );
+}
+
 function Select() {
   /**
    * The windows this selection can snap to, front to back, in this page's own
    * coordinates. Fetched once: nothing can move while the overlay is up.
    */
-  const [windows, setWindows] = useState<Box[]>([]);
+  const [windows, setWindows] = useState<Snap[]>([]);
 
   const cancel = useCallback(() => void invoke("scroll_cancel"), []);
 
   useEffect(() => {
-    void invoke<Box[]>("scroll_windows")
+    void invoke<Snap[]>("scroll_windows")
       .then(setWindows)
       // Snapping is a convenience over the drag, not a precondition for it.
       .catch(() => {});
   }, []);
 
   const choose = useCallback(
-    async (box: Box) => {
+    async (box: Box, picked: number | null) => {
       try {
         // The drag happened in window coordinates; the capture needs global
         // ones. The window covers exactly one display, so it is one offset.
         const display = await invoke<Box>("scroll_layout");
+        // Which window this is a picture of, if it is a picture of one: the
+        // clicked window, or whichever window a free-hand drag landed inside.
+        // Naming it lets Rust photograph the window itself, which comes back
+        // whole with the panel sitting on top — so a selection that fills the
+        // screen is an ordinary capture rather than an impossible one.
+        const window = (
+          picked === null ? holder(windows, box) : windows[picked]
+        )?.id;
         await invoke("scroll_start", {
           region: {
             x: display.x + box.x,
@@ -112,13 +136,14 @@ function Select() {
             width: box.width,
             height: box.height,
           },
+          window: window ?? null,
         });
       } catch (err) {
         console.error("could not start the scrolling capture:", err);
         cancel();
       }
     },
-    [cancel],
+    [cancel, windows],
   );
 
   return (
@@ -126,8 +151,8 @@ function Select() {
       windows={windows}
       minEdge={MIN_EDGE}
       title="Click a window, or drag out an area — then scroll the page yourself"
-      hint="Esc cancels · leave a strip free beside it for the progress panel"
-      onChoose={({ box }) => void choose(box)}
+      hint="Esc cancels · a window is best: the progress panel can sit on top of it"
+      onChoose={({ box, window }) => void choose(box, window)}
       onCancel={cancel}
     />
   );

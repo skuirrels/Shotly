@@ -197,10 +197,56 @@ fn row_distance(a: &Sig, b: &Sig) -> f32 {
     total as f32 / SIG_W as f32
 }
 
+/// Which buckets are worth listening to: the columns that changed when the
+/// page moved.
+type Live = [bool; SIG_W];
+
+/// The same distance, over those columns only.
+fn row_distance_on(a: &Sig, b: &Sig, live: &Live) -> f32 {
+    let mut total = 0u32;
+    let mut counted = 0u32;
+    for k in 0..SIG_W {
+        if live[k] {
+            total += a[k].abs_diff(b[k]) as u32;
+            counted += 1;
+        }
+    }
+    total as f32 / counted.max(1) as f32
+}
+
+/// Which columns moved between two frames.
+///
+/// The mirror of `STILL_ROW`, and it matters for exactly the same reason. A
+/// window has furniture down its side — a thumbnail rail, a navigation pane, a
+/// toolbar — that does not scroll with the page. Those columns match perfectly
+/// where the frames are aligned and disagree violently everywhere else, so
+/// including them in the score punishes the one offset that is right: measured
+/// on a real Preview window, the eight columns of its sidebar scored 46 at the
+/// true offset while the forty columns of the page scored 3.7, and a threshold
+/// of 6 duly threw the answer away. Judging the page by its furniture is how
+/// "click a window" came to capture nothing at all.
+fn live_columns(prev: &[Sig], now: &[Sig]) -> Option<Live> {
+    let mut moved = [0.0f32; SIG_W];
+    let rows = now.len().min(prev.len()).max(1);
+    for (a, b) in now.iter().zip(prev) {
+        for k in 0..SIG_W {
+            moved[k] += a[k].abs_diff(b[k]) as f32 / rows as f32;
+        }
+    }
+    let mut live = [false; SIG_W];
+    for k in 0..SIG_W {
+        live[k] = moved[k] > STILL_ROW;
+    }
+    // Too little of the width in motion to tell page from furniture — usually
+    // because nothing moved at all. Says "ask someone else" rather than
+    // answering badly; the stitcher keeps the last answer that meant anything.
+    (live.iter().filter(|l| **l).count() >= SIG_W / 6).then_some(live)
+}
+
 /// How badly frame and tail disagree at one offset: the mean of per-row
 /// distances over their overlap, counting only rows that actually moved since
 /// the previous frame. `None` when too few moving rows overlap to judge.
-fn offset_cost(tail: &[Sig], frame: &[Sig], moving: &[bool], o: i64) -> Option<f32> {
+fn offset_cost(tail: &[Sig], frame: &[Sig], moving: &[bool], live: &Live, o: i64) -> Option<f32> {
     let h = frame.len();
     // Frame row y overlaps tail row y + o.
     let y0 = (-o).max(0) as usize;
@@ -224,7 +270,7 @@ fn offset_cost(tail: &[Sig], frame: &[Sig], moving: &[bool], o: i64) -> Option<f
         if !moving[y] {
             continue;
         }
-        total += row_distance(&frame[y], &tail[(y as i64 + o) as usize]);
+        total += row_distance_on(&frame[y], &tail[(y as i64 + o) as usize], live);
         counted += 1;
     }
 
@@ -244,13 +290,14 @@ fn search_offsets(
     tail: &[Sig],
     frame: &[Sig],
     moving: &[bool],
+    live: &Live,
     range: impl Iterator<Item = i64>,
     threshold: Option<f32>,
 ) -> Option<i64> {
     let mut best: Option<f32> = None;
     let mut costs: Vec<(i64, f32)> = Vec::new();
     for o in range {
-        let Some(cost) = offset_cost(tail, frame, moving, o) else { continue };
+        let Some(cost) = offset_cost(tail, frame, moving, live, o) else { continue };
         costs.push((o, cost));
         if best.is_none_or(|b| cost < b) {
             best = Some(cost);
@@ -293,7 +340,7 @@ fn search_offsets(
 /// different line), but averaging rows smooths it enough that the true offset
 /// cannot slip between coarse samples. The exact offset is then pinned down by
 /// a full-resolution search of the few offsets around the coarse answer.
-fn find_offset(tail: &[Sig], frame: &[Sig], moving: &[bool]) -> Option<i64> {
+fn find_offset(tail: &[Sig], frame: &[Sig], moving: &[bool], live: &Live) -> Option<i64> {
     let h = frame.len();
     let limit = (h - min_evidence(h)) as i64;
 
@@ -301,7 +348,7 @@ fn find_offset(tail: &[Sig], frame: &[Sig], moving: &[bool]) -> Option<i64> {
     let coarse_h = h / POOL;
     if coarse_h < 16 {
         // Too small a frame to be worth two passes.
-        return search_offsets(tail, frame, moving, -limit..=limit, Some(MATCH_THRESHOLD));
+        return search_offsets(tail, frame, moving, live, -limit..=limit, Some(MATCH_THRESHOLD));
     }
 
     let pool = |rows: &[Sig]| -> Vec<Sig> {
@@ -339,6 +386,7 @@ fn find_offset(tail: &[Sig], frame: &[Sig], moving: &[bool]) -> Option<i64> {
         &coarse_tail,
         &coarse_frame,
         &coarse_moving,
+        live,
         -coarse_limit..=coarse_limit,
         None,
     );
@@ -349,7 +397,7 @@ fn find_offset(tail: &[Sig], frame: &[Sig], moving: &[bool]) -> Option<i64> {
         let from = (centre - (POOL as i64 + 2)).max(-limit);
         let to = (centre + POOL as i64 + 2).min(limit);
         if let Some(offset) =
-            search_offsets(tail, frame, moving, from..=to, Some(MATCH_THRESHOLD))
+            search_offsets(tail, frame, moving, live, from..=to, Some(MATCH_THRESHOLD))
         {
             return Some(offset);
         }
@@ -359,7 +407,7 @@ fn find_offset(tail: &[Sig], frame: &[Sig], moving: &[bool]) -> Option<i64> {
     // coherence — photographic grain, dithering — pooling genuinely destroys
     // the signal, so pay full price for the honest answer. Rare, and only as
     // slow as the naive search always was.
-    search_offsets(tail, frame, moving, -limit..=limit, Some(MATCH_THRESHOLD))
+    search_offsets(tail, frame, moving, live, -limit..=limit, Some(MATCH_THRESHOLD))
 }
 
 /// What one new frame did to the canvas.
@@ -399,6 +447,14 @@ pub struct Stitcher {
     prev_sigs: Vec<Sig>,
     /// Height of the frames being pushed; all must agree.
     frame_height: u32,
+    /// The columns the page was last seen moving in — everything until a frame
+    /// says otherwise. Remembered rather than recomputed per frame because the
+    /// question only has an answer while the page is moving, and it has to be
+    /// answered when it is still: the canvas keeps a *stitched* copy of any
+    /// furniture, which stops matching the real thing the moment anything is
+    /// appended, and judging a motionless screen by that is how a window
+    /// capture came to report "scrolled too fast" after its first join.
+    live: Live,
 }
 
 impl Stitcher {
@@ -412,6 +468,7 @@ impl Stitcher {
             prev_sigs: sigs.clone(),
             sigs,
             frame_height,
+            live: [true; SIG_W],
         }
     }
 
@@ -436,6 +493,12 @@ impl Stitcher {
             .map(|(a, b)| row_distance(a, b) > STILL_ROW)
             .collect();
         let moved = moving.iter().filter(|m| **m).count();
+        // Which columns of the frame the page lives in, judged the same way
+        // and for the same reason as the rows — and kept, since a still frame
+        // cannot answer it but still has to be judged by it.
+        if let Some(live) = live_columns(&self.prev_sigs, &frame_sigs) {
+            self.live = live;
+        }
         self.prev_sigs = frame_sigs.clone();
 
         // Nothing moved between this frame and the last. That is the user
@@ -449,7 +512,7 @@ impl Stitcher {
         let tail_start = self.sigs.len() - h;
         let tail = &self.sigs[tail_start..];
 
-        let Some(offset) = find_offset(tail, &frame_sigs, &moving) else {
+        let Some(offset) = find_offset(tail, &frame_sigs, &moving, &self.live) else {
             return Push::NoMatch;
         };
 
@@ -483,12 +546,50 @@ impl Stitcher {
     /// perfectly still somewhere the capture can never reach.
     fn holds_tail(&self, frame: &[Sig]) -> bool {
         let tail = &self.sigs[self.sigs.len() - frame.len()..];
-        let total: f32 = frame.iter().zip(tail).map(|(a, b)| row_distance(a, b)).sum();
+        let total: f32 =
+            frame.iter().zip(tail).map(|(a, b)| row_distance_on(a, b, &self.live)).sum();
         total / frame.len() as f32 <= MATCH_THRESHOLD
     }
 
     pub fn into_image(self) -> Option<RgbaImage> {
-        RgbaImage::from_raw(self.width, self.height, self.canvas)
+        self.into_page(false)
+    }
+
+    /// The stitched page, optionally trimmed to the part that scrolled.
+    ///
+    /// Trimming is for a capture whose bounds nobody chose — a window, taken
+    /// whole because it was clicked. A rectangle someone dragged is theirs,
+    /// margins and all, and quietly cropping it would be answering a question
+    /// they did not ask.
+    pub fn into_page(self, trim: bool) -> Option<RgbaImage> {
+        let live = trim.then(|| self.page_columns()).flatten();
+        let img = RgbaImage::from_raw(self.width, self.height, self.canvas)?;
+        let Some((x0, x1)) = live else { return Some(img) };
+        Some(image::imageops::crop_imm(&img, x0, 0, x1 - x0, self.height).to_image())
+    }
+
+    /// The span the page itself occupies, when furniture is standing beside it.
+    ///
+    /// A window captured whole comes with a thumbnail rail or a navigation
+    /// pane down one side, and that furniture does not scroll: every join
+    /// stacks another slice of it, so the finished page wears a smear where
+    /// the sidebar was. Trimming it is not a liberty — a scrolling capture is
+    /// a picture of the thing that scrolled.
+    ///
+    /// Only whole dead edges are trimmed. Something static in the *middle* of
+    /// the page is a sticky header or a floating button, and cutting a column
+    /// out of the middle would be worse than the smear.
+    fn page_columns(&self) -> Option<(u32, u32)> {
+        if self.live.iter().all(|l| *l) {
+            return None;
+        }
+        let first = self.live.iter().position(|l| *l)?;
+        let last = self.live.iter().rposition(|l| *l)?;
+        let bucket = (self.width as usize).max(SIG_W) / SIG_W;
+        let x0 = (first * bucket) as u32;
+        let x1 = if last == SIG_W - 1 { self.width } else { ((last + 1) * bucket) as u32 };
+        // Not worth the surprise for a sliver, and never nothing.
+        (x1 > x0 && x1 - x0 >= self.width / 2).then_some((x0, x1.min(self.width)))
     }
 
     /// The last few rows of the canvas, as a PNG data URL.
@@ -713,13 +814,14 @@ pub fn scroll_layout(app: AppHandle) -> Result<Rect, String> {
 /// than something to poll, and the hit test itself belongs in the page where it
 /// costs nothing per pointer move.
 #[tauri::command]
-pub fn scroll_windows(app: AppHandle) -> Result<Vec<Rect>, String> {
+pub fn scroll_windows(app: AppHandle) -> Result<Vec<Snap>, String> {
     let state = app.state::<ScrollState>();
     let (display, _) = (*state.bounds.lock().unwrap()).ok_or("no scroll session")?;
 
     Ok(crate::snap::pointable_windows()
         .into_iter()
-        .map(|w| Rect {
+        .map(|w| Snap {
+            id: w.id,
             x: w.bounds.x - display.x,
             y: w.bounds.y - display.y,
             width: w.bounds.width,
@@ -728,9 +830,63 @@ pub fn scroll_windows(app: AppHandle) -> Result<Vec<Rect>, String> {
         .collect())
 }
 
+/// A window the selection can snap to: its place in the overlay's coordinates,
+/// and the id that lets the shutter photograph it directly. The page sends the
+/// id back with the choice, which is what frees the HUD from having to find
+/// screen the capture is not using.
+#[derive(Serialize)]
+pub struct Snap {
+    id: u32,
+    x: f64,
+    y: f64,
+    width: f64,
+    height: f64,
+}
+
+/// The chosen window, if it is still there and still holds what was chosen.
+///
+/// Falls back to `None` rather than failing: a rectangle of screen is a worse
+/// capture than a window — the HUD has to keep out of it, and it does not
+/// survive the window moving — but it is a great deal better than nothing.
+fn window_source(id: u32, region: Rect, display: Rect) -> Option<Source> {
+    let w = crate::snap::pointable_windows().into_iter().find(|w| w.id == id)?;
+    let (wx, wy) = (w.bounds.x, w.bounds.y);
+    let crop = Rect {
+        x: region.x - wx,
+        y: region.y - wy,
+        width: region.width,
+        height: region.height,
+    };
+    // Only if the choice really is inside that window: a drag that wandered
+    // off its edge would otherwise crop to somewhere the user never pointed.
+    let inside = crop.x >= -1.0
+        && crop.y >= -1.0
+        && crop.x + crop.width <= w.bounds.width + 1.0
+        && crop.y + crop.height <= w.bounds.height + 1.0;
+    let _ = display;
+    inside.then_some(Source::Window {
+        id,
+        crop: Rect { x: crop.x.max(0.0), y: crop.y.max(0.0), ..crop },
+        window: (w.bounds.width, w.bounds.height),
+    })
+}
+
 /// The region is chosen: turn the overlay into the HUD and start capturing.
 #[tauri::command]
-pub fn scroll_start(app: AppHandle, region: Rect) -> Result<(), String> {
+pub fn scroll_start(app: AppHandle, region: Rect, window: Option<u32>) -> Result<(), String> {
+    let started = start(&app, region, window);
+    if let Err(err) = &started {
+        // Never in silence. The page that called this is about to close, and
+        // its console goes with it — so an unreported refusal here is a
+        // scrolling capture that simply does not happen, which is exactly how
+        // this looked to the one person using it: pick an area, watch the
+        // overlay vanish, get nothing, twice.
+        let _ = app.emit("capture:error", err.clone());
+    }
+    started
+}
+
+fn start(app: &AppHandle, region: Rect, chosen: Option<u32>) -> Result<(), String> {
     let state = app.state::<ScrollState>();
     let (display_bounds, scale) =
         (*state.bounds.lock().unwrap()).ok_or("no scroll session")?;
@@ -756,16 +912,24 @@ pub fn scroll_start(app: AppHandle, region: Rect) -> Result<(), String> {
         }
     }
 
-    let window = app.get_webview_window(LABEL).ok_or("the overlay is gone")?;
+    let overlay = app.get_webview_window(LABEL).ok_or("the overlay is gone")?;
+
+    // A named window is photographed by id, so the HUD is free to sit on top
+    // of it; only a bare rectangle of screen needs somewhere out of shot.
+    let source = match chosen.and_then(|id| window_source(id, region, display_bounds)) {
+        Some(source) => source,
+        None => Source::Screen(region),
+    };
+    let may_overlap = matches!(source, Source::Window { .. });
 
     // The same window becomes the HUD: out of the way of the region, near it.
-    let hud = hud_position(&region, &display_bounds).ok_or(
+    let hud = hud_position(&region, &display_bounds, may_overlap).ok_or(
         "leave a strip of screen free beside the area — the progress panel has to \
          sit somewhere that isn't being photographed",
     )?;
-    window
+    overlay
         .set_position(tauri::LogicalPosition::new(hud.0, hud.1))
-        .and_then(|_| window.set_size(tauri::LogicalSize::new(HUD_WIDTH, HUD_HEIGHT)))
+        .and_then(|_| overlay.set_size(tauri::LogicalSize::new(HUD_WIDTH, HUD_HEIGHT)))
         .map_err(|e| e.to_string())?;
     let _ = app.emit_to(LABEL, "scroll:phase", "hud");
 
@@ -779,7 +943,7 @@ pub fn scroll_start(app: AppHandle, region: Rect) -> Result<(), String> {
         // Give the window a beat to move before the first shot, or the HUD
         // itself — still mid-flight across the screen — ends up in frame one.
         std::thread::sleep(std::time::Duration::from_millis(250));
-        run_session(&handle, region, scale, &stop, &deliver);
+        run_session(&handle, source, scale, &stop, &deliver);
 
         let state = handle.state::<ScrollState>();
         *state.session.lock().unwrap() = None;
@@ -804,7 +968,7 @@ fn clamp_to_display(region: Rect, display: Rect) -> Rect {
 /// Where the HUD goes: past the region's right edge, else its left, else
 /// inside its top-right corner. Never below or above, where page content the
 /// user is about to scroll would sit behind it.
-fn hud_position(region: &Rect, display: &Rect) -> Option<(f64, f64)> {
+fn hud_position(region: &Rect, display: &Rect, may_overlap: bool) -> Option<(f64, f64)> {
     const GAP: f64 = 12.0;
     let y = region.y.max(display.y + GAP).min(display.y + display.height - HUD_HEIGHT - GAP);
     let x = region.x.max(display.x + GAP).min(display.x + display.width - HUD_WIDTH - GAP);
@@ -830,7 +994,18 @@ fn hud_position(region: &Rect, display: &Rect) -> Option<(f64, f64)> {
     if above >= display.y + GAP {
         return Some((x, above));
     }
-    None
+
+    // Nowhere beside it — a selection that takes the whole display, which is
+    // most of what anyone captures this way. When the shutter is pointed at a
+    // window rather than the screen, that costs nothing: the window's picture
+    // comes back whole however much is sitting on top of it, so the panel goes
+    // in the corner and stays out of the reading.
+    may_overlap.then(|| {
+        (
+            display.x + display.width - HUD_WIDTH - GAP,
+            display.y + display.height - HUD_HEIGHT - GAP,
+        )
+    })
 }
 
 /// Stop and open what was captured in the editor.
@@ -871,17 +1046,48 @@ fn close(app: &AppHandle) {
     }
 }
 
+/// What the shutter is pointed at.
+///
+/// A window is worth naming separately from the rectangle it happens to
+/// occupy, because `screencapture -l` photographs a window's own surface: the
+/// picture comes back whole even with the HUD — or anything else — sitting on
+/// top of it. That is the difference between a feature that works on a window
+/// filling the screen and one that refuses, since a full-width selection
+/// leaves nowhere to put a panel that must not be in shot.
+///
+/// It also survives the window being dragged mid-capture, which the rectangle
+/// never could: the crop travels with the window rather than the screen.
+enum Source {
+    /// A rectangle of the display, whatever is on it.
+    Screen(Rect),
+    /// A window, by id, cropped to the part of it that was chosen. `window` is
+    /// the window's size in points when it was picked, which is how the
+    /// returned image's scale is worked out.
+    Window { id: u32, crop: Rect, window: (f64, f64) },
+}
+
 /// One capture of the region, straight to pixels.
-fn shoot(region: &Rect) -> Result<RgbaImage, String> {
+fn shoot(source: &Source) -> Result<RgbaImage, String> {
     let path = std::env::temp_dir().join("shotly").join(format!(
         "scrollframe-{}.png",
         std::process::id()
     ));
-    let spec = format!("{},{},{},{}", region.x, region.y, region.width, region.height);
     let path_str = path.to_string_lossy().into_owned();
 
+    let spec;
+    let args: Vec<&str> = match source {
+        Source::Screen(region) => {
+            spec = format!("{},{},{},{}", region.x, region.y, region.width, region.height);
+            vec!["-x", "-o", "-t", "png", "-R", &spec, &path_str]
+        }
+        Source::Window { id, .. } => {
+            spec = id.to_string();
+            vec!["-x", "-o", "-t", "png", "-l", &spec, &path_str]
+        }
+    };
+
     let output = std::process::Command::new("/usr/sbin/screencapture")
-        .args(["-x", "-o", "-t", "png", "-R", &spec, &path_str])
+        .args(&args)
         .output()
         .map_err(|e| format!("could not spawn screencapture: {e}"))?;
     if !output.status.success() {
@@ -890,7 +1096,23 @@ fn shoot(region: &Rect) -> Result<RgbaImage, String> {
 
     let img = image::open(&path).map_err(|e| e.to_string())?.into_rgba8();
     let _ = std::fs::remove_file(&path);
-    Ok(img)
+
+    let Source::Window { crop, window, .. } = source else {
+        return Ok(img);
+    };
+
+    // The window arrives whole; take the part that was chosen. Its scale is
+    // read from the picture rather than assumed, so a window that was dragged
+    // between displays of different scales crops to the right place.
+    let scale = if window.0 > 0.0 { img.width() as f64 / window.0 } else { 1.0 };
+    let px = |v: f64| (v * scale).round().max(0.0) as u32;
+    let (x, y) = (px(crop.x), px(crop.y));
+    let w = px(crop.width).min(img.width().saturating_sub(x));
+    let h = px(crop.height).min(img.height().saturating_sub(y));
+    if w == 0 || h == 0 {
+        return Err("the window no longer holds the area that was chosen".into());
+    }
+    Ok(image::imageops::crop_imm(&img, x, y, w, h).to_image())
 }
 
 /// Whether to warn that nothing is being captured, and which way to point.
@@ -951,7 +1173,7 @@ impl Stall {
 
 fn run_session(
     app: &AppHandle,
-    region: Rect,
+    source: Source,
     scale: f64,
     stop: &AtomicBool,
     deliver: &AtomicBool,
@@ -963,7 +1185,7 @@ fn run_session(
     while !stop.load(Ordering::Relaxed) {
         let started = std::time::Instant::now();
 
-        match shoot(&region) {
+        match shoot(&source) {
             Err(err) => eprintln!("[shotly] scroll frame failed: {err}"),
             Ok(img) => {
                 frames += 1;
@@ -1013,7 +1235,10 @@ fn run_session(
         return;
     }
 
-    let Some(stitched) = stitcher.and_then(Stitcher::into_image) else {
+    // A window was taken whole because it was clicked; a rectangle is exactly
+    // what someone dragged. Only the first has furniture to trim.
+    let whole_window = matches!(source, Source::Window { .. });
+    let Some(stitched) = stitcher.and_then(|s| s.into_page(whole_window)) else {
         let _ = app.emit("capture:error", "nothing was captured");
         crate::commands::reveal_after_capture(app);
         return;
@@ -1147,6 +1372,40 @@ mod tests {
         stall.saw(&Push::Appended { rows: 12 });
         assert!(!stall.stalled());
         assert!(!stall.behind);
+    }
+
+    /// A window is not all page: it has furniture down the side that stays
+    /// put while the content scrolls, and judging the match by that furniture
+    /// is how capturing a whole window came to capture nothing.
+    #[test]
+    fn a_sidebar_that_never_moves_does_not_get_a_vote() {
+        let h = 400;
+        // The left fifth is a rail: fixed in the frame, whatever the page does.
+        let rail = window(&page(64, 4000), 1200, h);
+        let page = page(320, 2000);
+        let framed = |top: u32| {
+            let mut img = window(&page, top, h);
+            image::imageops::replace(&mut img, &rail, 0, 0);
+            img
+        };
+
+        let mut st = Stitcher::new(framed(0));
+        let mut top = 0;
+        for step in [40u32, 120, 75] {
+            top += step;
+            assert_eq!(
+                st.push(framed(top)),
+                Push::Appended { rows: step },
+                "the rail outvoted the page it is standing next to"
+            );
+        }
+        assert_eq!(st.size().1, top + h);
+
+        // And the rail is not in the finished page: it never scrolled, so
+        // every join stacked another slice of it.
+        let out = st.into_page(true).unwrap();
+        assert!(out.width() < 320, "the rail was left in the finished page");
+        assert!(out.width() >= 320 - 64 - 320 / SIG_W as u32, "too much was trimmed");
     }
 
     #[test]
@@ -1308,14 +1567,24 @@ mod tests {
             Rect { x: 40.0, y: 40.0, width: 1430.0, height: 500.0 },    // room below
             Rect { x: 40.0, y: 420.0, width: 1430.0, height: 520.0 },   // room above
         ] {
-            let at = hud_position(&region, &display)
+            let at = hud_position(&region, &display, false)
                 .unwrap_or_else(|| panic!("no place found for {region:?}"));
             assert!(!overlaps(&region, at), "HUD at {at:?} sits inside {region:?}");
         }
 
-        // A region with no room anywhere is refused rather than fudged.
+        // A region taking the whole display leaves nowhere out of shot, and a
+        // rectangle of screen photographs whatever is on it — so it is refused
+        // rather than fudged.
         let everything = Rect { x: 0.0, y: 0.0, width: 1512.0, height: 982.0 };
-        assert_eq!(hud_position(&everything, &display), None);
+        assert_eq!(hud_position(&everything, &display, false), None);
+
+        // Unless the shutter is pointed at a window, which comes back whole
+        // whatever is sitting on top of it. Refusing that was the whole of
+        // "scrolling capture does not work": clicking a window — any window
+        // filling the screen — landed here and gave up in silence.
+        let at = hud_position(&everything, &display, true).expect("a window can be overlapped");
+        assert!(at.0 >= display.x && at.0 + HUD_WIDTH <= display.x + display.width);
+        assert!(at.1 >= display.y && at.1 + HUD_HEIGHT <= display.y + display.height);
     }
 
     /// What the shutter is handed must be whole points inside the display, or
