@@ -264,6 +264,26 @@ export function EditorApp() {
       notify("Recording saved to your Shotly folder", "ok", 5000);
     });
 
+    // ⌘Z and ⇧⌘Z arrive as menu events, never as keydowns: the Edit menu owns
+    // those accelerators at the native level, so the keymap's own Undo entry
+    // had never once fired — the key went menu → `undo:` selector → the
+    // webview's *text* undo manager → nowhere. Found by pressing ⌘Z over a
+    // fresh crop and watching nothing happen.
+    //
+    // This listener does exactly what the keymap's `edit.undo` and `edit.redo`
+    // always declared, `allowWhileTyping: true` included: the canvas history,
+    // whatever has focus. No text-field special case — the commands never made
+    // one, and a menu route that behaved differently from the keymap it stands
+    // in for would be a third undo to reason about.
+    const editUnlisten = listen<"undo" | "redo">("editor:edit", (event) => {
+      // App-wide accelerator, one listener: ignore it unless this window is
+      // the one the user is looking at.
+      if (!document.hasFocus()) return;
+      const state = useEditor.getState();
+      if (event.payload === "redo") state.redo();
+      else state.undo();
+    });
+
     return () => {
       void openUnlisten.then((fn) => fn());
       void errorUnlisten.then((fn) => fn());
@@ -271,6 +291,7 @@ export function EditorApp() {
       void settingsUnlisten.then((fn) => fn());
       void recordedUnlisten.then((fn) => fn());
       void uploadUnlisten.then((fn) => fn());
+      void editUnlisten.then((fn) => fn());
     };
   }, [notify, describe]);
 

@@ -397,6 +397,34 @@ fn build_menu(app: &tauri::AppHandle) -> tauri::Result<()> {
         app_menu.insert(&settings, 3)?;
     }
 
+    // The default Edit menu's Undo and Redo own ⌘Z and ⇧⌘Z at the native
+    // level, and send them to the webview's *text* undo manager — so the
+    // editor's own undo never saw the key, ever. Pressing ⌘Z over the canvas
+    // did nothing, and only the toolbar arrows worked; it took driving the
+    // real app to notice, because the browser harness has no native menu.
+    //
+    // The two items are replaced with ones this app owns, same accelerators,
+    // routed to the editor page — which sends them back to native text
+    // editing when a field has focus, so the one case the old wiring served
+    // still works. Cut, Copy, Paste and Select All stay predefined: they are
+    // what wires those keys to the webview, and they were never shadowed.
+    for item in menu.items()? {
+        let MenuItemKind::Submenu(edit) = item else { continue };
+        if edit.text()? != "Edit" {
+            continue;
+        }
+        for (index, entry) in edit.items()?.iter().enumerate() {
+            let MenuItemKind::Predefined(predefined) = entry else { continue };
+            let replacement = match predefined.text()?.as_str() {
+                "Undo" => MenuItem::with_id(app, "undo", "Undo", true, Some("Cmd+Z"))?,
+                "Redo" => MenuItem::with_id(app, "redo", "Redo", true, Some("Cmd+Shift+Z"))?,
+                _ => continue,
+            };
+            edit.remove_at(index)?;
+            edit.insert(&replacement, index)?;
+        }
+    }
+
     app.set_menu(menu)?;
     Ok(())
 }
@@ -546,6 +574,11 @@ fn build_tray(app: &tauri::AppHandle) -> tauri::Result<()> {
         .menu(&menu)
         .show_menu_on_left_click(true)
         .on_menu_event(|app, event| match event.id().as_ref() {
+            // To the editor window, which decides between the canvas history
+            // and native text editing — see `editor:edit` in EditorApp.
+            id @ ("undo" | "redo") => {
+                let _ = tauri::Emitter::emit_to(app, "editor", "editor:edit", id);
+            }
             "region" => dispatch(app, CaptureMode::Region),
             "window" => dispatch(app, CaptureMode::Window),
             "window-list" => {
