@@ -37,8 +37,7 @@ use std::path::Path;
 
 use block2::StackBlock;
 use objc2_av_foundation::{
-    AVAssetExportPresetHEVCHighestQuality, AVAssetExportPresetHighestQuality,
-    AVAssetExportPresetPassthrough, AVAssetExportSession, AVAssetExportSessionStatus, AVFileType,
+    AVAssetExportPresetHEVCHighestQuality, AVAssetExportPresetPassthrough, AVAssetExportSession, AVAssetExportSessionStatus, AVFileType,
     AVFileTypeMPEG4, AVFileTypeQuickTimeMovie, AVMediaTypeVideo, AVMutableComposition, AVURLAsset,
 };
 use objc2_core_media::{CMTime, CMTimeRange};
