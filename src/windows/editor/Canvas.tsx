@@ -1000,6 +1000,8 @@ function snapSquare(from: Point, to: Point): Point {
 }
 
 function CropOverlay({ rect, doc, zoom }: { rect: Rect; doc: { crop: Rect }; zoom: number }) {
+  const applyCrop = useEditor((s) => s.applyCrop);
+  const setPendingCrop = useEditor((s) => s.setPendingCrop);
   if (rect.width < 1 || rect.height < 1) return null;
 
   return (
@@ -1033,11 +1035,40 @@ function CropOverlay({ rect, doc, zoom }: { rect: Rect; doc: { crop: Rect }; zoo
           ))}
         </div>
       </div>
+      {/* The size, and the two verbs. The buttons are the fix for a real
+          report: Enter applied the crop and Escape dropped it, but nothing on
+          screen said so — you drew a marquee, got a number, and stood there.
+          A pending crop is a question, and a question needs its answers where
+          you are looking. Keyboard still works; the buttons name the keys.
+
+          `pointer-events-auto` because the whole overlay opts out (marks and
+          guides must not eat canvas drags), and `stopPropagation` on the way
+          down so pressing a button does not also start a fresh marquee on the
+          canvas underneath it. */}
       <div
-        className="surface-pop absolute rounded-md px-2 py-1 font-mono text-[11px] tabular-nums text-ink"
+        className="surface-pop pointer-events-auto absolute flex items-center gap-1 rounded-md py-0.5 pr-0.5 pl-2 font-mono text-[11px] tabular-nums text-ink"
         style={{ left: rect.x * zoom, top: (rect.y + rect.height) * zoom + 8 }}
+        onPointerDown={(e) => e.stopPropagation()}
       >
         {Math.round(rect.width)} × {Math.round(rect.height)}
+        <span className="mx-1 h-4 w-px bg-line" />
+        <button
+          type="button"
+          title="Keep the whole capture (esc)"
+          onClick={() => setPendingCrop(null)}
+          className="h-6 rounded px-2 font-sans text-[11.5px] font-medium text-ink-2 transition-colors hover:bg-hover hover:text-ink"
+        >
+          Cancel
+        </button>
+        <button
+          type="button"
+          title="Crop to this (⏎)"
+          onClick={() => applyCrop(rect)}
+          className="flex h-6 items-center gap-1 rounded bg-accent px-2 font-sans text-[11.5px] font-semibold text-accent-fg transition-colors hover:bg-accent-hi"
+        >
+          Crop
+          <span className="opacity-60">⏎</span>
+        </button>
       </div>
       <span className="sr-only">{doc.crop.width}</span>
     </div>

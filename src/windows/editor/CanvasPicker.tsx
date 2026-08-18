@@ -61,7 +61,8 @@ export function CanvasPicker({ disabled }: { disabled?: boolean }) {
           )}
         >
           <IconCanvas />
-          Canvas
+          {/* Bows out when the header runs tight; see the note in TopBar. */}
+          <span className="@max-[1090px]:hidden">Canvas</span>
         </button>
       )}
     >

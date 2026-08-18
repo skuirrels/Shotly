@@ -119,7 +119,7 @@ export function TopBar({
     // stay clickable without any opt-out of their own.
     <header
       data-tauri-drag-region
-      className="titlebar-drag relative z-30 flex h-[58px] shrink-0 items-center gap-1 border-b border-line-subtle bg-surface pr-2.5 pl-[86px]"
+      className="titlebar-drag @container relative z-30 flex h-[58px] shrink-0 items-center gap-1 border-b border-line-subtle bg-surface pr-2.5 pl-[86px]"
     >
       <ViewSwitch view={view} canEdit={canEdit} canPlay={player !== null} onView={onView} />
 
@@ -299,8 +299,17 @@ export function TopBar({
               className="no-drag flex h-8 items-center gap-1.5 rounded-lg bg-white/[0.07] px-2.5 text-[12.5px] font-medium text-ink transition-colors hover:bg-white/[0.11] active:bg-white/[0.14] disabled:opacity-40"
             >
               <IconCopy />
-              {busy === "copy" ? "Copying…" : "Copy"}
-              <span className="ml-0.5 font-sans text-[11px] text-ink-3">⌘C</span>
+              {/* The label bows out before the bar clips. The editor bar needs
+                  ~1075px drawn in full and the window's minimum is 880; every
+                  button here keeps its icon and its tooltip, so below the
+                  threshold the bar reads like a toolbar instead of running off
+                  the right edge — which it had been quietly doing since before
+                  the tabs grew. Save keeps its word: it is the one accented
+                  action, and an accent with no name is just a coloured shape. */}
+              <span className="flex items-center gap-1.5 @max-[1090px]:hidden">
+                {busy === "copy" ? "Copying…" : "Copy"}
+                <span className="font-sans text-[11px] text-ink-3">⌘C</span>
+              </span>
             </button>
 
             {/* Export earns its own button. Sending someone a flattened PNG is
@@ -314,8 +323,10 @@ export function TopBar({
               className="no-drag ml-1 flex h-8 items-center gap-1.5 rounded-lg bg-white/[0.07] px-2.5 text-[12.5px] font-medium text-ink transition-colors hover:bg-white/[0.11] active:bg-white/[0.14] disabled:opacity-40"
             >
               <IconImage />
-              {busy === "export" ? "Exporting…" : "Export"}
-              <span className="ml-0.5 font-sans text-[11px] text-ink-3">⌘E</span>
+              <span className="flex items-center gap-1.5 @max-[1090px]:hidden">
+                {busy === "export" ? "Exporting…" : "Export"}
+                <span className="font-sans text-[11px] text-ink-3">⌘E</span>
+              </span>
             </button>
 
             {/* One button, one click. This was a split button whose chevron
@@ -331,7 +342,7 @@ export function TopBar({
             >
               <IconSave />
               {busy === "save" ? "Saving…" : "Save"}
-              <span className="ml-0.5 font-sans text-[11px] opacity-60">⌘S</span>
+              <span className="ml-0.5 font-sans text-[11px] opacity-60 @max-[1090px]:hidden">⌘S</span>
             </button>
           </>
         )}
@@ -442,7 +453,7 @@ function CaptureMenu({
           className="no-drag flex h-8 items-center gap-1.5 pr-2 pl-2.5 text-[12.5px] font-medium text-ink transition-colors hover:bg-white/[0.07] active:bg-white/[0.12]"
         >
           <IconCamera />
-          {active.label}
+          <span className="@max-[1090px]:hidden">{active.label}</span>
         </button>
       </Tooltip>
 

@@ -51,7 +51,8 @@ export function BackdropPicker({ disabled }: { disabled?: boolean }) {
           )}
         >
           <IconBackdrop />
-          Backdrop
+          {/* Bows out when the header runs tight; see the note in TopBar. */}
+          <span className="@max-[1090px]:hidden">Backdrop</span>
         </button>
       )}
     >
