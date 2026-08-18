@@ -4,6 +4,7 @@ mod backup;
 mod build_info;
 mod capture;
 mod combine;
+mod compose;
 mod commands;
 mod hotkeys;
 mod markup;
@@ -56,7 +57,54 @@ const WEBSITE: &str = "skuirrels.com/shotly";
 const AUTOSTART_ARG: &str = "--opened-at-login";
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
+/// Write panics somewhere they can be read afterwards.
+///
+/// A packaged app has no terminal, so a panic's message — the one line that
+/// says which file and which assumption — goes nowhere at all. What is left is
+/// a crash report full of `?`, and an hour of rebuilding the exact commit to
+/// guess at addresses. This is that hour, spent once.
+///
+/// Appends rather than truncates, and never touches the process: the default
+/// hook still runs afterwards, so nothing about how a panic behaves changes.
+/// `~/Library/Logs` is where macOS expects an app to put this, which means
+/// Console.app finds it without being told.
+fn log_panics() {
+    let previous = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let dir = std::env::var("HOME")
+            .map(|home| std::path::PathBuf::from(home).join("Library/Logs/Shotly"))
+            .unwrap_or_else(|_| std::env::temp_dir());
+
+        if std::fs::create_dir_all(&dir).is_ok() {
+            use std::io::Write;
+            let thread = std::thread::current();
+            let seconds = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0);
+            let entry = format!(
+                "unix:{} v{} ({}) thread={:?} at {}\n  {}\n",
+                seconds,
+                env!("CARGO_PKG_VERSION"),
+                crate::build_info::PROFILE,
+                thread.name().unwrap_or("unnamed"),
+                info.location().map(|l| l.to_string()).unwrap_or_else(|| "?".into()),
+                info,
+            );
+            if let Ok(mut file) =
+                std::fs::OpenOptions::new().create(true).append(true).open(dir.join("panics.log"))
+            {
+                let _ = file.write_all(entry.as_bytes());
+            }
+        }
+
+        previous(info);
+    }));
+}
+
 pub fn run() {
+    log_panics();
+
     let mut builder = tauri::Builder::default()
         // Recordings are served through a scheme of our own rather than
         // `asset:`, whose handler is synchronous and would do every read of a

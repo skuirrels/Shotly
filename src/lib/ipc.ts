@@ -12,6 +12,7 @@ import type {
   ShareLink,
   ShareProvider,
   Trimmed,
+  TrimMode,
   WindowInfo,
 } from "./types";
 
@@ -249,15 +250,16 @@ export const combineCaptures = (
 ) => invoke<void>("combine_captures", { paths, layout, background });
 
 /**
- * Keep the part of a recording between two marks, and file it in the library.
+ * Shorten a recording about two marks, and file the result in the library.
  *
- * Both marks are in seconds. The original is never touched: the answer is a
- * new capture beside it, which is what the player switches to. The cut is
- * lossless and takes about as long as copying the file — see
+ * Marks are in seconds; `mode` says which side of them to throw away. The
+ * original is never touched — the answer is a new capture beside it, which is
+ * what the player switches to. Lossless, and about as quick as copying the
+ * file. Reports `trim:progress` (0..1) while it runs. See
  * `src-tauri/src/trim.rs`.
  */
-export const videoTrim = (path: string, start: number, end: number) =>
-  invoke<Trimmed>("video_trim", { path, start, end });
+export const videoTrim = (path: string, start: number, end: number, mode: TrimMode) =>
+  invoke<Trimmed>("video_trim", { path, start, end, mode });
 
 /** Cloud sync folders this Mac has, to offer as one-click backup choices. */
 export const backupTargets = () => invoke<BackupTarget[]>("backup_targets");

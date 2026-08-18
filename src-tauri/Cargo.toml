@@ -44,6 +44,18 @@ keyring = { version = "3", default-features = false, features = ["apple-native"]
 core-graphics = "0.25"
 core-foundation = "0.10"
 objc2 = "0.6"
+# Cutting a recording down: an AVMutableComposition of the parts to keep, and a
+# passthrough export of it. See `trim.rs` for why this and not a subprocess.
+objc2-av-foundation = { version = "0.3", features = [
+  "AVAsset",
+  "AVAssetExportSession",
+  "AVComposition",
+  "AVMediaFormat",
+  "block2",
+  "objc2-core-media",
+] }
+objc2-core-media = { version = "0.3", features = ["CMTime", "CMTimeRange"] }
+block2 = "0.6"
 objc2-app-kit = { version = "0.3", features = [
   "NSWindow",
   "NSResponder",
@@ -71,5 +83,24 @@ tauri-plugin-updater = "2"
 codegen-units = 1
 lto = true
 opt-level = 3
-panic = "abort"
-strip = true
+# Unwind, not abort — and this is a bug fix, not a preference.
+#
+# 0.9.5 aborted twice in one evening from a panic inside wry's URL-scheme
+# handler, on the thread `media.rs` answers range requests from. WKWebView
+# throws if you answer a task it has already stopped, which is what happens
+# when the player's source is swapped while a range request is in flight —
+# switching to a freshly trimmed recording does exactly that. wry wraps that
+# delivery in `objc2::exception::catch` because it expects to have to; with
+# `panic = "abort"` there is nothing to catch with, and the whole app goes.
+#
+# The general point outweighs the specific one: in a capture tool, a panic on
+# a worker thread — a thumbnail, a range request, an export — should cost that
+# one piece of work, not the session and whatever is on screen. Unwinding lets
+# tokio turn it into a failed task and an error message. It costs some binary
+# size and nothing that matters.
+panic = "unwind"
+# Keep the symbol table. `strip = true` cost an hour of guesswork on the crash
+# above: an `.ips` full of `?` cannot be read, and rebuilding the exact commit
+# unstripped only *nearly* reproduces the addresses (measured 316 bytes of
+# drift in __text), which is enough to send you after the wrong function.
+strip = "debuginfo"

@@ -99,18 +99,24 @@ export async function invoke<T>(cmd: string, args?: Record<string, unknown>): Pr
   }
   if (cmd === "record_stop" || cmd === "record_cancel") return undefined as T;
 
-  // Trimming. `avconvert` is the one part of it a browser cannot have, so the
-  // stub pauses for a beat and hands back the file it would have written —
-  // enough for the marks, the preview loop and the busy button to be tried.
+  // Trimming. The export is the one part a browser cannot have, so the stub
+  // reports progress for a beat and hands back the file it would have written —
+  // enough for the marks, the preview loop and the filling button to be tried.
   if (cmd === "video_trim") {
     const start = Number(args?.start ?? 0);
     const end = Number(args?.end ?? 0);
-    await new Promise((done) => setTimeout(done, 900));
-    if (end - start < 0.2) throw new Error("that selection is too short to keep");
+    const selected = end - start;
+    if (selected < 0.2) throw new Error("that selection is too short");
+    // Report progress the way the export does, so the filling button can be
+    // watched here rather than only on a real recording.
+    for (let step = 0; step <= 10; step++) {
+      setTimeout(() => (window as any).EMIT?.("trim:progress", step / 10), step * 120);
+    }
+    await new Promise((done) => setTimeout(done, 1400));
     return {
       path: "/lib/Recording 2026-08-17 at 13.58.12 trimmed.mov",
       name: "Recording 2026-08-17 at 13.58.12 trimmed.mov",
-      seconds: end - start,
+      seconds: args?.mode === "cut" ? Math.max(0.2, 12 - selected) : selected,
     } as T;
   }
 

@@ -1,5 +1,6 @@
 import { useCallback, useRef, useState } from "react";
 import clsx from "clsx";
+import type { TrimMode } from "@/lib/types";
 import { formatDuration } from "./format";
 
 /**
@@ -34,6 +35,8 @@ interface TrackProps {
   /** Where the playhead is, in seconds. */
   time: number;
   range: Range;
+  /** Which side of the marks is being thrown away. */
+  mode: TrimMode;
   onRange: (range: Range) => void;
   /** Called as a handle moves, so the picture follows it. */
   onSeek: (seconds: number) => void;
@@ -46,7 +49,7 @@ interface TrackProps {
  * strip that is otherwise six pixels of decoration, and the extra height is
  * what makes the handles hittable without a steady hand.
  */
-export function TrimTrack({ duration, time, range, onRange, onSeek }: TrackProps) {
+export function TrimTrack({ duration, time, range, mode, onRange, onSeek }: TrackProps) {
   const track = useRef<HTMLDivElement>(null);
   const [dragging, setDragging] = useState<"start" | "end" | null>(null);
 
@@ -122,19 +125,21 @@ export function TrimTrack({ duration, time, range, onRange, onSeek }: TrackProps
       {/* The strip everything else sits on. */}
       <div className="absolute inset-x-0 top-1/2 h-1.5 -translate-y-1/2 rounded-full bg-white/10" />
 
-      {/* What is being thrown away, on each side of the selection. */}
+{/* The two ends. Kept in Keep mode, thrown away in Cut. */}
       <div
-        className="absolute inset-y-0 left-0 rounded-l-md bg-black/45"
+        className={clsx("absolute inset-y-0 left-0 rounded-l-md", surface(mode === "cut"))}
         style={{ width: percent(range.start) }}
       />
       <div
-        className="absolute inset-y-0 right-0 rounded-r-md bg-black/45"
+        className={clsx("absolute inset-y-0 right-0 rounded-r-md", surface(mode === "cut"))}
         style={{ left: percent(range.end) }}
       />
 
-      {/* What is being kept. */}
+      {/* The middle — the other way round. Which is the whole difference
+          between the two modes, and the reason the track is worth looking at
+          before pressing the button. */}
       <div
-        className="absolute inset-y-0 border-y border-accent/60 bg-accent/20"
+        className={clsx("absolute inset-y-0", surface(mode === "keep"))}
         style={{ left: percent(range.start), right: `calc(100% - ${percent(range.end)})` }}
       />
 
@@ -169,6 +174,15 @@ export function TrimTrack({ duration, time, range, onRange, onSeek }: TrackProps
     </div>
   );
 }
+
+/**
+ * How a stretch of the timeline is painted: lit if it survives, dimmed if not.
+ *
+ * A dimmed stretch is drawn over rather than merely left plain, so "this is
+ * going" is a positive mark on the timeline instead of an absence to infer.
+ */
+const surface = (kept: boolean) =>
+  kept ? "border-y border-accent/60 bg-accent/20" : "bg-black/45";
 
 /**
  * One end of the selection.
@@ -215,8 +229,10 @@ function Handle({
 interface ActionsProps {
   range: Range;
   duration: number;
-  /** True while `avconvert` is working, which is seconds even on a big file. */
-  busy: boolean;
+  mode: TrimMode;
+  onMode: (mode: TrimMode) => void;
+  /** 0..1 while the export runs, or `null` when nothing is running. */
+  progress: number | null;
   onCancel: () => void;
   onTrim: () => void;
 }
@@ -227,32 +243,45 @@ interface ActionsProps {
  * Two things in one line, because there is only ever one of them to say. Until
  * a handle has moved there is nothing to confirm and everything to explain, so
  * it explains — including the two keys, which are otherwise undiscoverable.
- * After that it spells the cut out in full, both marks and the resulting
+ * After that it spells the result out in full, both marks and the resulting
  * length, because this is the last moment before a file is written and
  * "0:03 – 0:21" is checkable in a way that two coloured handles are not.
  */
-export function TrimActions({ range, duration, busy, onCancel, onTrim }: ActionsProps) {
-  const kept = range.end - range.start;
+export function TrimActions({
+  range,
+  duration,
+  mode,
+  onMode,
+  progress,
+  onCancel,
+  onTrim,
+}: ActionsProps) {
+  const selected = range.end - range.start;
+  const kept = mode === "keep" ? selected : Math.max(0, duration - selected);
   const dropped = Math.max(0, duration - kept);
   /** Both marks still at the ends: nothing would come off. */
   const untouched = range.start <= 0 && range.end >= duration - MIN_SELECTION;
+  const busy = progress !== null;
 
   return (
     <div className="flex items-center gap-2 border-t border-line px-1.5 pt-1.5">
+      <Modes mode={mode} onMode={onMode} disabled={busy} />
+
       <p className="min-w-0 flex-1 truncate text-[11.5px] text-ink-3">
         {untouched ? (
           <>
-            Drag the handles to choose what to keep — or press{" "}
-            <Key>I</Key> and <Key>O</Key> to mark where you are
+            Drag the handles{mode === "keep" ? " to choose what to keep" : " around the bit to lose"}{" "}
+            — or press <Key>I</Key> and <Key>O</Key> to mark where you are
           </>
         ) : (
           <>
             <span className="text-ink">
-              Keeping {formatDuration(range.start)} – {formatDuration(range.end)}
+              {mode === "keep" ? "Keeping" : "Cutting"} {formatDuration(range.start)} –{" "}
+              {formatDuration(range.end)}
             </span>
-            <span className="font-mono tabular-nums"> · {formatDuration(kept)}</span>
+            <span className="font-mono tabular-nums"> · {formatDuration(kept)} left</span>
             {dropped >= 1 && (
-              <span className="text-ink-4"> · dropping {formatDuration(dropped)}</span>
+              <span className="text-ink-4"> · losing {formatDuration(dropped)}</span>
             )}
           </>
         )}
@@ -269,14 +298,67 @@ export function TrimActions({ range, duration, busy, onCancel, onTrim }: Actions
       <button
         type="button"
         onClick={onTrim}
-        // Trimming nothing off is refused in `trim.rs` too, where it has to be;
+        // Removing nothing is refused in `trim.rs` too, where it has to be;
         // stopping it here as well means the answer is a greyed-out button
         // rather than a round trip that ends in a red toast.
-        disabled={busy || untouched || kept < MIN_SELECTION}
-        className="h-7 rounded-lg bg-accent px-3 text-[12px] font-semibold text-accent-fg transition-colors hover:bg-accent-hi disabled:pointer-events-none disabled:opacity-40"
+        disabled={busy || untouched || selected < MIN_SELECTION}
+        className={clsx(
+          "relative h-7 w-[104px] overflow-hidden rounded-lg text-[12px] font-semibold",
+          "bg-accent text-accent-fg transition-colors hover:bg-accent-hi",
+          "disabled:pointer-events-none disabled:opacity-40",
+          busy && "disabled:opacity-100",
+        )}
       >
-        {busy ? "Trimming…" : "Trim"}
+        {/* The export fills the button rather than moving a bar somewhere else.
+            0.9.5 shipped this as a word that never even had a chance to paint —
+            the work was on the main thread — and it read as a dead app. A
+            button that is visibly filling up cannot read that way. */}
+        {busy && (
+          <span
+            className="absolute inset-y-0 left-0 bg-white/25 transition-[width] duration-150 ease-linear"
+            style={{ width: `${Math.round(Math.max(0.04, progress) * 100)}%` }}
+          />
+        )}
+        <span className="relative">
+          {busy ? "Working…" : mode === "keep" ? "Trim" : "Cut out"}
+        </span>
       </button>
+    </div>
+  );
+}
+
+/** Which side of the marks goes. Two words, because there are exactly two. */
+function Modes({
+  mode,
+  onMode,
+  disabled,
+}: {
+  mode: TrimMode;
+  onMode: (mode: TrimMode) => void;
+  disabled: boolean;
+}) {
+  return (
+    <div className="flex shrink-0 rounded-lg bg-white/[0.06] p-0.5" role="group">
+      {(["keep", "cut"] as const).map((option) => (
+        <button
+          key={option}
+          type="button"
+          disabled={disabled}
+          aria-pressed={mode === option}
+          onClick={() => onMode(option)}
+          title={
+            option === "keep"
+              ? "Keep what is between the handles"
+              : "Cut out what is between the handles and close the gap"
+          }
+          className={clsx(
+            "h-6 rounded-[6px] px-2 text-[11.5px] font-medium transition-colors disabled:opacity-40",
+            mode === option ? "bg-accent/20 text-accent" : "text-ink-3 hover:text-ink",
+          )}
+        >
+          {option === "keep" ? "Keep" : "Cut out"}
+        </button>
+      ))}
     </div>
   );
 }

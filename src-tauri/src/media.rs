@@ -236,6 +236,48 @@ fn percent_decode(input: &str) -> String {
 mod tests {
     use super::*;
 
+    /// Every range header worth worrying about, against files of awkward sizes.
+    ///
+    /// Written while hunting a crash that turned out to be elsewhere, and kept
+    /// because of what it rules out. This handler answers from a worker thread
+    /// inside WebKit's URL-scheme machinery, where a panic used to take the
+    /// whole app with it — so "could a malformed Range make this panic?" is a
+    /// question worth having a standing answer to rather than re-deriving. The
+    /// awkward sizes are the ones the chunking arithmetic turns on: empty, one
+    /// byte, and either side of the megabyte boundary.
+    #[test]
+    fn no_range_header_however_odd_can_bring_the_handler_down() {
+        for size in [0usize, 1, 2, 1023, 1024 * 1024 - 1, 1024 * 1024, 1024 * 1024 + 1, 3_000_000] {
+            let dir = tempfile::tempdir().unwrap();
+            let file = dir.path().join("a recording.mov");
+            std::fs::write(&file, vec![7u8; size]).unwrap();
+            let uri = uri_for_path(&file);
+
+            let mut headers: Vec<String> = vec![
+                "bytes=0-".into(), "bytes=-0".into(), "bytes=-1".into(),
+                "bytes=-999999999".into(), "bytes=0-0".into(), "bytes=1-0".into(),
+                "bytes=0-99999999999".into(), "bytes=99999999999-".into(),
+                "bytes=18446744073709551615-".into(), "bytes=-18446744073709551615".into(),
+                "bytes=0-18446744073709551615".into(), "bytes= 0 - 1 ".into(),
+                "bytes=".into(), "bytes=-".into(), "bytes=a-b".into(), "bytes=0-1,2-3".into(),
+                "".into(), "junk".into(),
+            ];
+            for n in [0u64, 1, 2, size as u64, size as u64 + 1, (size as u64).saturating_sub(1)] {
+                headers.push(format!("bytes={n}-"));
+                headers.push(format!("bytes=-{n}"));
+                headers.push(format!("bytes={n}-{n}"));
+                headers.push(format!("bytes=0-{n}"));
+            }
+
+            for h in &headers {
+                let r = serve(dir.path(), &request(&uri, Some(h)));
+                assert!(r.status().is_success() || r.status().is_client_error(),
+                    "size {size} header {h:?} -> {}", r.status());
+            }
+            let _ = serve(dir.path(), &request(&uri, None));
+        }
+    }
+
     fn request(uri: &str, range: Option<&str>) -> Request<Vec<u8>> {
         let mut builder = Request::builder().uri(uri);
         if let Some(range) = range {

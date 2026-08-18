@@ -82,6 +82,15 @@ export interface ShareProvider {
 }
 
 /**
+ * Which side of the two marks on a recording's timeline to throw away.
+ *
+ * `keep` drops everything outside them — the dead air at each end. `cut` drops
+ * everything between them and closes the gap, for the doorbell in the middle.
+ * Snagit calls the second one Cut Out.
+ */
+export type TrimMode = "keep" | "cut";
+
+/**
  * A recording that has had its dead air cut off.
  *
  * A new capture rather than an edit in place — see `src-tauri/src/trim.rs` for

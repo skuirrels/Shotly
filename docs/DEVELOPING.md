@@ -168,7 +168,8 @@ src-tauri/src/
     gauth.rs     signing in to Google — OAuth for the provider above
   media.rs       serving a recording to the player, off the main thread
   record.rs      screen recording: what to record, and the child that records it
-  trim.rs        cutting the dead air off a recording, losslessly
+  trim.rs        marks on a timeline -> the parts of a recording to keep
+  compose.rs     writing those parts out as one movie, losslessly
   scroll.rs      scrolling capture: session loop and the row-signature stitcher
   combine.rs     several captures composed onto one sheet
   platform.rs    AppKit escapes (window level, activation policy, capture hiding)
@@ -549,51 +550,79 @@ Everything else is in the component:
   test clip. What it cannot reach is the asset protocol, which is exactly the
   half that the two config lines above govern — check that in the app.
 
-### Trimming one (`trim.rs`, `TrimBar.tsx`)
+### Trimming and cutting (`trim.rs`, `compose.rs`, `TrimBar.tsx`)
 
 The scissors in the transport turns the scrubber into a selection: a green
-handle where the keeper starts, a red one where it ends, everything outside
-them dimmed. Snagit's shape, deliberately — it is a control people arrive
-already knowing, and the colours are half of why. `I` and `O` set a mark at the
-playhead without moving the picture; dragging a handle *does* move the picture,
-so you are always looking at the frame you are about to cut on.
+handle where the selection starts, a red one where it ends. Snagit's shape,
+deliberately — it is a control people arrive already knowing, and the colours
+are half of why. `I` and `O` set a mark at the playhead without moving the
+picture; dragging a handle *does* move the picture, so you are always looking
+at the frame you are about to cut on.
 
-The cut is `/usr/bin/avconvert`, with `--start`, `--duration`, and
-`PresetPassthrough`:
+Two modes, and the track shows the difference rather than describing it —
+whichever stretches survive are lit, the rest are dimmed:
 
-* **Passthrough copies the samples rather than re-encoding them**, so the trim
-  is lossless and costs about what copying the file costs — measured at two
-  seconds to take thirty seconds out of a 334 MB recording. Any other preset
-  re-encodes, which on a Retina capture means minutes of fan noise and a worse
-  file at the end of it.
-* **The cut is still frame-accurate.** Passthrough can only begin the copied
-  data at a sync sample, so `avconvert` writes an edit list that starts playback
-  at the requested instant inside it. Asking for 3.000s gives a file whose
-  duration is 3.000s, not "3-ish, to the nearest keyframe".
-* **The container is the source's**, because `avconvert` picks it from the
-  output name. A trimmed `.mov` must not come back a `.mp4`.
+* **Keep** throws away everything outside the marks. The dead air at each end.
+* **Cut out** throws away everything between them and closes the gap. The
+  doorbell, the notification, the minute spent hunting for a menu.
 
-Two things are worth knowing before changing any of it:
+Underneath they are the same operation. `trim::plan` turns a mode and two marks
+into a list of the parts worth keeping — one part for a keep, two for a cut —
+and `compose::write` lays that list into an `AVMutableComposition` and exports
+it. Everything that can go wrong with a selection (marks crossed, a selection
+of nothing, one that is the whole recording, a cut that would leave nothing
+behind) is decided in `plan`, which needs no file on disk to test.
 
-* **The original is never overwritten.** The trim lands in the library as
-  `<name> trimmed` and the player switches onto it. A screenshot can be taken
-  again; thirty seconds of something happening on screen cannot, and an
-  overwrite that took the wrong two seconds off would be unrecoverable.
-  Trimming a trim gives `X trimmed (2)`, not `X trimmed trimmed`.
-* **There is no Cut Out.** Snagit's timeline also removes a middle section and
-  closes the gap; that is two exports and a join, and nothing on macOS joins two
-  movies from the command line. It needs an `AVMutableComposition` — the objc2
-  route this module exists to avoid — and it is much the rarer ask for a screen
-  recording. If it is ever wanted, grow `trim.rs`, and the composition is how.
+**Why AVFoundation and not a subprocess.** The first version was
+`/usr/bin/avconvert --start --duration`, in the spirit of `screencapture` and
+`qlmanage`, and for one span it was exactly right. A cut is where that runs
+out: `avconvert` writes one span per run, and macOS ships no command that will
+join two movies back together. The join has to happen in-process, and once
+there is a composition it holds one segment as easily as two — so the converter
+had nothing left to do. What that bought besides the cut: no child process to
+supervise, real progress to report, and errors that say what went wrong instead
+of dumping a usage screen on stderr.
 
-`plan()` holds every way a selection can be wrong (handles crossed, a selection
-of nothing, a selection that is the whole recording) and is tested without a
-file on disk. One test does need both the converter and a real movie:
-`a_trim_comes_back_as_a_movie_shotly_can_measure` trims the harness clip and
-reads the result back with `video::probe` — the same code the library and the
-player use. It is the only thing that can catch a trim that succeeds and
-produces a file Shotly can no longer measure, which would reach the library as a
-recording with no duration and no thumbnail.
+**Why it stays lossless.** `AVAssetExportPresetPassthrough` copies the sample
+data rather than decoding and re-encoding it, so a cut costs about what copying
+the file costs and the pixels are the ones that were recorded. It stays
+frame-accurate because the composition's segments carry edit lists: the copied
+data can only begin at a sync sample, but playback starts at the instant asked
+for. Joining is safe for the same reason it is fast — both segments come from
+one asset, so they are the same codec at the same size and there is no format
+negotiation to get wrong.
+
+**The original is never overwritten.** The result lands as `<name> trimmed` and
+the player switches onto it. A screenshot can be taken again; thirty seconds of
+something happening on screen cannot. One suffix for both modes, so shortening
+a shortened recording gives `X trimmed (2)` rather than `X trimmed cut trimmed`.
+
+#### Two things 0.9.5 got wrong, both worth not repeating
+
+**`video_trim` was synchronous.** A sync `#[tauri::command]` runs on the main
+thread — the same trap `library_thumbnail` documents above — so the whole
+interface froze for the length of every trim. The button never even repainted
+to say it was working, because the thread that would have drawn it was the
+thread doing the waiting. It is `async` over `spawn_blocking` now, and the
+button fills as `compose` reports progress.
+
+**The app aborted on a panic in WebKit's URL-scheme handler.** The crash
+report's faulting thread was a tokio blocking worker inside
+`wry::…::url_scheme_handler::start_task`, which is where `media::serve_async`
+answers range requests. WKWebView throws if you answer a task it has already
+stopped, and swapping the player's source when a trim lands does exactly that
+to an in-flight request. wry wraps that delivery in `objc2::exception::catch`
+because it expects to have to — but `panic = "abort"` left nothing to catch
+with. The profile is `panic = "unwind"` now, so a panic on a worker costs that
+one piece of work instead of the session. The player also pauses before
+exporting, so there is usually nothing in flight to cancel.
+
+Two related changes came out of diagnosing it, and both are about never
+spending that hour again: the release profile keeps its symbol table
+(`strip = "debuginfo"`), and `lib.rs` installs a panic hook that appends the
+message and location to `~/Library/Logs/Shotly/panics.log`. A packaged app has
+no terminal, so without that the one line naming the file and the assumption
+goes nowhere at all.
 
 ## The main thread and files that are not really there
 

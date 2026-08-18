@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { listen } from "@tauri-apps/api/event";
 import clsx from "clsx";
 import {
   IconFolder,
@@ -15,7 +16,7 @@ import { IconButton } from "@/components/ui/IconButton";
 import { Popover } from "@/components/ui/Popover";
 import { Tooltip } from "@/components/ui/Tooltip";
 import * as ipc from "@/lib/ipc";
-import type { Trimmed } from "@/lib/types";
+import type { Trimmed, TrimMode } from "@/lib/types";
 import { formatDuration } from "./format";
 import { useThumbnail } from "./thumbnails";
 import { MIN_SELECTION, TrimActions, TrimTrack, type Range } from "./TrimBar";
@@ -103,8 +104,16 @@ export function Player({ movie, startAt = 0, onLeave, onClose, onTrimmed, onErro
    * in step with this one.
    */
   const [range, setRange] = useState<Range | null>(null);
-  /** True while Rust is writing the trimmed file out. */
-  const [trimming, setTrimming] = useState(false);
+  /** Which side of the marks goes. */
+  const [mode, setMode] = useState<TrimMode>("keep");
+  /**
+   * How far the export has got, 0..1, or `null` when none is running.
+   *
+   * One value for both questions — is it working, and how far — because two
+   * would be two things to keep in step, and the answer to the first is
+   * exactly "the second is not null".
+   */
+  const [progress, setProgress] = useState<number | null>(null);
   /** True between pointer-down and pointer-up on the scrubber. */
   const scrubbing = useRef(false);
   /**
@@ -166,6 +175,17 @@ export function Player({ movie, startAt = 0, onLeave, onClose, onTrimmed, onErro
 
   const cancelTrim = useCallback(() => setRange(null), []);
 
+  // Rust says how far the export has got. Subscribed only while one is being
+  // set up, so the player is not listening to an event nobody is sending for
+  // the whole time a recording is merely being watched.
+  useEffect(() => {
+    if (!range) return;
+    const stop = listen<number>("trim:progress", (event) =>
+      setProgress((running) => (running === null ? running : event.payload)),
+    );
+    return () => void stop.then((off) => off());
+  }, [range]);
+
   /**
    * Cut the recording down to the marks.
    *
@@ -174,18 +194,27 @@ export function Player({ movie, startAt = 0, onLeave, onClose, onTrimmed, onErro
    * switches the player onto it and re-reads the library.
    */
   const applyTrim = useCallback(async () => {
-    if (!range || trimming) return;
-    setTrimming(true);
+    if (!range || progress !== null) return;
+    // Stop playing first, for two reasons and the second is the serious one.
+    // A movie carrying on underneath a progress bar reads as two things
+    // happening rather than one — and, more to the point, when this finishes
+    // the editor swaps `movie.path` to the file just written. Changing the
+    // source of a *playing* element cancels whatever range request is in
+    // flight, and `media.rs` answers those from a worker thread; replying to a
+    // task WebKit has already stopped is what WKWebView throws on. Paused,
+    // there is nothing in flight to cancel.
+    video.current?.pause();
+    setProgress(0);
     try {
-      const trimmed = await ipc.videoTrim(movie.path, range.start, range.end);
+      const trimmed = await ipc.videoTrim(movie.path, range.start, range.end, mode);
       setRange(null);
       onTrimmed?.(trimmed);
     } catch (err) {
       onError(String(err));
     } finally {
-      setTrimming(false);
+      setProgress(null);
     }
-  }, [movie.path, onError, onTrimmed, range, trimming]);
+  }, [mode, movie.path, onError, onTrimmed, progress, range]);
 
   // ------------------------------------------------------------- keyboard
 
@@ -405,6 +434,7 @@ export function Player({ movie, startAt = 0, onLeave, onClose, onTrimmed, onErro
                   duration={duration}
                   time={time}
                   range={range}
+                  mode={mode}
                   onRange={setRange}
                   onSeek={seek}
                 />
@@ -518,7 +548,7 @@ export function Player({ movie, startAt = 0, onLeave, onClose, onTrimmed, onErro
                 icon={<IconTrim />}
                 label={range ? "Stop trimming" : "Trim"}
                 active={Boolean(range)}
-                disabled={trimming}
+                disabled={progress !== null}
                 tooltipSide="top"
                 onClick={range ? cancelTrim : startTrim}
               />
@@ -528,7 +558,9 @@ export function Player({ movie, startAt = 0, onLeave, onClose, onTrimmed, onErro
               <TrimActions
                 range={range}
                 duration={duration}
-                busy={trimming}
+                mode={mode}
+                onMode={setMode}
+                progress={progress}
                 onCancel={cancelTrim}
                 onTrim={() => void applyTrim()}
               />

@@ -81,19 +81,28 @@ again. <kbd>Esc</kbd> goes back to the library, and the Player tab holds your
 place while you are away. **Open in…** hands the file to QuickTime Player, for
 full screen.
 
-**Trimming off the dead air** — the reach for the hotkey at each end — is the
-scissors on the player. The scrubber becomes a selection: drag the green handle
-to where it should start and the red one to where it should stop, or play until
-it looks right and press <kbd>I</kbd> and <kbd>O</kbd> to mark the spot.
-Dragging a handle scrubs to it, so you are always looking at the frame you are
-cutting on, and pressing play reviews just the part you are keeping. **Trim**
-does it.
+**Shortening one** is the scissors on the player. The scrubber becomes a
+selection: drag the green handle to where it should start and the red one to
+where it should stop, or play until it looks right and press <kbd>I</kbd> and
+<kbd>O</kbd> to mark the spot. Dragging a handle scrubs to it, so you are always
+looking at the frame you are cutting on, and pressing play reviews just the part
+you are keeping.
 
-The cut is lossless and takes about as long as copying the file — a few seconds
-even on a recording of several hundred megabytes — because nothing is
-re-encoded. The trim is filed beside the original as *Recording … trimmed* and
-the player switches to it, so sharing or copying next picks up the short one.
-Your original is never touched.
+Then choose which side goes:
+
+* **Keep** throws away everything outside the handles — the reach for the hotkey
+  at each end.
+* **Cut out** throws away everything *between* them and closes the gap — the
+  doorbell, the notification, the minute spent hunting for a menu.
+
+The timeline shows which it is before you commit: whatever survives stays lit,
+and what is going is dimmed.
+
+Either way the cut is lossless and takes about as long as copying the file — a
+few seconds even on a recording of several hundred megabytes — because nothing
+is re-encoded. The result is filed beside the original as *Recording … trimmed*
+and the player switches to it, so sharing or copying next picks up the short
+one. Your original is never touched.
 
 **Sending one to someone** is a link, not an attachment — a few minutes of
 screen is hundreds of megabytes. With Backup pointed at Google Drive, **Copy
