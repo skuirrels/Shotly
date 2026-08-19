@@ -1,0 +1,86 @@
+# Two questions, asked on every push.
+#
+# 1. Does the Mac build still work, and do its tests still pass? Blocking.
+# 2. How far is the Windows build from compiling at all? Not blocking yet —
+#    see the note on that job. This is the ratchet described in docs/WINDOWS.md:
+#    the port is a long refactor, and the only thing that keeps it honest is a
+#    machine that notices when a macOS-only call lands in shared code.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  macos:
+    name: Tests (macOS)
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - run: npm ci
+
+      - name: Types
+        run: npm run typecheck
+
+      - name: Front-end tests
+        run: npm test
+
+      # `tauri_build::build()` wants the frontend output to exist, so the
+      # bundle has to be built before the Rust tests can even compile.
+      - name: Build the front end
+        run: npm run build
+
+      - name: Rust tests
+        run: cargo test --manifest-path src-tauri/Cargo.toml
+
+  windows:
+    name: Portability check (Windows)
+    runs-on: windows-latest
+    # NOT BLOCKING YET, and deliberately so. Shotly does not compile for
+    # Windows today — that is the whole subject of docs/WINDOWS.md — so a
+    # blocking job here would be red on every pull request from the first day,
+    # which teaches everyone to ignore CI. It reports instead.
+    #
+    # Flip this to `false` the moment the check first passes with stubs (the
+    # end of Phase 0). From then on it is a genuine ratchet: nothing can land
+    # that reaches for a macOS API from shared code without turning it red.
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - run: npm ci
+
+      - name: Build the front end
+        run: npm run build
+
+      # `check`, not `build`: the question is whether the source is portable,
+      # and answering it does not require a linkable binary.
+      - name: Does it compile for Windows?
+        run: cargo check --manifest-path src-tauri/Cargo.toml
