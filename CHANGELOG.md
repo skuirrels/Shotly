@@ -8,6 +8,11 @@ The release notes on GitHub and the "what's new" text the in-app updater shows
 are both taken from this file — see `docs/RELEASING.md`. A version with nothing
 written here cannot be published.
 
+## 0.10.16 — 2026-08-19
+
+- The "what's new" list in the update notice reads properly again: a change
+  described over several lines was arriving as several separate items.
+
 ## 0.10.15 — 2026-08-19
 
 - Every update now says what changed. The notice that appears when a new
