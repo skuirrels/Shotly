@@ -225,6 +225,42 @@ if (!onRemote) {
   die(`HEAD (${head.slice(0, 7)}) has not been pushed.\n\n  Push it, then publish.`);
 }
 
+// ...and the tag naming a pushed commit is only half of that promise. The
+// artefacts were built from the *working tree*, and the tag names HEAD, so if
+// those two differ the release ships code that is not in the commit under it.
+//
+// This is not hypothetical. 0.10.17 was published with a half-finished module
+// split: `git mv` had staged two files, an unrelated commit swept them in, and
+// the rest of the split stayed untracked. The build was fine — it read the
+// working tree, which had every file — but `cargo check` at v0.10.17 fails
+// with seven errors and `tsc` with one. The binary was good and the tagged
+// source could not produce it, which is exactly the thing the comment above
+// claims cannot happen.
+//
+// A clean tree is the whole guarantee: if nothing is uncommitted then the
+// build inputs and the tagged source are the same files, and the build that
+// just succeeded proves the tag compiles. Cheaper and more certain than
+// building HEAD again in a scratch worktree, which is the other way to know.
+//
+// Untracked files count, and they are the ones that caused this. There is no
+// override, because there is no version of "ship code that is not in the
+// repository" that is a good idea.
+const dirty = run("git", ["status", "--porcelain"]);
+if (dirty) {
+  const lines = dirty.split("\n").filter(Boolean);
+  const shown = lines.slice(0, 12).join("\n    ");
+  const more = lines.length > 12 ? `\n    …and ${lines.length - 12} more` : "";
+  die(
+    `The working tree is not clean, so the build and the tag disagree.\n\n` +
+      `    ${shown}${more}\n\n` +
+      `  These artefacts were built from what is on disk; ${tag} will name\n` +
+      `  ${head.slice(0, 7)}. Anything above is in the binary and not in the\n` +
+      `  commit — which is how 0.10.17 came to ship a tag that does not\n` +
+      `  compile.\n\n` +
+      `  Commit it (or delete it), rebuild, then publish.`,
+  );
+}
+
 // ---------------------------------------------------------------- manifest
 
 const entry = notes ?? changelogEntry(version);
