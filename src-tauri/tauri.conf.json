@@ -39,7 +39,7 @@
   },
   "plugins": {
     "updater": {
-      "endpoints": ["https://github.com/skuirrels/shotly/releases/latest/download/latest.json"],
+      "endpoints": ["https://github.com/skuirrels/Shotly/releases/latest/download/latest.json"],
       "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDk3RUI3QkY5ODg2NTg5Q0IKUldUTGlXV0krWHZybDlHZmU4blJLbkFiQVlVR3o2dWQ2QVFDTi9QTHJnK0g1ZHFZZlF0YTljajcK"
     }
   },

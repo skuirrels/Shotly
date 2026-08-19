@@ -17,7 +17,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
-const REPO = "skuirrels/shotly";
+const REPO = "skuirrels/Shotly";
 const bundle = join(root, "src-tauri/target/release/bundle");
 
 /**
@@ -282,7 +282,7 @@ const manifest = {
     // better than handing it a binary it cannot run.
     "darwin-aarch64": {
       signature: readFileSync(signature, "utf8").trim(),
-      url: `https://github.com/skuirrels/shotly/releases/download/${tag}/Shotly.app.tar.gz`,
+      url: `https://github.com/skuirrels/Shotly/releases/download/${tag}/Shotly.app.tar.gz`,
     },
   },
 };
@@ -374,5 +374,5 @@ if (latest !== tag) die(`${tag} published, but GitHub still calls ${latest} the 
 
 writeFileSync(stampPath, `${authority}\n`);
 
-console.log(`\n✓ Published https://github.com/skuirrels/shotly/releases/tag/${tag}`);
+console.log(`\n✓ Published https://github.com/skuirrels/Shotly/releases/tag/${tag}`);
 console.log(`  signed by ${authority}\n`);

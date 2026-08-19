@@ -36,7 +36,7 @@ There are three moving parts and no server.
 
 1. **The manifest.** `scripts/publish.mjs` writes a `latest.json` describing the
    newest version and uploads it as a release asset. The app fetches it from
-   `https://github.com/skuirrels/shotly/releases/latest/download/latest.json` —
+   `https://github.com/skuirrels/Shotly/releases/latest/download/latest.json` —
    a URL that never changes, because GitHub redirects `releases/latest` to
    whichever release is currently marked latest.
 
