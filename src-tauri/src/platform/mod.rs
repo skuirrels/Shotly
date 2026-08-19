@@ -13,18 +13,12 @@
 //! directory rather than a habit everybody has to keep up, and a reviewer can
 //! see the whole platform surface by listing one folder.
 //!
-//! Three sites outside this directory still carry one, and each is deliberate
-//! rather than missed:
+//! Two sites outside this directory still carry one, and neither is an
+//! abstraction waiting to be written:
 //!
 //! * **`capture/`** is its own seam already — `CaptureBackend` is a trait with
 //!   a swappable implementation, which is the same idea arrived at earlier.
 //!   Folding it in here is worth doing and is not urgent.
-//! * **`snap.rs`'s event tap.** ~200 lines of documented safety machinery whose
-//!   failure mode is a desktop nobody can use, and which no test can drive: a
-//!   tap needs a real event stream, and scripted input warps the cursor rather
-//!   than reproducing one. Moving it mechanically would be an unverifiable
-//!   change to the most dangerous code in the app, so it waits for a change of
-//!   its own with somebody at the keyboard. See `platform::pointer`.
 //! * **`share::gauth`'s keychain migration**, which is not an abstraction with
 //!   two implementations — it is a one-time rescue of sign-ins from a store
 //!   only macOS ever had. There is nothing for another platform to implement.

@@ -105,8 +105,8 @@ the table below, and was then deleted and replaced by
 cheap direction. The expensive one followed within days: recording trim and cut
 ([`trim.rs`](../src-tauri/src/trim.rs) + what is now
 [`platform/macos/editor.rs`](../src-tauri/src/platform/macos/editor.rs), 1,157
-lines) landed as a pure
-AVFoundation pipeline, and is now the second-largest item in the table. Two
+lines) landed as a pure AVFoundation pipeline, and is now the second-largest
+item in the table. Two
 features, two weeks, one net gain of roughly two porting-weeks. Over four
 months, unmanaged, the gap moves faster than one developer tracking it.
 
@@ -219,11 +219,12 @@ it does — `SetWindowDisplayAffinity` for `hide_from_capture`, `GetLocalTime`
 for the clock, `IShellItemImageFactory` for poster frames, and the three ways
 round Media Foundation's missing edit lists for `editor`.
 
-Two concerns stayed outside `platform/`, both on purpose. **`capture/`** is
-already its own seam — `CaptureBackend` is a trait with a swappable
-implementation, which is the same idea arrived at earlier; folding it in is
-worth doing and is not urgent. **`snap.rs`'s event tap** is [the one thing
-deliberately left](#the-one-thing-deliberately-left).
+One concern stayed outside `platform/`, on purpose: **`capture/`** is already
+its own seam — `CaptureBackend` is a trait with a swappable implementation,
+which is the same idea arrived at earlier; folding it in is worth doing and is
+not urgent. (`share::gauth`'s keychain migration keeps a `cfg` too, but it is
+a one-time rescue from a store only macOS ever had, not an abstraction with a
+second implementation to write.)
 
 What the split turned up, which is the part worth keeping in mind for the rest
 of the port: the seam is usually further down than it looks. `Precision` and
@@ -320,26 +321,33 @@ the one thing this workflow exists to prevent.
 > is the only place this is observable without `cargo-xwin` and a Microsoft
 > EULA, which is precisely why the job has to block rather than inform.
 
-### The one thing deliberately left
+### The tap, which took a second sitting
 
-`snap.rs` still owns its `CGEventTap`, and still carries the only
-`cfg(target_os)` in the codebase that is a real platform abstraction rather
-than a one-time migration.
+`snap.rs`'s `CGEventTap` was the one piece held back from the sweep, and the
+reason is worth keeping: it is ~200 lines whose failure mode is a desktop
+nobody can use — this codebase has been there — and **nothing automated can
+verify a move of it**. A tap needs a live event stream, so no unit test
+reaches it; scripted input warps the cursor rather than reproducing a drag, so
+no scripted check does either. Moving it inside a refactor sweep would have
+been an unverifiable change to the most dangerous code in the app.
 
-That is a judgement, not an oversight. It is ~200 lines of documented safety
-machinery whose failure mode is a desktop nobody can use — this codebase has
-been there — and **nothing can verify a move of it**. A tap needs a real event
-stream, so no unit test reaches it, and scripted input warps the cursor rather
-than reproducing a drag, so no scripted check does either. Moving it
-mechanically would be an unverifiable change to the most dangerous code in the
-app, which is exactly the kind of change that should not ride along inside a
-refactor sweep.
+It moved afterwards, on its own, against a debug build with somebody at the
+keyboard — outline following, click taking the window, drag taking the region.
+`platform::pointer` owns the tap and the state it produces; `snap.rs` keeps
+what a verdict means.
 
-It wants its own commit, with somebody at the keyboard confirming the outline
-still follows the pointer and the click still lands. `platform/windows/pointer.rs`
-already describes what replaces it, and the news there is good: Windows has no
-rule that a click-catching overlay is invisible to hit-testing, so the overlay
-can take its own clicks and the system-wide hook may not be needed at all.
+Two things fell out of doing it separately. The drag rule reaches the tap as a
+`fn` pointer, because what counts as a drag is `snap`'s policy and not the
+tap's — and it is still evaluated *inside the callback*, on the points the
+events carried, rather than recomputed later from the stored cells, which
+would have raced the next press. And `dragged_to` and `drag_point` became pure
+functions taking explicit points, so the drag tests exercise the rule instead
+of poking globals, and the mutex that serialised them disappeared.
+
+The Windows counterpart should be smaller rather than equivalent. There is no
+rule there that a click-catching overlay is invisible to hit-testing, so the
+overlay can take its own clicks and the system-wide hook may not be needed at
+all — see `platform/windows/pointer.rs`.
 
 ---
 
