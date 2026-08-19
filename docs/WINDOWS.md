@@ -94,13 +94,17 @@ This is a real tax on Mac development and it should be accepted knowingly.
 The alternative — a freeze on Mac features until Windows catches up — is worse,
 because it makes the port's cost invisible while it is being paid.
 
-How fast the target moves is not hypothetical. `drive.rs` — 322 lines, two
-macOS couplings — landed in `2c9dd12` during the afternoon this document was
-written, and became an entry in the table below that had not existed when the
-estimate above was drafted. It was then deleted a fortnight later and replaced
-by [`share/`](../src-tauri/src/share/), which is portable. Both directions are
-the same lesson: over four months, unmanaged, the gap moves faster than one
-developer tracking it.
+How fast the target moves is not hypothetical, and this document now has two
+data points of its own. `drive.rs` — 322 lines, two macOS couplings — landed in
+`2c9dd12` during the afternoon this document was written, became an entry in
+the table below, and was then deleted and replaced by
+[`share/`](../src-tauri/src/share/), which is nearly portable. That was the
+cheap direction. The expensive one followed within days: recording trim and cut
+([`trim.rs`](../src-tauri/src/trim.rs) +
+[`compose.rs`](../src-tauri/src/compose.rs), 1,157 lines) landed as a pure
+AVFoundation pipeline, and is now the second-largest item in the table. Two
+features, two weeks, one net gain of roughly two porting-weeks. Over four
+months, unmanaged, the gap moves faster than one developer tracking it.
 
 ---
 
@@ -112,64 +116,200 @@ reduced-scope estimate.
 
 | Phase | Work | Est. |
 |---|---|---|
-| **0. Foundations** | `platform/` split, the new traits, Windows compiling with stubs, CI matrix building both platforms on every PR | 2 wk |
+| ~~**0. Foundations**~~ | ~~`platform/` split, the traits, `platform.ts`, the CI ratchet~~ — **done**, see [Phase 0](#phase-0--done) | ✓ |
 | **1. Stills** | Capture backend, display/window enumeration, the region selector overlay, window picker, per-monitor DPI | 4–5 wk |
 | **2. Shell integration** | Clipboard, trash, reveal, video thumbnails, cloud-folder discovery, tray, hotkeys, autostart | 2 wk |
-| **3. The expensive two** | Recording; scrolling capture and live annotation | 5–6 wk |
+| **3. The expensive three** | Recording; trim and cut; scrolling capture and live annotation | 7–8 wk |
 | **4. OCR and parity sweep** | `Windows.Media.Ocr`, barcodes via `rxing`, then a pass over the parity table | 2 wk |
 | **5. Release** | Installer, Authenticode, dual-platform `latest.json`, the update test on both | 2 wk |
 
-**≈ 17–19 weeks**, plus certificate procurement lead time running in parallel
-from day one.
+**≈ 17–19 weeks remaining**, plus certificate procurement lead time running in parallel
+from day one. (19–22 including Phase 0, which is now done; recording trim and
+cut landed after the first estimate and added roughly two weeks — see the
+parity note above.)
 
-Phase 0 is a pure refactor that changes nothing for Mac users, and it should
-still land first. It gets cheaper the earlier it happens and it is what makes
-the parity rule enforceable.
+Phase 0 was a pure refactor that changed nothing for Mac users, and it is what
+makes the parity rule enforceable. It is done — everything below now has
+somewhere to go.
 
 ---
 
+## One app that happens to run in two places
+
+"Windows looks the same, behaves the same" needs to be made mechanical, or it
+decays into whatever each pull request happened to do. The rule has two halves.
+
+**Everything above the traits is identical, not similar.** One frontend, one
+`theme.css`, one editor store, one command registry, one library, one file
+naming scheme, one update cadence. The Windows build renders the same pixels
+from the same components; there is no `EditorApp.windows.tsx` and there never
+will be. Behaviour lives above the seam — a capture is taken, named, filed and
+annotated by shared code — and only the syscall underneath differs.
+
+**Difference is allowed only where the OS's own conventions demand it**, and
+every such difference goes through one module rather than being decided at the
+call site. The complete list, which is short and should stay short:
+
+| Differs | macOS | Windows |
+|---|---|---|
+| Keyboard glyphs | ⌃⌥⇧⌘Z | `Ctrl+Shift+Z` |
+| Primary modifier (`Mod`) | ⌘ | Ctrl |
+| Shell nouns | Finder, Trash, menu bar, System Settings | Explorer, Recycle Bin, tray, Settings |
+| Window chrome | traffic lights, left, 86px inset | caption buttons, right |
+| Font stack | `-apple-system, SF Pro Text…` | `Segoe UI Variable, Segoe UI…` |
+| Capture hotkey defaults | ⌃⇧3/4/5/6/R (avoiding ⌘⇧3/4/5) | free to reconsider — the conflict is `Win+Shift+S`, and PrintScreen is the key users reach for |
+| Tray conventions | left-click opens the menu | left-click activates, right-click menus |
+
+The mechanism is a single `src/lib/platform.ts`, established in Phase 0 while
+its answer is still always "macos": the OS name once, `Mod`'s identity, the
+glyph formatter, and a nouns dictionary (`nouns.reveal` → "Show in Finder" /
+"Show in Explorer", and so on). Today the frontend contains **no platform
+detection at all** — which is the best possible starting state, because it
+means every future difference has to be introduced deliberately, through this
+one file, where review can see it. Scattered `if (isWindows)` at call sites is
+the failure mode; the module exists so there is never a reason to write one.
+
+A sweep for the nouns finds roughly thirty user-visible strings — "Show in
+Finder" and "Move to Trash" in `TopBar.tsx`, `Library.tsx` and `EditorApp.tsx`'s
+command registry, "System Settings" in the permission error, "menu bar" in
+`SnapApp.tsx`'s hint. Half a day, best spent before the list grows.
+
+Two places where "the same" needs a decision rather than a rule:
+
+* **Window chrome.** `titleBarStyle: Overlay` in `tauri.conf.json` is
+  macOS-only, and `TopBar.tsx` hardcodes `pl-[86px]` for the traffic lights.
+  Windows wants `decorations: false` with the top bar as the drag region and
+  either custom caption buttons (more sameness, more work — minimize/maximize/
+  close, snap layouts on 11) or standard chrome (less work, visibly different).
+  Custom buttons are the answer that honours "looks the same"; the inset
+  becomes a `platform.ts` token either way.
+* **WebView2 is Chromium, not WebKit.** Same markup, same tokens — but
+  `backdrop-filter`, SVG filters and font smoothing all render slightly
+  differently, and the neon recipe leans on all three. "Looks the same" here
+  means a side-by-side pass with real eyes, not an assertion.
+
 ## Repo layout
 
-Inline `cfg(target_os)` works at today's density — fifteen sites — and will not
-survive two full implementations inside 1,300-line files. Generalise the
-`mod imp` pattern that `capture/display.rs` already uses:
+This is what Phase 0 built, and it is what is on disk now. Inline
+`cfg(target_os)` worked at fifteen sites and would not have survived two full
+implementations inside 1,300-line files:
 
 ```
 src-tauri/src/
   platform/
-    mod.rs           the traits, and the re-export of whichever backend is active
+    mod.rs           picks a side, and states the rule
     macos/
-      capture.rs     screencapture(1), CoreGraphics enumeration
-      recorder.rs    screencapture -v and its SIGINT lifecycle
-      pointer.rs     CGEventTap, AX hit-testing  (today's snap.rs + ax.rs)
+      chrome.rs      window level, Spaces, sharing type   (was platform.rs)
+      clock.rs       localtime_r
+      editor.rs      AVFoundation passthrough + exact cut (was compose.rs)
+      paths.rs       ~/Library/Application Support
+      pointer.rs     cursor, AX hit-testing               (was half of ax.rs)
+      recorder.rs    screencapture -v, and SIGINT
       shell.rs       NSPasteboard, Finder trash, QuickLook, CloudStorage
-      chrome.rs      window level, Spaces, sharing type  (today's platform.rs)
       text.rs        Vision
-    windows/
-      capture.rs     Windows.Graphics.Capture / DXGI
-      recorder.rs    WGC + Media Foundation SinkWriter
-      pointer.rs     WH_MOUSE_LL hook, EnumWindows + DWM, UI Automation
-      shell.rs       CF_HDROP/CF_DIBV5, IFileOperation, IShellItemImageFactory
-      chrome.rs      layered windows, SetWindowDisplayAffinity
-      text.rs        Windows.Media.Ocr + rxing
+    windows/         the same eight, as documented stubs
 ```
 
-Five traits, of which one exists:
+Each Windows module names the API that will implement it and what changes when
+it does — `SetWindowDisplayAffinity` for `hide_from_capture`, `GetLocalTime`
+for the clock, `IShellItemImageFactory` for poster frames, and the three ways
+round Media Foundation's missing edit lists for `editor`.
 
-- **`CaptureBackend`** — already defined in `capture/mod.rs`. Keep as-is.
-- **`Recorder`** — start, stop-and-keep, discard, elapsed. Today's `record.rs`
-  reaches for `Command` and `libc::kill` directly; the session state machine and
-  the HUD above it are portable and should stay in `record.rs`.
-- **`Pointer`** — cursor position, what is under it, and exclusive capture of
-  the next click. `snap.rs` and `annotate.rs` both want this and neither can
-  currently ask for it.
-- **`Shell`** — clipboard, trash, reveal, thumbnails, sync-folder discovery,
-  and the dataless/offline check.
-- **`WindowChrome`** — today's `platform.rs`, unchanged in shape.
+Two concerns stayed outside `platform/`, both on purpose. **`capture/`** is
+already its own seam — `CaptureBackend` is a trait with a swappable
+implementation, which is the same idea arrived at earlier; folding it in is
+worth doing and is not urgent. **`snap.rs`'s event tap** is [the one thing
+deliberately left](#the-one-thing-deliberately-left).
 
-Everything above those traits — the stitcher, the session loops, the safety
-watchdogs, the geometry, the whole editor — stays where it is and stays shared.
-That is the point of doing the split before the implementations.
+What the split turned up, which is the part worth keeping in mind for the rest
+of the port: the seam is usually further down than it looks. `Precision` and
+`Segment` moved *up* into `trim.rs`, `ax.rs`'s geometry never had to move at
+all, and `video.rs` came out entirely portable once one function left it.
+
+Everything above the split — the stitcher, the session loops, the safety
+watchdogs, the geometry, the whole editor — stayed where it was and stays
+shared. That was the point of doing this before the implementations.
+
+---
+
+## Phase 0 — done
+
+The groundwork is in. It changed no behaviour on macOS and every step landed
+with the tests green; what follows is what exists now, so the rest of this
+document can be read against it.
+
+**`src-tauri/src/platform/`**, with `macos/` and `windows/` holding the same
+eight modules each — `chrome`, `clock`, `editor`, `paths`, `pointer`,
+`recorder`, `shell`, `text`. The Windows side is stubs, but stubs that carry
+the API to call and the reason: `platform/windows/editor.rs` sets out the three
+ways round Media Foundation's missing edit lists, `shell.rs` names the OneDrive
+attributes that make `is_dataless` mandatory rather than cosmetic.
+
+**What moved, and what turned out to be portable after all.** The interesting
+half of this phase was discovering how much did not need to move:
+
+* `compose.rs` → `platform/macos/editor.rs`, but `Precision` and `Segment` went
+  the *other* way, into `trim.rs` with the planning. They are the vocabulary the
+  planner and the writer share, so putting them beside the planner means no
+  platform's writer can quietly mean something else by `Fast`.
+* `ax.rs` split rather than moved: `Node`, `refine` and `at_level` are pure
+  geometry with tests and stayed portable; only the three questions that reach
+  for `AXUIElement` went to `platform::pointer`.
+* `video.rs` lost `poster` to `platform::shell` and is now entirely portable —
+  the MP4 atom parsing never needed a platform at all.
+* Three identical copies of the six-line cursor reader, in `snap.rs`,
+  `annotate.rs` and `capture/cli.rs`, became one.
+* `stamped_stem`'s `libc::localtime_r` became `platform::clock::local_now`;
+  `gauth`'s hardcoded `Library/Application Support` became
+  `platform::paths::config_dir`; `keyring` is now a macOS-only dependency,
+  because migrating out of the login keychain is a macOS-only thing to need.
+
+**`src/lib/platform.ts`** — the one file that knows which OS this is, holding
+`Mod`'s identity, the shortcut formatter's two spellings, the shell nouns and
+the titlebar inset. Roughly thirty user-visible strings now read from it.
+`keys.ts` matches `Mod` against ⌘ or Ctrl accordingly, and `formatShortcut`
+renders `⇧⌘Z` or `Ctrl+Shift+Z`.
+
+**Tests**, because the refactor had to be provably behaviour-preserving: 119
+Rust (up from 113) and 16 front-end, from none. The new ones deliberately pin
+the things the port will be tempted to change — that a DPI tag written is a DPI
+tag read back, that a stamped stem carries a plausible *year* and not just a
+plausible shape (a zeroed `tm` formats as 1900 and would otherwise pass), that
+the Windows-shaped `http://media.localhost/…` URI serves identically to
+`media://localhost/…`, and both halves of the keyboard grammar.
+
+**`.github/workflows/ci.yml`** — the ratchet. macOS runs typecheck, both test
+suites and a build, and blocks. Windows runs `cargo check` and does not block
+yet, because Shotly does not compile there and a job that is red on every pull
+request from day one teaches everyone to ignore CI. It flips to blocking the
+moment it first passes with stubs.
+
+> **Worth knowing before trying to run the Windows check locally:** it cannot be
+> done from a Mac. `ureq`'s rustls pulls in `ring`, whose build script needs a C
+> compiler targeting Windows, so the cross-check dies in a dependency long
+> before it reaches Shotly's own code. CI on `windows-latest` is the only place
+> this is observable without `cargo-xwin` and a Microsoft EULA.
+
+### The one thing deliberately left
+
+`snap.rs` still owns its `CGEventTap`, and still carries the only
+`cfg(target_os)` in the codebase that is a real platform abstraction rather
+than a one-time migration.
+
+That is a judgement, not an oversight. It is ~200 lines of documented safety
+machinery whose failure mode is a desktop nobody can use — this codebase has
+been there — and **nothing can verify a move of it**. A tap needs a real event
+stream, so no unit test reaches it, and scripted input warps the cursor rather
+than reproducing a drag, so no scripted check does either. Moving it
+mechanically would be an unverifiable change to the most dangerous code in the
+app, which is exactly the kind of change that should not ride along inside a
+refactor sweep.
+
+It wants its own commit, with somebody at the keyboard confirming the outline
+still follows the pointer and the click still lands. `platform/windows/pointer.rs`
+already describes what replaces it, and the news there is good: Windows has no
+rule that a click-catching overlay is invisible to hit-testing, so the overlay
+can take its own clicks and the system-wide hook may not be needed at all.
 
 ---
 
@@ -177,36 +317,42 @@ That is the point of doing the split before the implementations.
 
 ### Ports unchanged
 
-All 15,710 lines of TypeScript. `combine.rs`, `markup.rs`, `pin.rs`,
-`update.rs`, `hotkeys.rs`, the `Rect`/`Frame` geometry in `capture/mod.rs`,
-`video.rs`'s `probe()` (hand-rolled MP4 atom parsing, no platform calls), and
-the row-signature stitcher in `scroll.rs` — of which only the one `shoot()`
-function at [`scroll.rs:835`](../src-tauri/src/scroll.rs:835) touches the
-system.
+All 17,412 lines of TypeScript — including the trim bar and the player's cut
+handles, which sit entirely above `compose::write`. `combine.rs`, `markup.rs`,
+`pin.rs`, `update.rs`, `hotkeys.rs`, the `Rect`/`Frame` geometry in
+`capture/mod.rs`, `video.rs`'s `probe()` (hand-rolled MP4 atom parsing, no
+platform calls), and the stitcher, gap detection and stall watchdog in
+`scroll.rs` — whose platform contact is one `shoot()` function
+([`scroll.rs:1157`](../src-tauri/src/scroll.rs:1157)) plus the window lookups
+it borrows from `snap`, all behind the same two traits. The planning half of
+`trim.rs` — which turns marks into a segment list and needs no file on disk to
+test — is portable too; `compose.rs` is the platform half, and
+`compose::write` is already the seam.
 
 ### Has to be built
 
 | Subsystem | Rust LOC | Windows approach | Est. |
 |---|---|---|---|
 | Recording | 894 | Windows Graphics Capture + Media Foundation `SinkWriter`. Bundling ffmpeg is the alternative — ~80 MB and a licensing conversation. | 3–4 wk |
+| Trim and cut | 1,157 | `compose.rs` is AVFoundation end to end: passthrough export with edit lists, and an exact-cut H.264 re-encode. Media Foundation `SourceReader`/`SinkWriter`; see the note below — the passthrough trick does not translate whole. | 1.5–2 wk |
 | Still capture + enumeration | 635 | WGC, or DXGI Desktop Duplication. Per-monitor DPI v2. Real geometry replaces the `pHYs`-chunk scale inference, which has no analogue. | 2–3 wk |
-| Window outline and picker | 1,617 | `EnumWindows` + `DWMWA_CLOAKED` + `DWMWA_EXTENDED_FRAME_BOUNDS`. `CGEventTap` → `WH_MOUSE_LL`. Sub-window resolution via UI Automation. | 2–3 wk |
+| Window outline and picker | 1,988 | `EnumWindows` + `DWMWA_CLOAKED` + `DWMWA_EXTENDED_FRAME_BOUNDS`. `CGEventTap` → `WH_MOUSE_LL`. Sub-window resolution via UI Automation. | 2–3 wk |
 | Region selector | — | No `screencapture -i`. The full-screen overlay has to be built. | 1–2 wk |
 | Live annotation | 614 | `WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_TOPMOST`. | 1 wk |
 | OCR and barcodes | 254 | `Windows.Media.Ocr` is built in. **No barcode reader** — needs `rxing`. | 1 wk |
 | Clipboard | ~150 | `CF_HDROP` + `CF_DIBV5`. | 3–5 d |
 | Video thumbnails | ~60 | `IShellItemImageFactory`. | 2–3 d |
 | Cloud-folder discovery | ~80 | `%USERPROFILE%\OneDrive`, Dropbox's `info.json`, the Drive letter. | 2 d |
-| Share links | 0 | Nothing. `share/` is HTTP, OAuth and a file read — no platform calls at all. The loopback redirect opens a browser through `tauri-plugin-opener`, and the refresh token goes to the keychain through `keyring`, which has a Windows Credential Manager backend already. | — |
+| Share links | ~10 | `share/` is HTTP (`ureq` + rustls), OAuth over a loopback redirect, and a `0600` token file. Two small couplings: `gauth::config_dir` hardcodes `Library/Application Support` (use Tauri's config-dir API), and the `keyring` dependency is built `apple-native`-only — correctly, since it exists solely to migrate tokens out of an older install's login keychain, which no Windows machine has. `cfg` the migration out. | ½ d |
 | Trash and reveal | ~40 | `IFileOperation::DeleteItem`; `explorer /select,`. | 1 d |
 
-Share links are worth a second look, because the estimate for them went to
-**zero** — and not by being deferred. The original `drive.rs` read Drive for
-desktop's SQLite index through `/usr/bin/sqlite3`, which is two macOS couplings
-and a system binary Windows does not ship; it was costed at 3–4 days. Replacing
-it with an upload through Drive's own API was done for a product reason (a link
-that works when it is copied, from any capture, without a synced folder) and
-happened to delete the platform coupling entirely. The general point is worth
+Share links are worth a second look, because the estimate for them went from
+3–4 days to half of one — and not by being deferred. The original `drive.rs`
+read Drive for desktop's SQLite index through `/usr/bin/sqlite3`, two macOS
+couplings and a system binary Windows does not ship. Replacing it with an
+upload through Drive's own API was done for a product reason (a link that works
+when it is copied, from any capture, without a synced folder) and happened to
+delete nearly all of the platform coupling with it. The general point is worth
 keeping: a feature built on somebody's private local file is nearly always
 costed as a port, and the API it was avoiding is nearly always portable.
 
@@ -227,9 +373,27 @@ guarantee has to be re-established rather than inherited. And the frame clock is
 now ours, so dropped frames and variable frame rate become Shotly's problem for
 the first time.
 
-If the schedule has to give somewhere, this is the only item large enough to
-matter — and giving here means breaking the parity requirement. That trade
-should be made deliberately, not discovered in week fourteen.
+Since this document was first written, recording grew an editor.
+[`trim.rs`](../src-tauri/src/trim.rs) and
+[`compose.rs`](../src-tauri/src/compose.rs) turn two marks on a timeline into a
+shorter movie, two ways: a lossless passthrough export whose cut points ride on
+edit lists, and an exact H.264 re-encode for when the mark must be the mark.
+The planning layer is portable; the pipeline is AVFoundation end to end, and
+one of its two tricks does not translate. Media Foundation's MP4 sink writes no
+edit lists, so the frame-accurate-yet-lossless cut — the thing `compose.rs`'s
+header spends three paragraphs earning — has no direct Windows equivalent:
+passthrough cuts land on sync samples, and frame accuracy costs the re-encode.
+Shotly already owns an exact re-encode path, so the feature survives; the
+*default* changes character, and that is a product decision to make knowingly
+rather than a porting detail. One genuine consolation: on Windows the recorder
+is ours, so the keyframe cadence is ours — a one-second GOP is a choice, not a
+property of `screencapture -v` to be discovered, and every cut gets cheaper the
+shorter it is.
+
+If the schedule has to give somewhere, recording and its editor are the only
+items large enough to matter — and giving here means breaking the parity
+requirement. That trade should be made deliberately, not discovered in week
+fourteen.
 
 ### The region selector deserves its own note
 
@@ -276,7 +440,7 @@ instead, so the current defaults are free — but PrintScreen is the key Windows
 users will reach for first and should probably be offered.
 
 **`convertFileSrc` already handles the scheme difference**, but
-[`media.rs:272`](../src-tauri/src/media.rs:272) hardcodes `media://localhost/`
+[`media.rs:314`](../src-tauri/src/media.rs:314) hardcodes `media://localhost/`
 while Windows produces `http://media.localhost/`. The handler's URI parsing
 needs both forms.
 
@@ -285,6 +449,10 @@ SVG filter rendering and font smoothing — all of which the neon recipe in
 `docs/DEVELOPING.md` leans on. Budget a day of visual reconciliation and check
 the two-renderer invariant still holds: the Canvas2D export must keep matching
 the SVG preview on both platforms.
+
+Everything else the frontend needs — the nouns dictionary, `platform.ts`, the
+chrome inset — is in [One app that happens to run in two
+places](#one-app-that-happens-to-run-in-two-places) above.
 
 ---
 
@@ -312,11 +480,22 @@ The target: one tag, two artefacts, one manifest, published together.
 
 [`scripts/publish.mjs`](../scripts/publish.mjs) currently hardcodes
 `dmg/Shotly_${version}_aarch64.dmg` and writes a single-platform manifest. Its
-refusal checks — no republishing a live version, no publishing an unpushed
-commit, no silent change of signing identity — are the valuable part and should
-survive the rewrite. Add one: **refuse to publish unless both platform artefacts
-are present.** A manifest naming only one of them is how the platforms silently
-drift apart.
+refusal checks have grown since this document was first written and every one of
+them survives a move to CI unchanged: no republishing a live version, no
+publishing an unpushed commit, no silent change of signing identity, no release
+without a `CHANGELOG.md` entry for it, and no release whose compiled-in Google
+OAuth client Google itself does not recognise
+([`check-google-client.mjs`](../scripts/check-google-client.mjs) — bought by
+0.9.3, which shipped placeholder credentials that passed a format check). These
+are the valuable part and should survive the rewrite. Add one: **refuse to
+publish unless both platform artefacts are present.** A manifest naming only one
+of them is how the platforms silently drift apart.
+
+The Google client check also names a third secret that has to move to CI
+alongside the two signing identities: the release builds read the OAuth client
+from `.env.release`, which lives only on the build machine today. Same
+treatment as the minisign key — into the repository's secrets, not into a fresh
+one.
 
 Authenticode is a procurement task with a lead time, so start it in week one. A
 standard OV certificate still leaves SmartScreen warning until reputation
@@ -402,6 +581,7 @@ Resolve these before committing to the schedule; each could move a phase.
 4. **Windows 10 floor, or Windows 11 only?** `WDA_EXCLUDEFROMCAPTURE` needs
    10 2004; WGC needs 1903. A Windows 11 floor removes a class of conditional
    and is defensible for a new port.
-5. **Does recording hold the schedule?** It is 3–4 weeks of the 17–19, and it is
+5. **Does recording hold the schedule?** With its editor it is 5–6 weeks of
+   the 17–19 remaining, and it is
    the only item whose omission would visibly break parity. If it slips, the
    decision is whether Windows ships without it or both platforms wait.
