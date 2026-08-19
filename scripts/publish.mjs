@@ -34,6 +34,31 @@ const dryRun = args.includes("--dry-run");
 const notesFlag = args.indexOf("--notes");
 const notes = notesFlag === -1 ? null : args[notesFlag + 1];
 
+/**
+ * This version's section of the changelog, which is what the release notes and
+ * the in-app "what's new" are both made of.
+ *
+ * Refusing to publish without one is the only thing that keeps the file
+ * current: a changelog updated when somebody remembers is a changelog that
+ * stops three releases in. `npm run bump` opens the section, this insists on
+ * it, and `--notes` is still there for a release that genuinely has nothing to
+ * say for itself.
+ */
+function changelogEntry(version) {
+  const path = join(root, "CHANGELOG.md");
+  if (!existsSync(path)) return null;
+
+  const text = readFileSync(path, "utf8");
+  const start = text.indexOf(`## ${version} — `);
+  if (start === -1) return null;
+
+  const body = text.slice(text.indexOf("\n", start) + 1);
+  const end = body.indexOf("\n## ");
+  const entry = (end === -1 ? body : body.slice(0, end)).trim();
+  // A section holding nothing but the bullet `bump` left behind is empty.
+  return entry.replace(/^-\s*$/gm, "").trim() || null;
+}
+
 const die = (message) => {
   console.error(`\n✗ ${message}\n`);
   process.exit(1);
@@ -202,9 +227,18 @@ if (!onRemote) {
 
 // ---------------------------------------------------------------- manifest
 
+const entry = notes ?? changelogEntry(version);
+if (!entry) {
+  die(
+    `CHANGELOG.md has nothing for ${version}.\n\n` +
+      `  Write what changed under "## ${version} — <date>", then publish.\n` +
+      `  (Or pass --notes "…" for a release with nothing worth saying.)`,
+  );
+}
+
 const manifest = {
   version,
-  notes: notes ?? `Shotly ${version}`,
+  notes: entry,
   pub_date: new Date().toISOString(),
   platforms: {
     // Apple Silicon only, matching what we build. An Intel Mac finds no entry

@@ -7,6 +7,7 @@ it wrong and the failure lands on machines you cannot reach.
 
 ```bash
 npm run bump -- 0.2.0
+$EDITOR CHANGELOG.md          # bump opened the section; say what changed
 git commit -am "Shotly 0.2.0"
 git push
 npm run publish
@@ -14,6 +15,20 @@ npm run publish
 
 `publish` builds, then refuses to upload anything that would break an existing
 install. Read [What can go wrong](#what-can-go-wrong) before overriding it.
+
+## The changelog
+
+`CHANGELOG.md` is not a courtesy — it is where the release notes come from.
+`bump` opens a section for the new version, pre-filled with the commit subjects
+since the last tag; you edit it into something a user would want to read.
+`publish` then puts that section into two places: the GitHub release's notes,
+and `notes` in `latest.json`, which is the "what's new" list the in-app update
+notice shows when the download lands.
+
+Publishing a version with nothing written under its heading is refused, for the
+same reason the other checks exist — a changelog kept up to date when somebody
+remembers is one that stops three releases in. `--notes "…"` is the way past it
+for a release that genuinely has nothing to say.
 
 ## How updating works
 
@@ -147,6 +162,11 @@ Bump instead.
 **Publishing an unpushed commit.** Refused, so the tag always names a commit
 GitHub can show, and the source at that tag is the source the binary was built
 from.
+
+**Forgetting the changelog.** Refused: `publish` will not ship a version whose
+section in `CHANGELOG.md` is missing or still holds nothing but the empty
+bullet `bump` left. Whoever gets the update sees that section, so an empty one
+would ship as an empty "what's new".
 
 **Forgetting `npm run bump`.** The updater compares the manifest's version to
 the version compiled into the running app. Ship 0.2.0's code under 0.1.0's

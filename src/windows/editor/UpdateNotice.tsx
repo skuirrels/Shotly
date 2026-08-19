@@ -7,6 +7,34 @@ interface Props {
   onDismiss: () => void;
 }
 
+/**
+ * The release notes, as the changelog wrote them.
+ *
+ * Markdown bullets arrive as text; the dashes are stripped and the lines laid
+ * out as a list, because rendering markdown for three lines of prose would
+ * cost more than it could possibly be worth. Long entries scroll rather than
+ * pushing the Relaunch button off the notice.
+ */
+function Changes({ notes }: { notes: string | null }) {
+  const lines = (notes ?? "")
+    .split("\n")
+    .map((line) => line.replace(/^\s*[-*]\s*/, "").trim())
+    .filter(Boolean);
+
+  if (lines.length === 0) return null;
+
+  return (
+    <ul className="mt-2 max-h-24 space-y-1 overflow-y-auto pr-1">
+      {lines.map((line) => (
+        <li key={line} className="flex gap-1.5 text-[11.5px] leading-snug text-ink-2">
+          <span className="text-ink-4">·</span>
+          <span>{line}</span>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
 function percent(received: number, total: number | null): number | null {
   if (!total || total <= 0) return null;
   return Math.min(100, Math.round((received / total) * 100));
@@ -94,6 +122,10 @@ function Body({ status, onCheck }: { status: UpdateStatus; onCheck: () => void }
             <p className="mt-0.5 text-[11.5px] text-ink-3">
               It takes effect the next time Shotly starts.
             </p>
+            {/* What actually changed, straight from the release's changelog
+                entry. An update that says only "a new version is installed"
+                gives nobody a reason to relaunch. */}
+            <Changes notes={status.notes} />
             <button
               type="button"
               onClick={() => void relaunch()}
