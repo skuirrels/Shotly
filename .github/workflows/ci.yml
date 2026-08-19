@@ -52,15 +52,22 @@ jobs:
   windows:
     name: Portability check (Windows)
     runs-on: windows-latest
-    # NOT BLOCKING YET, and deliberately so. Shotly does not compile for
-    # Windows today — that is the whole subject of docs/WINDOWS.md — so a
-    # blocking job here would be red on every pull request from the first day,
-    # which teaches everyone to ignore CI. It reports instead.
+    # BLOCKING, as of the run that first went green (e556741). It was not, for
+    # the two runs it took to get there: a job that is red on every pull
+    # request from the first day is a job everyone learns to scroll past, so it
+    # only earns the right to block once it can pass.
     #
-    # Flip this to `false` the moment the check first passes with stubs (the
-    # end of Phase 0). From then on it is a genuine ratchet: nothing can land
-    # that reaches for a macOS API from shared code without turning it red.
-    continue-on-error: true
+    # It can now. Shotly compiles for Windows — as stubs that refuse at
+    # runtime, not as a working app, which is the whole of docs/WINDOWS.md —
+    # and that is exactly the property worth defending. From here, anything
+    # reaching for a macOS API from shared code turns this red, which is the
+    # only thing that keeps the platform split honest across a port measured
+    # in months.
+    #
+    # It has already earned it. The first two runs found an ungated
+    # objc2-core-video that dragged a compile_error! onto Windows, a POSIX-only
+    # chmod in share::gauth, and two stubs a careless edit had deleted from
+    # platform/windows/shell.rs — none of which anything on a Mac could see.
     steps:
       - uses: actions/checkout@v4
 

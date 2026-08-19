@@ -278,17 +278,43 @@ plausible shape (a zeroed `tm` formats as 1900 and would otherwise pass), that
 the Windows-shaped `http://media.localhost/…` URI serves identically to
 `media://localhost/…`, and both halves of the keyboard grammar.
 
-**`.github/workflows/ci.yml`** — the ratchet. macOS runs typecheck, both test
-suites and a build, and blocks. Windows runs `cargo check` and does not block
-yet, because Shotly does not compile there and a job that is red on every pull
-request from day one teaches everyone to ignore CI. It flips to blocking the
-moment it first passes with stubs.
+**`.github/workflows/ci.yml`** — the ratchet, and it is live. macOS runs
+typecheck, both test suites and a build. Windows runs `cargo check`. Both
+block.
+
+The Windows job took three runs to go green and did not waste any of them:
+
+1. It died in `objc2`, before reaching Shotly at all — `objc2-core-video` was
+   sitting in the general dependency list while every sibling was gated, so a
+   `compile_error!` meant for Apple platforms was being compiled on Windows.
+2. With that gated it reached our code and found four things: a POSIX-only
+   `chmod` in `share::gauth` (now `platform::paths::restrict_to_owner`, whose
+   Windows side states plainly what returning `Ok` costs), and two stubs that
+   a careless edit had deleted from `platform/windows/shell.rs` — an edit made
+   on a Mac, reviewed on a Mac, with every local check green.
+3. Green.
+
+**Shotly now compiles for Windows.** As stubs that refuse at runtime, not as a
+working application — everything below is still to build. But the thing worth
+defending exists from here: nothing can reach for a macOS API from shared code
+without turning the job red, which is what keeps the split honest over a port
+measured in months rather than days.
+
+One casualty worth recording. `scroll`'s `keeps_up_at_retina_size_in_debug`
+asserts wall-clock time, and a shared runner managed 462ms against its 450ms
+bound on code that had not changed — the same commit had passed minutes
+earlier. It now returns early under `CI`. A timing bound on somebody else's
+hardware measures how busy that hardware is, and a flaky test on a blocking
+job is worse than no test: it teaches people that red means nothing, which is
+the one thing this workflow exists to prevent.
 
 > **Worth knowing before trying to run the Windows check locally:** it cannot be
 > done from a Mac. `ureq`'s rustls pulls in `ring`, whose build script needs a C
 > compiler targeting Windows, so the cross-check dies in a dependency long
-> before it reaches Shotly's own code. CI on `windows-latest` is the only place
-> this is observable without `cargo-xwin` and a Microsoft EULA.
+> before it reaches Shotly's own code. (On a real Windows runner `ring` builds
+> fine — the wall is the cross-compile, not the crate.) CI on `windows-latest`
+> is the only place this is observable without `cargo-xwin` and a Microsoft
+> EULA, which is precisely why the job has to block rather than inform.
 
 ### The one thing deliberately left
 
