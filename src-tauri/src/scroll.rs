@@ -214,6 +214,17 @@ fn row_distance_on(a: &Sig, b: &Sig, live: &Live) -> f32 {
     total as f32 / counted.max(1) as f32
 }
 
+/// How many rows from the front of `rows` carry no vertical structure.
+///
+/// Measured against the run's own first row, so a tinted background counts as
+/// blank exactly as white does, and only over the live columns, so furniture
+/// beside the page cannot vouch for the page. Fed the rows in reverse it
+/// answers the same question about the end of the canvas.
+fn flat_run<'a>(mut rows: impl Iterator<Item = &'a Sig>, live: &Live) -> usize {
+    let Some(first) = rows.next() else { return 0 };
+    1 + rows.take_while(|r| row_distance_on(r, first, live) <= STILL_ROW).count()
+}
+
 /// Which columns moved between two frames.
 ///
 /// The mirror of `STILL_ROW`, and it matters for exactly the same reason. A
@@ -412,11 +423,13 @@ fn find_offset(tail: &[Sig], frame: &[Sig], moving: &[bool], live: &Live) -> Opt
 
 /// What one new frame did to the canvas.
 ///
-/// The three failures are deliberately distinct, because they mean opposite
-/// things to the person scrolling. Nothing moved: they are reading, and all is
-/// well. Moved but nothing new: they scrolled back over ground already
-/// covered, also fine. Moved and nothing matched: the page has run away from
-/// the stitcher, and only then is there something to tell them about.
+/// The failures are deliberately distinct, because they mean opposite things
+/// to the person scrolling. Nothing moved: they are reading, and all is well.
+/// Moved but nothing new: they scrolled back over ground already covered, also
+/// fine. Nothing on screen to match: they are crossing a gap in the page, and
+/// there is nothing to capture there anyway. Moved and nothing matched: the
+/// page has run away from the stitcher, and only then is there something to
+/// tell them about.
 #[derive(Debug, PartialEq)]
 pub enum Push {
     /// `rows` new rows were appended.
@@ -430,6 +443,12 @@ pub enum Push {
     Adrift,
     /// The page moved, but onto ground the canvas already holds.
     Unchanged,
+    /// The visible page is one flat expanse — the gap between two sections,
+    /// the margin of a full-width image — with nothing on it to measure a
+    /// scroll by. Not a failure: blank page is page nobody is missing, and
+    /// the capture picks up again where the content does. See
+    /// `Stitcher::across_the_gap`.
+    Blank,
     /// The frame did not line up anywhere — a popup, a page change, or a
     /// scroll bigger than a frame can bridge.
     NoMatch,
@@ -501,34 +520,100 @@ impl Stitcher {
         }
         self.prev_sigs = frame_sigs.clone();
 
+        // How much of the frame, from the top down, is blank page.
+        let blank_above = flat_run(frame_sigs.iter(), &self.live);
+        if blank_above == h {
+            // The whole screen is one flat expanse. Nothing here can say where
+            // the page is, and nothing here is worth keeping either.
+            return Push::Blank;
+        }
+
         // Nothing moved between this frame and the last. That is the user
         // reading rather than scrolling — but only if what they are reading is
         // where the capture ends, so ask before assuming it.
         if moved < min_evidence(h) / 2 {
-            return if self.holds_tail(&frame_sigs) { Push::Idle } else { Push::Adrift };
+            if self.holds_tail(&frame_sigs) {
+                return Push::Idle;
+            }
+            // Content arriving out of a gap moves too few rows to be measured,
+            // and it is the far side of the gap that is out of reach, not the
+            // page. Try the join blankness allows before crying runaway.
+            return match self.across_the_gap(&frame_sigs, blank_above) {
+                Some(offset) => self.append(frame, &frame_sigs, offset),
+                None => Push::Adrift,
+            };
         }
 
         // The canvas tail the frame is matched against: its last `h` rows.
         let tail_start = self.sigs.len() - h;
         let tail = &self.sigs[tail_start..];
 
-        let Some(offset) = find_offset(tail, &frame_sigs, &moving, &self.live) else {
-            return Push::NoMatch;
+        let offset = match find_offset(tail, &frame_sigs, &moving, &self.live) {
+            Some(offset) => offset,
+            None => match self.across_the_gap(&frame_sigs, blank_above) {
+                Some(offset) => offset,
+                None => return Push::NoMatch,
+            },
         };
 
         if offset <= 0 {
             return Push::Unchanged;
         }
 
-        // The frame's last `offset` rows are past the canvas bottom: new.
+        self.append(frame, &frame_sigs, offset)
+    }
+
+    /// Append a frame's last `offset` rows: the part below what the canvas
+    /// already holds.
+    fn append(&mut self, frame: RgbaImage, sigs: &[Sig], offset: i64) -> Push {
         let row_bytes = self.width as usize * 4;
-        let keep = h - offset as usize;
+        let keep = sigs.len() - offset as usize;
         let raw = frame.into_raw();
         self.canvas.extend_from_slice(&raw[keep * row_bytes..]);
-        self.sigs.extend_from_slice(&frame_sigs[keep..]);
+        self.sigs.extend_from_slice(&sigs[keep..]);
         self.height += offset as u32;
-
         Push::Appended { rows: offset as u32 }
+    }
+
+    /// Where to join a frame that arrived on the far side of a blank gap.
+    ///
+    /// A page with a real gap in it — the end of a chapter, the margin around
+    /// a full-width figure — hands the stitcher screens with nothing on them.
+    /// Nothing is lost while that lasts, because blank is blank. But the frame
+    /// that finally carries the next section shares nothing with the canvas
+    /// except the whiteness above it, and no measurement can say how far the
+    /// page travelled in between. Refusing the join there is what ended a
+    /// capture with "scrolled too fast" when the page had not run away at all;
+    /// it had simply gone quiet.
+    ///
+    /// So the join is made on the one thing that is known: the canvas ends in
+    /// blank, the frame opens with blank of the same shade, and content below
+    /// blank belongs below what the canvas already holds. The overlap is taken
+    /// as wide as the blank on both sides allows, which is the same rule as
+    /// everywhere else here — of the joins that explain the frame, the one
+    /// that moves least wins. The gap comes out as tall as the frame rather
+    /// than as tall as the page: a lie no reader can see, against losing
+    /// everything that came after it.
+    ///
+    /// Both runs have to be a real gap — a quarter of a frame each — because
+    /// the space between two paragraphs is blank too, and joining on *that*
+    /// would stitch a page to a stranger.
+    fn across_the_gap(&self, frame: &[Sig], blank_above: usize) -> Option<i64> {
+        let h = self.frame_height as usize;
+        let gap = min_overlap(h);
+        if blank_above < gap {
+            return None;
+        }
+        let blank_below = flat_run(self.sigs.iter().rev(), &self.live);
+        if blank_below < gap {
+            return None;
+        }
+        // A white gap and a grey one are not the same gap.
+        if row_distance_on(frame.first()?, self.sigs.last()?, &self.live) > MATCH_THRESHOLD {
+            return None;
+        }
+        let overlap = blank_above.min(blank_below);
+        Some((h - overlap) as i64)
     }
 
     /// Whether what is on screen is still the bottom of the canvas.
@@ -663,6 +748,8 @@ struct Progress {
     /// While stalled: the page is sitting on ground the canvas already holds,
     /// so the way out is forward rather than back. See `Stall`.
     behind: bool,
+    /// The screen is blank page: nothing to capture, nothing wrong.
+    blank: bool,
     /// The bottom of what has been captured, as a data URL — the thing to
     /// scroll back to. Only sent while stalled, since it costs an encode.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1134,18 +1221,26 @@ struct Stall {
     missed: u32,
     /// The last moving frame landed on page the canvas already holds.
     behind: bool,
+    /// There is nothing on screen to capture: the page has gone blank.
+    blank: bool,
 }
 
 impl Stall {
     fn saw(&mut self, push: &Push) {
+        self.blank = false;
         match push {
             Push::Appended { .. } => {
                 self.missed = 0;
                 self.behind = false;
             }
-            // Reading, not scrolling. Says nothing either way, so it must not
-            // clear a stall the user has not fixed.
-            Push::Idle => {}
+            // Reading, not scrolling — and reading the bottom of the capture,
+            // which is what `Idle` means and `Adrift` does not. Someone told to
+            // scroll back until the strip was on screen again has done exactly
+            // that, so the warning comes down with it.
+            Push::Idle => {
+                self.missed = 0;
+                self.behind = false;
+            }
             // Still, and not where the capture ends. The commonest way this
             // feature fails — one flick past what a frame can bridge — and
             // before it was counted it looked exactly like a user pausing to
@@ -1158,6 +1253,11 @@ impl Stall {
                 self.missed += 1;
                 self.behind = true;
             }
+            // Crossing a gap in the page. Nothing is being captured and
+            // nothing is being missed, so it counts neither way — but it is
+            // worth saying, or a frozen counter looks like the failure it used
+            // to be mistaken for.
+            Push::Blank => self.blank = true,
             // Moved, and nothing lined up anywhere: the page has run away.
             Push::NoMatch => {
                 self.missed += 1;
@@ -1209,6 +1309,7 @@ fn run_session(
                         preview: changed.then(|| s.preview(148)).flatten(),
                         stalled,
                         behind: stall.behind,
+                        blank: stall.blank,
                         // Where the capture ends, shown only when they need
                         // it: a picture of it is the one instruction that
                         // cannot be misread — which is more than can be said
@@ -1362,13 +1463,26 @@ mod tests {
         stall.saw(&Push::Adrift);
         assert!(!stall.behind);
 
+        // Blank page says nothing about direction, and is not a miss at all.
+        let missed = stall.missed;
+        stall.saw(&Push::Blank);
+        assert!(stall.blank);
+        assert_eq!(stall.missed, missed, "a gap in the page is not a failure");
+        assert!(!stall.behind);
+
         // Moving onto ground already captured can, and does.
         stall.saw(&Push::Unchanged);
         assert!(stall.behind, "scrolled back too far: the way out is forward");
+        assert!(!stall.blank, "the gap is behind us");
+
+        // Coming to rest on the bottom of the capture *is* the recovery: the
+        // strip the panel asked for is on screen, so the panel comes down.
         stall.saw(&Push::Idle);
-        assert!(stall.behind, "a pause must not flip the advice either");
+        assert!(!stall.stalled(), "the page is back where the capture ends");
+        assert!(!stall.behind);
 
         // And capturing again ends the whole conversation.
+        stall.saw(&Push::NoMatch);
         stall.saw(&Push::Appended { rows: 12 });
         assert!(!stall.stalled());
         assert!(!stall.behind);
@@ -1406,6 +1520,81 @@ mod tests {
         let out = st.into_page(true).unwrap();
         assert!(out.width() < 320, "the rail was left in the finished page");
         assert!(out.width() >= 320 - 64 - 320 / SIG_W as u32, "too much was trimmed");
+    }
+
+    /// The same page with a run of nothing in it, shaded like its own blank
+    /// lines so the gap is page rather than a seam.
+    fn with_gap_over(mut img: RgbaImage, gap: std::ops::Range<u32>) -> RgbaImage {
+        let width = img.width();
+        for y in gap {
+            for x in 0..width {
+                img.put_pixel(x, y, image::Rgba([250, 250, 125, 255]));
+            }
+        }
+        img
+    }
+
+    fn with_gap(width: u32, height: u32, gap: std::ops::Range<u32>) -> RgbaImage {
+        let mut img = page(width, height);
+        for y in gap {
+            for x in 0..width {
+                img.put_pixel(x, y, image::Rgba([250, 250, 125, 255]));
+            }
+        }
+        img
+    }
+
+    /// The end of a chapter is taller than the screen, and everything after it
+    /// used to be lost: the frame carrying the next section shares nothing
+    /// with the canvas but whiteness, so the capture stopped there and blamed
+    /// the user for scrolling too fast.
+    #[test]
+    fn a_gap_between_sections_does_not_end_the_capture() {
+        let page = with_gap(320, 3400, 1000..2400);
+        let h = 400;
+        let mut st = Stitcher::new(window(&page, 0, h));
+
+        let mut top = 0;
+        let mut blanks = 0;
+        let mut crossed = false;
+        while top + h < 3400 {
+            top += 150;
+            match st.push(window(&page, top, h)) {
+                Push::Blank => blanks += 1,
+                Push::Appended { .. } => crossed |= top > 2400,
+                other => panic!("{other:?} with the page at {top}"),
+            }
+        }
+        assert!(blanks >= 5, "a screen with nothing on it is not a failure");
+        assert!(crossed, "the section after the gap was never captured");
+
+        // And what came back is the page, not a smear of it: the bottom of the
+        // canvas is exactly the last frame, which is the invariant every
+        // further join depends on.
+        let out = st.into_image().unwrap();
+        let bottom = image::imageops::crop_imm(&out, 0, out.height() - h, 320, h).to_image();
+        assert_eq!(bottom.as_raw(), window(&page, top, h).as_raw());
+    }
+
+    /// The blank between two paragraphs is blank too. Joining on that would
+    /// stitch a page to a stranger, so the gap has to be a real one.
+    #[test]
+    fn a_gap_too_small_to_be_a_gap_joins_nothing() {
+        let h = 400;
+        let short = 60; // Below `min_overlap`, which is what makes a gap a gap.
+        let page = with_gap(320, 3400, 1000..1000 + short);
+        let page = with_gap_over(page, 2000..2000 + short);
+
+        // The canvas ends in one short blank; the frame opens with another,
+        // from a part of the page the canvas cannot reach.
+        let mut st = Stitcher::new(window(&page, 1000 + short - h, h));
+        assert_eq!(st.push(window(&page, 2000, h)), Push::NoMatch);
+
+        // And a real gap in the frame proves nothing on its own: the canvas
+        // has to end in the same gap.
+        let page = with_gap(320, 3400, 2000..2400);
+        let mut st = Stitcher::new(window(&page, 500, h));
+        assert_eq!(st.push(window(&page, 2100, h)), Push::NoMatch);
     }
 
     #[test]
@@ -1656,3 +1845,4 @@ mod tests {
         assert_eq!(st.push(with_header(300)), Push::Appended { rows: 150 });
     }
 }
+

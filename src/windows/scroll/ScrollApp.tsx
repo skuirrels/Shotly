@@ -40,6 +40,9 @@ interface Progress {
   /** While stalled: the page is on ground already captured, so the way on is
       down rather than back. */
   behind: boolean;
+  /** Nothing on screen to capture: the page has gone blank between sections.
+      Not a failure — the counter simply has nothing to add. */
+  blank: boolean;
   /** The bottom of what has been captured. Sent only while stalled. */
   anchor?: string;
 }
@@ -256,9 +259,11 @@ function Hud() {
             ? progress.behind
               ? "Waiting for new page below…"
               : "Waiting for the page to reappear…"
-            : progress
-              ? `${progress.frames} ${progress.frames === 1 ? "look" : "looks"} so far · keep scrolling`
-              : "Starting…"}
+            : progress?.blank
+              ? "Blank page · nothing to capture here"
+              : progress
+                ? `${progress.frames} ${progress.frames === 1 ? "look" : "looks"} so far · keep scrolling`
+                : "Starting…"}
         </p>
         <div className="flex gap-1.5">
           <button

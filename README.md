@@ -298,6 +298,15 @@ drag it into place — or drag it wherever you like and hit **Shrink-wrap** to
 have the canvas take the shape of what's on it. Nothing is destructive: undo
 puts it all back.
 
+To start from nothing at all, **New blank image** (<kbd>⌘N</kbd>, in the Capture
+menu) opens an empty page to paste onto — same canvas, same shrink-wrap, no
+capture underneath. And **New image from clipboard** (<kbd>⌘⇧V</kbd>) turns a
+picture you copied anywhere else into a capture of its own, to annotate and
+save like any other — it's in the menu bar too, for when Shotly's window isn't
+on screen. The difference from <kbd>⌘V</kbd> is what it does with it:
+<kbd>⌘V</kbd> lays the image *over* what's open, <kbd>⌘⇧V</kbd> makes it the
+thing you're editing.
+
 ### Resizing what you share
 
 Click the **size readout** in the middle of the title bar. Pick 75/50/25%,
@@ -339,6 +348,7 @@ Hotkeys tab that opens the right pane.
 <kbd>⇧S</kbd> shadow · <kbd>⌘]</kbd> <kbd>⌘[</kbd> forward/backward ·
 <kbd>⏎</kbd> apply crop · <kbd>⌘=</kbd> <kbd>⌘−</kbd> zoom ·
 <kbd>⌘0</kbd> fit · <kbd>⌘1</kbd> actual size · <kbd>⌘L</kbd> back to library ·
+<kbd>⌘N</kbd> new blank image · <kbd>⌘⇧V</kbd> new image from the clipboard ·
 <kbd>⌘,</kbd> settings
 
 **Drawing on the screen:** tool letters as above · <kbd>1</kbd>–<kbd>6</kbd>

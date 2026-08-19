@@ -57,3 +57,18 @@ setTimeout(() => {
     anchor: strip(220, 46),
   });
 }, 3200);
+
+// And the state that used to be reported as the first of those two and is
+// neither: a gap between sections, where there is nothing on screen to capture
+// and nothing wrong. It says so in the status line and nowhere else, which is
+// the point — the panel should not raise its voice for a blank page.
+setTimeout(() => {
+  (window as any).EMIT("scroll:progress", {
+    frames: 58,
+    height: 4212,
+    preview: strip(148, 240),
+    stalled: false,
+    behind: false,
+    blank: true,
+  });
+}, 4800);

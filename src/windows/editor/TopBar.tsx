@@ -2,6 +2,7 @@ import { useState, type ReactNode } from "react";
 import clsx from "clsx";
 import {
   IconCamera,
+  IconCanvas,
   IconChevronDown,
   IconCopy,
   IconDisplay,
@@ -59,6 +60,10 @@ interface Props {
   onSave: () => void;
   /** Write the annotations into the pixels, without the re-editable payload. */
   onExportFlat: () => void;
+  /** Start a document from a blank page. */
+  onNewCanvas: () => void;
+  /** Start a document from whatever image is on the clipboard. */
+  onNewFromClipboard: () => void;
   /** How many library captures are selected. Only meaningful in the library. */
   pickedCount: number;
   busy: string | null;
@@ -86,6 +91,8 @@ export function TopBar({
   onView,
   onCapture,
   onOpenFile,
+  onNewCanvas,
+  onNewFromClipboard,
   onCopy,
   onDelete,
   onSave,
@@ -251,7 +258,12 @@ export function TopBar({
           </>
         )}
 
-        <CaptureMenu onCapture={onCapture} onOpenFile={onOpenFile} />
+        <CaptureMenu
+          onCapture={onCapture}
+          onOpenFile={onOpenFile}
+          onNewCanvas={onNewCanvas}
+          onNewFromClipboard={onNewFromClipboard}
+        />
 
         {editing && (
           <>
@@ -432,9 +444,13 @@ function storedMode(): CaptureMode {
 function CaptureMenu({
   onCapture,
   onOpenFile,
+  onNewCanvas,
+  onNewFromClipboard,
 }: {
   onCapture: (mode: CaptureMode) => void;
   onOpenFile: () => void;
+  onNewCanvas: () => void;
+  onNewFromClipboard: () => void;
 }) {
   const [mode, setMode] = useState<CaptureMode>(storedMode);
   const active = MODES.find((m) => m.mode === mode) ?? MODES[0];
@@ -600,6 +616,52 @@ function CaptureMenu({
               </span>
               <span className="min-w-0 flex-1 text-[12.5px] font-medium text-ink">Open an image…</span>
               <Kbd shortcut="Mod+O" muted />
+            </button>
+
+            {/* The two ways to start with no capture at all. They sit under
+                Open because that is the group they belong to — a document that
+                did not come off the screen — and because neither is what
+                anyone reaches for first. */}
+            <button
+              type="button"
+              onClick={() => {
+                close();
+                onNewCanvas();
+              }}
+              className="flex w-full items-center gap-2.5 rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-hover"
+            >
+              <span className="text-ink-2">
+                <IconCanvas />
+              </span>
+              <span className="min-w-0 flex-1">
+                <span className="block text-[12.5px] font-medium text-ink">New blank image</span>
+                <span className="block text-[11px] text-ink-4">
+                  A canvas to paste captures onto and arrange
+                </span>
+              </span>
+              <Kbd shortcut="Mod+N" muted />
+            </button>
+
+            <button
+              type="button"
+              onClick={() => {
+                close();
+                onNewFromClipboard();
+              }}
+              className="flex w-full items-center gap-2.5 rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-hover"
+            >
+              <span className="text-ink-2">
+                <IconImage />
+              </span>
+              <span className="min-w-0 flex-1">
+                <span className="block text-[12.5px] font-medium text-ink">
+                  New image from clipboard
+                </span>
+                <span className="block text-[11px] text-ink-4">
+                  Edit the picture you just copied
+                </span>
+              </span>
+              <Kbd shortcut="Mod+Shift+V" muted />
             </button>
           </div>
         )}

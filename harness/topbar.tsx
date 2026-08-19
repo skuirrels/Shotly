@@ -33,6 +33,8 @@ function Bar({ initial, player }: { initial: View; player: boolean }) {
       onView={setView}
       onCapture={(mode) => console.log("capture", mode)}
       onOpenFile={() => console.log("open")}
+      onNewCanvas={() => console.log("new canvas")}
+      onNewFromClipboard={() => console.log("new from clipboard")}
       onCopy={() => console.log("copy")}
       onDelete={() => console.log("delete")}
       onSave={() => console.log("save")}

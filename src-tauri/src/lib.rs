@@ -228,6 +228,8 @@ pub fn run() {
             commands::window_thumbnail,
             commands::capture_window,
             commands::open_image,
+            commands::new_canvas,
+            commands::new_from_clipboard,
             commands::read_capture_bytes,
             commands::save_png,
             commands::save_editable_png,
@@ -477,6 +479,16 @@ fn tray_menu(app: &tauri::AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
         MenuItem::with_id(app, "screen", "Capture Screen", true, accel(Action::Fullscreen))?;
     let scroll =
         MenuItem::with_id(app, "scroll", "Scrolling Capture", true, accel(Action::Scroll))?;
+    // The one capture that starts somewhere other than the screen, and the
+    // menu bar is where it is wanted: you copy a picture in another app, and
+    // the editor is not on screen to press ⌘⇧V in.
+    let from_clipboard = MenuItem::with_id(
+        app,
+        "new-from-clipboard",
+        "New Image from Clipboard",
+        true,
+        None::<&str>,
+    )?;
     // Recording. Two items, and only ever one of them: "Record…" opens the
     // picker, and while a recording runs the same slot is the way to stop it —
     // the menu bar is where someone looks for a recording they have lost track
@@ -523,6 +535,7 @@ fn tray_menu(app: &tauri::AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
         &window_list,
         &screen,
         &scroll,
+        &from_clipboard,
         &sep,
         &record,
         &record_screen,
@@ -598,6 +611,27 @@ fn build_tray(app: &tauri::AppHandle) -> tauri::Result<()> {
                     .spawn();
             }
             "screen" => dispatch(app, CaptureMode::Fullscreen),
+            "new-from-clipboard" => {
+                let app = app.clone();
+                tauri::async_runtime::spawn(async move {
+                    match commands::new_from_clipboard(app.clone()).await {
+                        Ok(Some(_)) => {}
+                        // Nothing to open is worth saying: the menu item was an
+                        // explicit ask, unlike ⌘V, which people press on spec.
+                        Ok(None) => {
+                            let _ = tauri::Emitter::emit(
+                                &app,
+                                "capture:error",
+                                "No image on the clipboard",
+                            );
+                        }
+                        Err(err) => {
+                            eprintln!("[shotly] clipboard capture failed: {err}");
+                            let _ = tauri::Emitter::emit(&app, "capture:error", err);
+                        }
+                    }
+                });
+            }
             "scroll" => {
                 if let Err(err) = scroll::scroll_begin(app.clone()) {
                     eprintln!("[shotly] scrolling capture failed: {err}");

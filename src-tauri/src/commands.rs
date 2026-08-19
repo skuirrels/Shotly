@@ -338,9 +338,15 @@ pub async fn open_image(app: AppHandle, path: String) -> CmdResult<CaptureResult
         .await
         .map_err(|e| format!("opening that image failed: {e}"))??;
 
-    // Handing it to the editor is the other half, and it is AppKit work —
-    // changing the activation policy and showing a window — so it goes back to
-    // the main thread rather than running on whichever worker did the reading.
+    hand_to_editor(&app, frame, markup)
+}
+
+/// Put a frame in front of the user from a worker thread.
+///
+/// Delivery is AppKit work — changing the activation policy and showing a
+/// window — so it goes back to the main thread rather than running on
+/// whichever worker prepared the pixels.
+fn hand_to_editor(app: &AppHandle, frame: Frame, markup: Option<String>) -> CmdResult<CaptureResult> {
     let (tx, rx) = std::sync::mpsc::channel();
     let handle = app.clone();
     app.run_on_main_thread(move || {
@@ -428,6 +434,151 @@ fn load_image(path: &str, scale: f64) -> CmdResult<(Frame, Option<String>)> {
     };
 
     Ok((frame, markup))
+}
+
+// ------------------------------------------------------------- new documents
+
+/// How much of the display a blank canvas starts as.
+const CANVAS_FRACTION: f64 = 0.6;
+
+/// A blank page to arrange things on.
+///
+/// Everything else here begins with something that was on the screen. This one
+/// begins with nothing, and it is the other half of the composition story:
+/// `combine.rs` lays captures out for you, and this is the same job done by
+/// hand — a canvas, a few pasted captures, and the annotation tools that are
+/// already sitting there.
+///
+/// The size is taken rather than asked for, on the same reasoning as the
+/// canvas control: nobody knows how many pixels of blank space they want, and
+/// the number is not a commitment either way — any edge can be pushed outward
+/// afterwards, and shrink-wrapping to whatever ended up on it is one click.
+/// What does matter is the density. A canvas made at the display's own scale
+/// takes a Retina capture pasted onto it at full detail; one made at 1x would
+/// quietly halve everything dropped on it.
+#[tauri::command]
+pub async fn new_canvas(app: AppHandle) -> CmdResult<CaptureResult> {
+    let (points, scale) = canvas_size();
+    let width = ((points.0 * scale).round() as u32).max(1);
+    let height = ((points.1 * scale).round() as u32).max(1);
+
+    let frame = tauri::async_runtime::spawn_blocking(move || {
+        let blank = image::RgbaImage::from_pixel(width, height, image::Rgba([255, 255, 255, 255]));
+        write_scratch(&blank, scale, "canvas")
+    })
+    .await
+    .map_err(|e| format!("making the canvas failed: {e}"))??;
+
+    hand_to_editor(&app, frame, None)
+}
+
+/// The blank canvas' size in points, and the density to make it at.
+fn canvas_size() -> ((f64, f64), f64) {
+    let display = crate::capture::display::displays()
+        .ok()
+        .and_then(|displays| crate::annotate::display_under_cursor(&displays).cloned());
+
+    match display {
+        Some(d) => (
+            (d.bounds.width * CANVAS_FRACTION, d.bounds.height * CANVAS_FRACTION),
+            d.scale,
+        ),
+        // No display to ask — a state the rest of the app treats as fatal, but
+        // a blank page needs nothing from the screen except a sensible size.
+        None => ((900.0, 600.0), 2.0),
+    }
+}
+
+/// Whatever image is on the clipboard, as a capture of its own.
+///
+/// `Ok(None)` when the clipboard holds something else, for the same reason as
+/// `read_clipboard_image`: asking for this with text copied is a mistake worth
+/// a sentence, not an error dialog. The distinction from pasting — which lays
+/// the image *over* the capture being edited — is that this one starts from
+/// the image itself, which is what you want when the picture came from
+/// somewhere else entirely and there is nothing open to lay it on.
+#[tauri::command]
+pub async fn new_from_clipboard(app: AppHandle) -> CmdResult<Option<CaptureResult>> {
+    let frame = tauri::async_runtime::spawn_blocking(clipboard_frame)
+        .await
+        .map_err(|e| format!("reading the clipboard failed: {e}"))??;
+
+    match frame {
+        Some(frame) => hand_to_editor(&app, frame, None).map(Some),
+        None => Ok(None),
+    }
+}
+
+fn clipboard_frame() -> CmdResult<Option<Frame>> {
+    let mut clipboard = arboard::Clipboard::new().map_err(|e| e.to_string())?;
+    let Ok(image) = clipboard.get_image() else {
+        return Ok(None);
+    };
+
+    let (width, height) = (image.width as u32, image.height as u32);
+    let pixels = image::RgbaImage::from_raw(width, height, image.bytes.into_owned())
+        .ok_or("the clipboard image was not the size it claimed")?;
+
+    // The clipboard carries pixels and no opinion about how dense they are, so
+    // they are taken at face value — one pixel per point, exactly as an image
+    // file with no DPI tag is. Guessing Retina because the Mac has a Retina
+    // screen would show every ordinary image at half size.
+    write_scratch(&pixels, 1.0, "clipboard").map(Some)
+}
+
+/// Write a freshly made image into the scratch directory and describe it.
+///
+/// Same directory and same shape of name as `load_image`, so everything
+/// downstream — the asset protocol, `read_capture_bytes`, the export path —
+/// treats what comes out of here as an ordinary capture.
+fn write_scratch(image: &image::RgbaImage, scale: f64, stem: &str) -> CmdResult<Frame> {
+    let scratch = std::env::temp_dir().join("shotly");
+    std::fs::create_dir_all(&scratch).map_err(|e| e.to_string())?;
+    let dest = scratch.join(format!(
+        "{stem}-{}-{}.png",
+        now_ms(),
+        OPENED.fetch_add(1, AtomicOrdering::Relaxed)
+    ));
+
+    let (width, height) = image.dimensions();
+    let mut png = Vec::new();
+    image
+        .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+        .map_err(|e| e.to_string())?;
+    // Stamp the density, exactly as a capture is. Without it a canvas made at
+    // Retina scale comes back @1x the next time it is opened from the library,
+    // and the size readout disagrees with the document it describes.
+    let png = cli::with_dpi(&png, scale);
+    std::fs::write(&dest, &png).map_err(|e| e.to_string())?;
+
+    Ok(Frame {
+        path: dest.to_string_lossy().into_owned(),
+        bounds: Rect { x: 0.0, y: 0.0, width: width as f64 / scale, height: height as f64 / scale },
+        pixel_width: width,
+        pixel_height: height,
+        scale,
+    })
+}
+
+#[cfg(test)]
+mod new_document_tests {
+    use super::*;
+
+    /// A blank canvas is made at the screen's density, and has to still say so
+    /// when it is reopened — otherwise the size readout contradicts the
+    /// document it is describing the moment you come back to it.
+    #[test]
+    fn a_new_document_keeps_its_density() {
+        let blank = image::RgbaImage::from_pixel(16, 8, image::Rgba([255, 255, 255, 255]));
+        let frame = write_scratch(&blank, 2.0, "test-canvas").expect("it should have been written");
+        let path = std::path::Path::new(&frame.path);
+
+        assert_eq!(cli::scale_of_file(path), 2.0, "the density was not stamped");
+        assert_eq!((frame.bounds.width, frame.bounds.height), (8.0, 4.0));
+        assert_eq!((frame.pixel_width, frame.pixel_height), (16, 8));
+
+        let _ = std::fs::remove_file(path);
+    }
 }
 
 // ----------------------------------------------------------------- window list

@@ -9,6 +9,7 @@ import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { downloadDir, join } from "@tauri-apps/api/path";
 import {
   IconCamera,
+  IconCanvas,
   IconCheck,
   IconCommand,
   IconCopy,
@@ -488,6 +489,39 @@ export function EditorApp() {
     });
     if (typeof picked === "string") openPath(picked);
   }, [openPath]);
+
+  /**
+   * A blank page, opened like any other document.
+   *
+   * Deliberately not a mode or a dialog: what arrives is an ordinary capture
+   * that happens to be empty, so pasting, the canvas control and every
+   * annotation tool work on it without knowing where it came from.
+   */
+  const newCanvas = useCallback(async () => {
+    try {
+      await ipc.newCanvas();
+      notify("Blank canvas — ⌘V to paste an image onto it", "ok", 2600);
+    } catch (e) {
+      notify(`Could not make a canvas: ${e}`, "error");
+    }
+  }, [notify]);
+
+  /**
+   * The clipboard's image as a document of its own.
+   *
+   * The near neighbour of ⌘V, and the difference is what you already have
+   * open: ⌘V lays the image over the current capture, this one makes the
+   * image the capture. Says so when the clipboard holds text, unlike ⌘V —
+   * this was asked for explicitly, so silence would read as a dead command.
+   */
+  const newFromClipboard = useCallback(async () => {
+    try {
+      const made = await ipc.newFromClipboard();
+      if (!made) notify("No image on the clipboard", "error");
+    } catch (e) {
+      notify(`Could not open that image: ${e}`, "error");
+    }
+  }, [notify]);
 
   // Dropping a file anywhere on the editor opens it.
   useEffect(() => {
@@ -1354,6 +1388,24 @@ export function EditorApp() {
         keywords: "load import png jpeg file existing",
         run: () => void openFile(),
       },
+      {
+        id: "capture.newCanvas",
+        title: "New blank image",
+        group: "Capture",
+        shortcut: "Mod+N",
+        icon: <IconCanvas />,
+        keywords: "blank canvas empty page compose arrange collage new document",
+        run: () => void newCanvas(),
+      },
+      {
+        id: "capture.newFromClipboard",
+        title: "New image from clipboard",
+        group: "Capture",
+        shortcut: "Mod+Shift+V",
+        icon: <IconImage />,
+        keywords: "paste clipboard copied screenshot new document open",
+        run: () => void newFromClipboard(),
+      },
 
       {
         id: "edit.overlayPaste",
@@ -1450,6 +1502,8 @@ export function EditorApp() {
     saved,
     startCapture,
     openFile,
+    newCanvas,
+    newFromClipboard,
     closeDoc,
     showView,
     view,
@@ -1492,6 +1546,8 @@ export function EditorApp() {
         onView={showView}
         onCapture={startCapture}
         onOpenFile={() => void openFile()}
+        onNewCanvas={() => void newCanvas()}
+        onNewFromClipboard={() => void newFromClipboard()}
         onCopy={() => void (activeView === "library" ? copyPicked() : copy())}
         onDelete={() => void deleteCaptures(picked)}
         onSave={() => void save()}

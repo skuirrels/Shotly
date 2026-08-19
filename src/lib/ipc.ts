@@ -67,6 +67,15 @@ export const captureWindow = (windowId: number) =>
 /** Load an existing PNG/JPEG from disk into the editor. */
 export const openImage = (path: string) => invoke<CaptureResult>("open_image", { path });
 
+/** A blank page to arrange captures on, opened as a document of its own. */
+export const newCanvas = () => invoke<CaptureResult>("new_canvas");
+
+/**
+ * The clipboard's image as a new document. `null` when the clipboard holds
+ * something else, which is an ordinary answer rather than a failure.
+ */
+export const newFromClipboard = () => invoke<CaptureResult | null>("new_from_clipboard");
+
 /** Raw bytes of a capture still sitting in the scratch directory. */
 export const readCaptureBytes = (path: string) =>
   invoke<number[]>("read_capture_bytes", { path }).then((b) => new Uint8Array(b));
