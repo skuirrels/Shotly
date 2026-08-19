@@ -35,6 +35,14 @@ jobs:
 
       - run: npm ci
 
+      # First, because it is the cheapest question asked here and the one whose
+      # answer a Mac cannot otherwise give: do both platform backends still
+      # offer the same surface? Only one side is ever compiled, so a function
+      # deleted from the other is invisible until the Windows job fails minutes
+      # later — which has happened twice.
+      - name: Platform parity
+        run: npm run parity
+
       - name: Types
         run: npm run typecheck
 

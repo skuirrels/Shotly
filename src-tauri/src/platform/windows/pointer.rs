@@ -28,6 +28,33 @@ pub fn cursor() -> Option<(f64, f64)> {
 // is the counterpart, with the same "an unresponsive app simply will not
 // answer" caveat that MESSAGING_TIMEOUT exists for.
 
+use crate::ax::Node;
+
+/// Has the user granted whatever permission the hit test needs?
+///
+/// Nothing to grant on Windows: `EnumWindows`, `WindowFromPoint` and DWM's
+/// attributes are all available to any process. Answering `true` is therefore
+/// correct rather than optimistic — and it is what makes `snap`'s "ask for
+/// accessibility" path quietly disappear here.
+pub fn trusted() -> bool {
+    true
+}
+
+/// Ask for it anyway. There is nothing to ask for.
+pub fn request_trust() -> bool {
+    true
+}
+
+/// The chain of elements under a point, innermost last.
+///
+/// `WindowFromPoint` for the window, then `IUIAutomation::ElementFromPoint`
+/// and its ancestry for the levels inside it. Empty until implemented, which
+/// `snap` already handles: it is the same answer an untrusted Mac gives, and
+/// the outline falls back to framing whole windows.
+pub fn chain_at(_x: f64, _y: f64) -> Vec<Node> {
+    Vec::new()
+}
+
 // ------------------------------------------------------- owning the click
 //
 // The macOS session takes the click with a `CGEventTap`, for a reason that

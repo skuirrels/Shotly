@@ -16,7 +16,8 @@
     "preflight": "set -a; [ -f .env.release ] && . ./.env.release; set +a; node scripts/check-google-client.mjs",
     "publish": "npm run preflight && npm run release && node scripts/publish.mjs",
     "bump": "node scripts/bump.mjs",
-    "test": "vitest run"
+    "test": "vitest run",
+    "parity": "node scripts/check-platform-parity.mjs"
   },
   "dependencies": {
     "@tauri-apps/api": "^2",
