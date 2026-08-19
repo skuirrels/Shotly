@@ -1,6 +1,7 @@
 # Shotly on Windows
 
-A plan, not a record. Nothing here is built yet.
+Phase 0 is built and on `main`; everything after it is a plan. The line
+between the two is [Phase 0 — done](#phase-0--done).
 
 Shotly is macOS-only today, and the constraint on the port is that it must not
 stay a separate thing: **one repository, one version number, and both platforms
@@ -27,11 +28,13 @@ built-in OCR engine and that is about the end of the good news.
 **So this is not a translation. It is building the pipelines the macOS version
 deliberately declined to own.** Every estimate below follows from that.
 
-An unusual amount of the codebase is nonetheless ready for it. `CaptureBackend`
-is a real seam, `platform.rs` already carries `cfg(not(target_os = "macos"))`
-stubs for all five of its functions, and `capture/display.rs` uses the
-`mod imp` pattern that the rest of the port should copy. The head start is real;
-it just does not reach as far as recording, pointing, or the clipboard.
+An unusual amount of the codebase was nonetheless ready for it, which is what
+made Phase 0 cheap: `CaptureBackend` was already a real seam, `platform.rs`
+already carried `cfg(not(target_os = "macos"))` stubs for all five of its
+functions, and `capture/display.rs` already used the `mod imp` pattern the rest
+of the split copied. That head start was real; it did not reach as far as
+recording, pointing, or the clipboard, and those are what Phase 0 built homes
+for.
 
 ---
 
@@ -100,8 +103,9 @@ data points of its own. `drive.rs` — 322 lines, two macOS couplings — landed
 the table below, and was then deleted and replaced by
 [`share/`](../src-tauri/src/share/), which is nearly portable. That was the
 cheap direction. The expensive one followed within days: recording trim and cut
-([`trim.rs`](../src-tauri/src/trim.rs) +
-[`compose.rs`](../src-tauri/src/compose.rs), 1,157 lines) landed as a pure
+([`trim.rs`](../src-tauri/src/trim.rs) + what is now
+[`platform/macos/editor.rs`](../src-tauri/src/platform/macos/editor.rs), 1,157
+lines) landed as a pure
 AVFoundation pipeline, and is now the second-largest item in the table. Two
 features, two weeks, one net gain of roughly two porting-weeks. Over four
 months, unmanaged, the gap moves faster than one developer tracking it.
@@ -352,15 +356,15 @@ platform calls), and the stitcher, gap detection and stall watchdog in
 ([`scroll.rs:1157`](../src-tauri/src/scroll.rs:1157)) plus the window lookups
 it borrows from `snap`, all behind the same two traits. The planning half of
 `trim.rs` — which turns marks into a segment list and needs no file on disk to
-test — is portable too; `compose.rs` is the platform half, and
-`compose::write` is already the seam.
+test — is portable too; `platform::editor` is the platform half, and
+`editor::write` is the seam it was already shaped like.
 
 ### Has to be built
 
 | Subsystem | Rust LOC | Windows approach | Est. |
 |---|---|---|---|
 | Recording | 894 | Windows Graphics Capture + Media Foundation `SinkWriter`. Bundling ffmpeg is the alternative — ~80 MB and a licensing conversation. | 3–4 wk |
-| Trim and cut | 1,157 | `compose.rs` is AVFoundation end to end: passthrough export with edit lists, and an exact-cut H.264 re-encode. Media Foundation `SourceReader`/`SinkWriter`; see the note below — the passthrough trick does not translate whole. | 1.5–2 wk |
+| Trim and cut | 1,157 | `platform/macos/editor.rs` is AVFoundation end to end: passthrough export with edit lists, and an exact-cut H.264 re-encode. Media Foundation `SourceReader`/`SinkWriter`; see the note below — the passthrough trick does not translate whole. | 1.5–2 wk |
 | Still capture + enumeration | 635 | WGC, or DXGI Desktop Duplication. Per-monitor DPI v2. Real geometry replaces the `pHYs`-chunk scale inference, which has no analogue. | 2–3 wk |
 | Window outline and picker | 1,988 | `EnumWindows` + `DWMWA_CLOAKED` + `DWMWA_EXTENDED_FRAME_BOUNDS`. `CGEventTap` → `WH_MOUSE_LL`. Sub-window resolution via UI Automation. | 2–3 wk |
 | Region selector | — | No `screencapture -i`. The full-screen overlay has to be built. | 1–2 wk |
@@ -401,12 +405,13 @@ the first time.
 
 Since this document was first written, recording grew an editor.
 [`trim.rs`](../src-tauri/src/trim.rs) and
-[`compose.rs`](../src-tauri/src/compose.rs) turn two marks on a timeline into a
+[`platform/macos/editor.rs`](../src-tauri/src/platform/macos/editor.rs) turn
+two marks on a timeline into a
 shorter movie, two ways: a lossless passthrough export whose cut points ride on
 edit lists, and an exact H.264 re-encode for when the mark must be the mark.
 The planning layer is portable; the pipeline is AVFoundation end to end, and
 one of its two tricks does not translate. Media Foundation's MP4 sink writes no
-edit lists, so the frame-accurate-yet-lossless cut — the thing `compose.rs`'s
+edit lists, so the frame-accurate-yet-lossless cut — the thing that module's
 header spends three paragraphs earning — has no direct Windows equivalent:
 passthrough cuts land on sync samples, and frame accuracy costs the re-encode.
 Shotly already owns an exact re-encode path, so the feature survives; the
@@ -552,7 +557,7 @@ The outline can likely be built from `EnumWindows` alone, and the 469 lines of
 AX machinery shrink to something much smaller.
 
 **Spaces stop existing.** Every `NSWindowCollectionBehavior` decision in
-[`platform.rs`](../src-tauri/src/platform.rs), the whole "Window level and
+[`platform::chrome`](../src-tauri/src/platform/macos/chrome.rs), the whole "Window level and
 Spaces" section of `DEVELOPING.md`, and `follow_active_space` — all of it is
 simply absent on Windows. Virtual desktops exist but do not impose the same
 problem on an accessory application.
