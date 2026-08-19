@@ -425,6 +425,16 @@ like a broken Mac:
   user can see what a click would take, so the dangerous half of the feature is
   made to depend on the visible half.
 
+- **Each overlay must listen for its own events.** There is one page per
+  display, and each is sent the same event carrying that display's own
+  coordinates — but the plain `listen` from `@tauri-apps/api/event` registers
+  against *any* target, so every page received every emit and drew whichever
+  arrived last. On two screens that meant the outline only ever appeared on one
+  of them: the other spent the session drawing its neighbour's rectangle, far
+  off its own edge, leaving a dimmed screen with nothing on it and a capture
+  that looked broken. `getCurrentWebviewWindow().listen` is scoped to the page
+  it is called from, and is what makes `emit_to(label, …)` mean anything.
+
 Related: the first target is routinely resolved before the page has finished
 loading, so the first `emit_to` goes nowhere. `snap_ready` re-sends the current
 outline for exactly that reason.

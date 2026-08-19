@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
+import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
+import { nouns } from "../../lib/platform";
 
 /**
  * The outline that follows the pointer during window capture.
@@ -60,13 +61,23 @@ export function SnapApp() {
     };
   }, []);
 
+  // Scoped to *this* overlay, and it has to be. There is one of these pages
+  // per display, each sent the same event carrying that display's own
+  // coordinates — and a bare `listen` is registered against every target
+  // there is, so each page received all of them and drew whichever arrived
+  // last. On two screens that meant the outline only ever appeared on one:
+  // the pointer could be moving over this display while this page was drawing
+  // a rectangle belonging to the other one, far off its own edge, leaving a
+  // dimmed screen with nothing on it.
   useEffect(() => {
-    const un = listen<Highlight | null>("snap:target", (e) => setTarget(e.payload));
+    const here = getCurrentWebviewWindow();
+    const un = here.listen<Highlight | null>("snap:target", (e) => setTarget(e.payload));
     return () => void un.then((fn) => fn());
   }, []);
 
   useEffect(() => {
-    const un = listen("snap:needs-accessibility", () => setNeedsAccessibility(true));
+    const here = getCurrentWebviewWindow();
+    const un = here.listen("snap:needs-accessibility", () => setNeedsAccessibility(true));
     return () => void un.then((fn) => fn());
   }, []);
 
@@ -210,7 +221,7 @@ function Hint({
       ) : (
         <p className="mt-0.5 text-[11.5px] text-white/60">
           Scroll to tighten onto what's inside · Esc cancels · for a window that's
-          hidden behind another, use Capture Window from List in the menu bar
+          hidden behind another, use Capture Window from List in the {nouns.menuBar}
         </p>
       )}
     </div>
