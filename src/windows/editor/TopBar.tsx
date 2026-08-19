@@ -463,14 +463,17 @@ function CaptureMenu({
 
   return (
     <div className="flex items-center overflow-hidden rounded-lg bg-white/[0.07]">
-      <Tooltip label={`Capture ${active.hint.toLowerCase()}`} shortcut={active.shortcut}>
+      {/* The button says what it does, not which mode it is set to: "Window"
+          on its own read as a filter or a menu rather than a verb. Which mode
+          it will run is the tooltip's job, and the menu marks it too. */}
+      <Tooltip label={`Capture ${active.label.toLowerCase()}`} shortcut={active.shortcut}>
         <button
           type="button"
           onClick={() => onCapture(mode)}
           className="no-drag flex h-8 items-center gap-1.5 pr-2 pl-2.5 text-[12.5px] font-medium text-ink transition-colors hover:bg-white/[0.07] active:bg-white/[0.12]"
         >
           <IconCamera />
-          <span className="@max-[1090px]:hidden">{active.label}</span>
+          <span className="@max-[1090px]:hidden">Capture</span>
         </button>
       </Tooltip>
 
