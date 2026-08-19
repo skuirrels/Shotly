@@ -1,7 +1,6 @@
 //! Where the pointer is, and what is underneath it.
 //!
-//! Two questions with one answer each on macOS, and both are asked from three
-//! or four places — the annotation layer wants to know which screen to open
+//! Both are asked from three or four places — the annotation layer wants to know which screen to open
 //! on, the capture backend wants the scale of the display a selection was made
 //! on, the window outline wants the window under the cursor. They used to be
 //! answered by three identical copies of the same six lines; this is the copy
@@ -11,17 +10,14 @@
 //! of why the accessibility API answers "what would a click here land on"
 //! correctly where the window list does not.
 //!
-//! # What is deliberately *not* here yet
+//! # Three questions, not two
 //!
-//! The `CGEventTap` that owns the click during a window-pick session is still
-//! in `snap.rs`. It is the one piece of Phase 0 left where it was, on purpose:
-//! it is ~200 lines of documented safety machinery whose failure mode is a
-//! desktop nobody can use, no test can drive it (a tap needs a real event
-//! stream, and scripted input warps the cursor rather than reproducing one),
-//! and a mechanical move would therefore be an unverifiable change to the most
-//! dangerous code in the app. Its Windows counterpart is described in
-//! `platform/windows/pointer.rs`; moving it deserves its own change, with a
-//! human at the keyboard confirming the outline still behaves.
+//! The third is who owns the click, and it is the largest thing here: the
+//! `CGEventTap` a window-pick session takes the mouse with. See the banner
+//! above it for why a tap rather than a window, and what keeps it safe.
+
+use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, AtomicU8, Ordering};
+use std::time::{Duration, Instant};
 
 /// Where the pointer is, in global point space with a top-left origin.
 ///
@@ -288,4 +284,356 @@ pub fn chain_at(x: f64, y: f64) -> Vec<Node> {
         Some(window) => std::iter::once(window).chain(inward).collect(),
         None => inward,
     }
+}
+
+// ------------------------------------------------------------ owning the click
+//
+// During a window-pick session Shotly takes the mouse with a `CGEventTap`
+// rather than a click-catching window, and that is not the obvious choice. The
+// reason is the measurement above: a window that accepts mouse events is
+// invisible to accessibility hit-testing, so an overlay that caught the click
+// would be the only thing the outline could ever find. Something has to take
+// the click without being a window, which leaves the tap.
+//
+// It is also the safer of the two. The failure mode of a full-screen click
+// target is a desktop nobody can use until Shotly is force-quit; the failure
+// mode of a tap is that macOS notices the callback is slow and switches it off,
+// which is to say the operating system already implements the recovery.
+//
+// Everything here is arranged so that recovery is never needed:
+//
+//   * **The callback does no work.** It stores integers and returns. Nothing is
+//     locked, nothing is allocated, no IPC happens — the hit-testing and the
+//     drawing belong to the caller's own thread.
+//   * **It outlives nothing.** Created when the session starts, dropped when it
+//     ends, with a hard deadline of `MAX_SESSION` enforced by its own loop
+//     rather than by whoever was supposed to stop it.
+//   * **Only the mouse buttons, the wheel and Escape are swallowed.** Everything
+//     else passes through, so ⌘Tab and ⌘Q still work while a session is up.
+//
+// The session logic that reads all this lives in `snap.rs`, which owns what the
+// verdicts *mean*. This module owns only how they are obtained.
+
+/// How long a session may own the mouse before it gives it back regardless.
+const MAX_SESSION: Duration = Duration::from_secs(45);
+
+/// How many times a tap switched off for slowness may be switched back on.
+const MAX_REARMS: u32 = 5;
+
+/// Escape's virtual keycode.
+const KEY_ESCAPE: i64 = 53;
+
+/// What the tap decided a session should do.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Verdict {
+    /// Nothing yet.
+    None,
+    /// A click: take whatever is under the pointer.
+    Take,
+    /// A drag: take the rectangle instead.
+    Region,
+    /// Escape, a right-click, or something that took the input away.
+    Cancel,
+}
+
+const VERDICT_NONE: u8 = 0;
+const VERDICT_TAKE: u8 = 1;
+const VERDICT_CANCEL: u8 = 2;
+const VERDICT_REGION: u8 = 3;
+
+static VERDICT: AtomicU8 = AtomicU8::new(VERDICT_NONE);
+/// Wheel movement the caller has yet to turn into levels.
+static SCROLL: AtomicI64 = AtomicI64::new(0);
+/// Set by the callback when macOS switches the tap off, cleared by the loop
+/// that switches it back on.
+static REARM: AtomicBool = AtomicBool::new(false);
+
+/// Where the button went down, and where the pointer is now — global points as
+/// `f64` bits, because the callback may not allocate or lock and this is the
+/// cheapest thing that can carry a coordinate out of it.
+static PRESS_X: AtomicU64 = AtomicU64::new(0);
+static PRESS_Y: AtomicU64 = AtomicU64::new(0);
+static POINT_X: AtomicU64 = AtomicU64::new(0);
+static POINT_Y: AtomicU64 = AtomicU64::new(0);
+/// Whether the button is currently held.
+static PRESSED: AtomicBool = AtomicBool::new(false);
+/// Whether the tap has seen a drag event since the press.
+///
+/// Which of two answers to believe about where a drag has got to, and getting
+/// it wrong is visible: the band is drawn from the *event* when there are
+/// events, because a `LeftMouseDragged` this tap drops never reaches the window
+/// server, and the pointer can therefore sit perfectly still on screen while a
+/// drag is happening. Polling it then gives the press point over and over —
+/// crosshairs that do not move, which is exactly how this was reported.
+///
+/// The polled pointer is still the answer when no drag events arrive at all:
+/// anything driving the mouse programmatically moves it with plain moved events
+/// while the button is down, and those the tap never sees.
+static TAPPED_DRAG: AtomicBool = AtomicBool::new(false);
+
+fn put(cell: &AtomicU64, value: f64) {
+    cell.store(value.to_bits(), Ordering::Relaxed);
+}
+
+fn got(cell: &AtomicU64) -> f64 {
+    f64::from_bits(cell.load(Ordering::Relaxed))
+}
+
+/// Clear everything, at the start of a session.
+pub fn reset() {
+    SCROLL.store(0, Ordering::SeqCst);
+    VERDICT.store(VERDICT_NONE, Ordering::SeqCst);
+    PRESSED.store(false, Ordering::SeqCst);
+    TAPPED_DRAG.store(false, Ordering::SeqCst);
+    REARM.store(false, Ordering::SeqCst);
+}
+
+/// Take the verdict, leaving nothing behind.
+pub fn take_verdict() -> Verdict {
+    match VERDICT.swap(VERDICT_NONE, Ordering::SeqCst) {
+        VERDICT_TAKE => Verdict::Take,
+        VERDICT_REGION => Verdict::Region,
+        VERDICT_CANCEL => Verdict::Cancel,
+        _ => Verdict::None,
+    }
+}
+
+/// End the session from outside — the watchdog, or a second press of the key.
+pub fn cancel() {
+    VERDICT.store(VERDICT_CANCEL, Ordering::SeqCst);
+}
+
+/// Wheel movement since this was last asked, cleared by the asking.
+pub fn take_scroll() -> i64 {
+    SCROLL.swap(0, Ordering::Relaxed)
+}
+
+/// Where the button went down.
+pub fn press() -> (f64, f64) {
+    (got(&PRESS_X), got(&PRESS_Y))
+}
+
+/// Where the last mouse event the tap saw was.
+pub fn point() -> (f64, f64) {
+    (got(&POINT_X), got(&POINT_Y))
+}
+
+/// Is the button held?
+pub fn pressed() -> bool {
+    PRESSED.load(Ordering::SeqCst)
+}
+
+/// Has the tap seen a drag event since the press? See [`TAPPED_DRAG`].
+pub fn tapped_drag() -> bool {
+    TAPPED_DRAG.load(Ordering::SeqCst)
+}
+
+/// Take the mouse for one session.
+///
+/// Returns immediately; the tap runs on a thread of its own until
+/// `is_current` says the session has been superseded, or [`MAX_SESSION`]
+/// expires, whichever comes first.
+pub fn watch(generation: u64, is_current: fn(u64) -> bool, is_drag: fn((f64, f64), (f64, f64)) -> bool) {
+    use core_foundation::runloop::{kCFRunLoopCommonModes, kCFRunLoopDefaultMode, CFRunLoop};
+    use core_graphics::event::{
+        CGEventTap, CGEventTapLocation, CGEventTapOptions, CGEventTapPlacement, CGEventType,
+        CallbackResult, EventField,
+    };
+
+    std::thread::spawn(move || {
+        fn decide(verdict: u8) {
+            // First verdict wins: a click and an Escape in the same tick should
+            // not be able to overwrite one another.
+            let _ = VERDICT.compare_exchange(
+                VERDICT_NONE,
+                verdict,
+                Ordering::SeqCst,
+                Ordering::SeqCst,
+            );
+        }
+
+        let tap = CGEventTap::new(
+            CGEventTapLocation::Session,
+            CGEventTapPlacement::HeadInsertEventTap,
+            CGEventTapOptions::Default,
+            vec![
+                CGEventType::LeftMouseDown,
+                CGEventType::LeftMouseUp,
+                CGEventType::LeftMouseDragged,
+                CGEventType::RightMouseDown,
+                CGEventType::RightMouseUp,
+                CGEventType::KeyDown,
+                CGEventType::KeyUp,
+                CGEventType::ScrollWheel,
+            ],
+            move |_proxy, etype, event| {
+                match etype {
+                    // The verdict waits for the button to come back up,
+                    // because until then a press is not yet a click: the same
+                    // gesture becomes a dragged area if the pointer travels.
+                    // Reading the location is a struct copy out of the event
+                    // that is already in hand — still nothing this callback has
+                    // to think about.
+                    CGEventType::LeftMouseDown => {
+                        let at = event.location();
+                        put(&PRESS_X, at.x);
+                        put(&PRESS_Y, at.y);
+                        put(&POINT_X, at.x);
+                        put(&POINT_Y, at.y);
+                        TAPPED_DRAG.store(false, Ordering::SeqCst);
+                        PRESSED.store(true, Ordering::SeqCst);
+                        CallbackResult::Drop
+                    }
+                    CGEventType::LeftMouseDragged => {
+                        let at = event.location();
+                        put(&POINT_X, at.x);
+                        put(&POINT_Y, at.y);
+                        TAPPED_DRAG.store(true, Ordering::SeqCst);
+                        CallbackResult::Drop
+                    }
+                    // The end of the gesture, and where it is decided — on the
+                    // two points, not on whether the tracker noticed in time.
+                    // A flick drawn and released inside one poll tick is still
+                    // a drag, and it is the release that says so.
+                    //
+                    // Dropped either way: passing it on would leave whatever is
+                    // underneath handling a mouse-up it never saw pressed.
+                    CGEventType::LeftMouseUp => {
+                        let at = event.location();
+                        put(&POINT_X, at.x);
+                        put(&POINT_Y, at.y);
+                        PRESSED.store(false, Ordering::SeqCst);
+                        // Whether a gesture counts as a drag is the
+                        // caller's rule, not the tap's — but it is decided
+                        // *here*, on the two points the events actually
+                        // carried, rather than later from whatever the
+                        // pointer has drifted to.
+                        decide(if is_drag((got(&PRESS_X), got(&PRESS_Y)), (at.x, at.y)) {
+                            VERDICT_REGION
+                        } else {
+                            VERDICT_TAKE
+                        });
+                        CallbackResult::Drop
+                    }
+                    CGEventType::RightMouseDown | CGEventType::RightMouseUp => {
+                        decide(VERDICT_CANCEL);
+                        CallbackResult::Drop
+                    }
+                    CGEventType::KeyDown | CGEventType::KeyUp => {
+                        // Escape and nothing else. A bare letter was tried here
+                        // as a shortcut to the window list and taken out again:
+                        // a key that silently disappears system-wide is
+                        // indistinguishable from a broken keyboard, and the
+                        // tray menu reaches the list without that risk. Escape
+                        // is safe because it already means "get me out".
+                        let code = event.get_integer_value_field(EventField::KEYBOARD_EVENT_KEYCODE);
+                        if code == KEY_ESCAPE {
+                            decide(VERDICT_CANCEL);
+                            CallbackResult::Drop
+                        } else {
+                            CallbackResult::Keep
+                        }
+                    }
+                    CGEventType::ScrollWheel => {
+                        // A wheel reports whole lines. A trackpad reports pixels
+                        // and leaves the line delta at zero, so reading only the
+                        // first meant the gesture most Macs actually have did
+                        // nothing at all — the wheel appeared to be ignored on
+                        // every laptop. Only the sign is used downstream, which
+                        // is why no scaling is needed between the two units.
+                        let lines = event
+                            .get_integer_value_field(EventField::SCROLL_WHEEL_EVENT_DELTA_AXIS_1);
+                        let delta = if lines != 0 {
+                            lines
+                        } else {
+                            event.get_integer_value_field(
+                                EventField::SCROLL_WHEEL_EVENT_POINT_DELTA_AXIS_1,
+                            )
+                        };
+                        SCROLL.fetch_add(delta, Ordering::Relaxed);
+                        CallbackResult::Drop
+                    }
+                    // The system has switched the tap off — either the callback
+                    // was too slow or the user did something that invalidates
+                    // it. Rather than re-enable and hope, end the session:
+                    // clicks are reaching applications again from this moment,
+                    // and an outline that no longer owns the click is a lie.
+                    // Not a failure, and not the end of the session. macOS
+                    // switches a tap off when it decides the callback was slow,
+                    // and the moment it is most likely to decide that is the
+                    // first session after launch, when the main thread is busy
+                    // bringing up a webview. Ending the session there is what
+                    // made the first press of the capture key do nothing.
+                    //
+                    // Re-enabling is the documented answer, and it is safe here
+                    // because the tap is still valid — only switched off. The
+                    // loop below does it, so this stays a single store.
+                    CGEventType::TapDisabledByTimeout => {
+                        REARM.store(true, Ordering::SeqCst);
+                        CallbackResult::Keep
+                    }
+                    // This one is not ours to argue with: it means something
+                    // took the input away — secure input, a password field —
+                    // and clicks are reaching applications again from this
+                    // moment. An outline that no longer owns the click is a lie.
+                    CGEventType::TapDisabledByUserInput => {
+                        eprintln!("[snap] the tap was disabled by the system; ending the session");
+                        decide(VERDICT_CANCEL);
+                        CallbackResult::Keep
+                    }
+                    // Everything else passes through untouched, which is what
+                    // keeps ⌘Tab and ⌘Q working while a session is up.
+                    _ => CallbackResult::Keep,
+                }
+            },
+        );
+
+        let Ok(tap) = tap else {
+            eprintln!("[snap] the system refused an event tap");
+            VERDICT.store(VERDICT_CANCEL, Ordering::SeqCst);
+            return;
+        };
+
+        // SAFETY: the run loop source belongs to this thread's run loop, and
+        // both are dropped together when this function returns.
+        unsafe {
+            let Ok(source) = tap.mach_port().create_runloop_source(0) else {
+                eprintln!("[snap] the event tap has no run loop source");
+                VERDICT.store(VERDICT_CANCEL, Ordering::SeqCst);
+                return;
+            };
+            CFRunLoop::get_current().add_source(&source, kCFRunLoopCommonModes);
+            tap.enable();
+
+            let deadline = Instant::now() + MAX_SESSION;
+            let mut rearms = 0;
+            // Pumped in slices rather than run outright, so this thread notices
+            // the session ending without needing anyone to reach in and stop
+            // its run loop — and so the deadline is its own to enforce. The
+            // slices are also what give the tap somewhere to be switched back
+            // on from, without the callback doing more than a store.
+            while is_current(generation) && Instant::now() < deadline {
+                CFRunLoop::run_in_mode(kCFRunLoopDefaultMode, Duration::from_millis(100), false);
+
+                if REARM.swap(false, Ordering::SeqCst) {
+                    rearms += 1;
+                    // Bounded, because a callback that is genuinely too slow
+                    // would otherwise be switched off and on for the whole
+                    // session while every click vanished into it.
+                    if rearms > MAX_REARMS {
+                        eprintln!("[snap] the tap keeps being disabled; ending the session");
+                        VERDICT.store(VERDICT_CANCEL, Ordering::SeqCst);
+                        break;
+                    }
+                    eprintln!("[snap] the tap was disabled on a slow tick; switching it back on");
+                    tap.enable();
+                }
+            }
+
+            if is_current(generation) {
+                eprintln!("[snap] session hit its deadline; releasing the mouse");
+                VERDICT.store(VERDICT_CANCEL, Ordering::SeqCst);
+            }
+        }
+    });
 }

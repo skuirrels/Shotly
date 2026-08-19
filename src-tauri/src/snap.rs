@@ -15,38 +15,24 @@
 //!
 //! # Who owns the click
 //!
-//! Shotly does, through a `CGEventTap`. That is not the obvious choice — a
-//! full-screen window that accepts clicks would be the usual way — and it is
-//! deliberate, because of a measurement in `ax.rs`: a window that ignores mouse
-//! events is invisible to accessibility hit-testing, and one that accepts them
-//! is not. A click-catching overlay would therefore be the only thing the
-//! outline could ever find. Something has to take the click without being a
-//! window, which leaves the event tap.
+//! Not this module, any more — `platform::pointer` does, through a
+//! `CGEventTap` on macOS and something rather smaller on Windows. Why a tap
+//! rather than a click-catching window, and what keeps it from wedging the
+//! desktop, are set out there. What stays here is the half that is the same
+//! everywhere: what a verdict *means*, when a session may start, and when it
+//! has to end.
 //!
-//! It is also the safer of the two. The failure mode of a full-screen click
-//! target is a desktop nobody can use until Shotly is force-quit — this
-//! codebase has been there. The failure mode of an event tap is that macOS
-//! notices the callback is slow and switches the tap off itself, which is to
-//! say: the operating system already implements the recovery. Everything below
-//! is arranged so that recovery is never needed.
+//! The one rule from over there worth repeating, because this module depends
+//! on it: **the tap does not exist until the outline is on screen.** It is
+//! started by `snap_ready` and nowhere else, so a page that fails to paint
+//! costs nobody a click — the difference between a feature that did not work
+//! and a Mac that appears to have stopped working.
 //!
 //! # Guards
 //!
-//! * **The tap callback does no work.** It stores an integer and returns.
-//!   Nothing is locked, nothing is allocated, no IPC happens there — the AX
-//!   calls and the drawing all belong to the tracker thread.
-//! * **The tap outlives nothing.** It is created when the session starts,
-//!   dropped when it ends, and has a hard deadline of [`MAX_SESSION`] enforced
-//!   by its own loop rather than by whoever was supposed to stop it.
-//! * **The tap does not exist until the outline is on screen.** It is started by
-//!   `snap_ready` and nowhere else, so a page that fails to paint costs nobody
-//!   a click — which is the difference between a feature that did not work and
-//!   a Mac that appears to have stopped working.
-//! * **Only the mouse buttons, the scroll wheel and Escape are swallowed.**
-//!   Everything else passes through untouched, so ⌘Tab and ⌘Q still work while
-//!   a session is up.
 //! * **The overlay never accepts a click**, at any point in its life, which is
-//!   what makes it safe to put a full-screen window over the desktop at all.
+//!   what makes it safe to put a full-screen window over the desktop at all —
+//!   and, on macOS, what keeps it out of the hit test that positions it.
 //! * **The overlay is watched.** If it fails to paint, or stops answering, the
 //!   session ends — an outline nobody can see means clicking blind into a tap
 //!   that is swallowing the clicks.
@@ -54,8 +40,9 @@
 use crate::ax;
 use crate::capture::{display, CaptureBackend, Frame, Rect};
 use crate::commands::{self, AppState};
+use crate::platform::pointer;
 use serde::Serialize;
-use std::sync::atomic::{AtomicBool, AtomicI32, AtomicI64, AtomicU64, AtomicU8, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU64, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder};
@@ -75,14 +62,6 @@ const LABEL_PREFIX: &str = "snap-";
 /// moved cost nothing at all.
 const POLL: Duration = Duration::from_millis(40);
 
-/// The longest a session may last, however it was left.
-///
-/// Short on purpose. For as long as this runs, clicks are going nowhere; a
-/// session that has been forgotten about — walked away from, or left behind a
-/// full-screen app — has to give the mouse back on its own, and two minutes of
-/// a Mac that ignores clicks is not a recovery, it is the fault.
-const MAX_SESSION: Duration = Duration::from_secs(45);
-
 /// How long the overlay may go silent before it is assumed dead.
 const HEARTBEAT_GRACE: Duration = Duration::from_secs(3);
 /// How long it may take to paint anything at all.
@@ -94,15 +73,6 @@ const READY_GRACE: Duration = Duration::from_secs(3);
 /// same reason: closing a window and the window being gone are not the same
 /// event, and the capture will happily race the difference.
 const SETTLE: Duration = Duration::from_millis(140);
-
-/// How many times a session will switch its tap back on before giving up.
-///
-/// A cold start costs one. Anything beyond a handful is a callback that is
-/// actually too slow, which is a different problem and not one to paper over.
-const MAX_REARMS: u32 = 5;
-
-/// The only key the tap answers for.
-const KEY_ESCAPE: i64 = 53;
 
 /// How far the pointer must travel with the button down before the gesture is
 /// a drag rather than a click.
@@ -146,45 +116,9 @@ static ACTIVE: AtomicBool = AtomicBool::new(false);
 static GENERATION: AtomicU64 = AtomicU64::new(0);
 /// How far into the ancestry the outline is: 0 is the window.
 static LEVEL: AtomicI32 = AtomicI32::new(0);
-/// Wheel movement the tracker has yet to turn into levels.
-static SCROLL: AtomicI64 = AtomicI64::new(0);
-static VERDICT: AtomicU8 = AtomicU8::new(VERDICT_NONE);
-/// Set by the tap callback when macOS switches the tap off, and cleared by the
-/// tap's own loop when it switches it back on. See `spawn_tap`.
-static REARM: AtomicBool = AtomicBool::new(false);
 /// Set when the wheel was turned during a session that had no accessibility
 /// access to answer it with. See `ask_for_accessibility`.
 static WANTED_AX: AtomicBool = AtomicBool::new(false);
-
-/// Where the button went down, and where the pointer is now — global points,
-/// as `f64` bits, because the tap callback may not allocate or lock and this
-/// is the cheapest thing that can carry a coordinate out of it.
-static PRESS_X: AtomicU64 = AtomicU64::new(0);
-static PRESS_Y: AtomicU64 = AtomicU64::new(0);
-static POINT_X: AtomicU64 = AtomicU64::new(0);
-static POINT_Y: AtomicU64 = AtomicU64::new(0);
-/// Whether the button is currently held.
-static PRESSED: AtomicBool = AtomicBool::new(false);
-/// Whether the tap has seen a drag event since the press.
-///
-/// Which of the two answers to believe about where the drag has got to, and
-/// getting it wrong is visible: the band is drawn from the *event* when there
-/// are events, because a `LeftMouseDragged` this tap drops never reaches the
-/// window server, and the pointer can therefore sit perfectly still on screen
-/// while a drag is happening. Polling it then gives the press point over and
-/// over — crosshairs that do not move, which is exactly how this was reported.
-///
-/// The polled pointer is still the answer when no drag events arrive at all:
-/// anything driving the mouse programmatically — scripted input, assistive
-/// software, some tablet drivers — moves it with plain moved events while the
-/// button is down, and those the tap never sees.
-static TAPPED_DRAG: AtomicBool = AtomicBool::new(false);
-
-const VERDICT_NONE: u8 = 0;
-const VERDICT_TAKE: u8 = 1;
-const VERDICT_CANCEL: u8 = 2;
-/// The button was released after a drag: take the rectangle, not the window.
-const VERDICT_REGION: u8 = 3;
 
 #[derive(Default)]
 pub struct SnapState {
@@ -284,18 +218,9 @@ fn ask_for_accessibility() {
     }
 }
 
-fn put(cell: &AtomicU64, value: f64) {
-    cell.store(value.to_bits(), Ordering::Relaxed);
-}
-
-fn got(cell: &AtomicU64) -> f64 {
-    f64::from_bits(cell.load(Ordering::Relaxed))
-}
-
-/// The rectangle between where the button went down and some later point,
-/// whichever way round it was dragged.
-fn dragged_to(x1: f64, y1: f64) -> Rect {
-    let (x0, y0) = (got(&PRESS_X), got(&PRESS_Y));
+/// The rectangle between two points, whichever way round they were dragged.
+fn dragged_to(from: (f64, f64), to: (f64, f64)) -> Rect {
+    let ((x0, y0), (x1, y1)) = (from, to);
     Rect {
         x: x0.min(x1),
         y: y0.min(y1),
@@ -305,20 +230,30 @@ fn dragged_to(x1: f64, y1: f64) -> Rect {
 }
 
 /// The rectangle as it stood when the button came up — the exact one, taken
-/// from the event itself rather than from wherever the pointer has drifted to
-/// by the time the tracker next looks.
+/// from the events themselves rather than from wherever the pointer has
+/// drifted to by the time the tracker next looks.
 fn dragged() -> Rect {
-    dragged_to(got(&POINT_X), got(&POINT_Y))
+    dragged_to(pointer::press(), pointer::point())
 }
 
-/// Where the drag has got to: the last drag event if the tap has seen any,
-/// and the polled pointer if it has not. See `TAPPED_DRAG`.
-fn drag_point(polled: (f64, f64)) -> (f64, f64) {
-    if TAPPED_DRAG.load(Ordering::SeqCst) {
-        (got(&POINT_X), got(&POINT_Y))
+/// Where the drag has got to: the last drag event if the tap saw any, and the
+/// polled pointer if it did not.
+///
+/// Taken as arguments rather than read from the pointer, so that the rule can
+/// be tested without a live session — it is the rule, not the reading, that
+/// went wrong once. See `platform::pointer`'s note on `TAPPED_DRAG`.
+fn drag_point(tapped: bool, event: (f64, f64), polled: (f64, f64)) -> (f64, f64) {
+    if tapped {
+        event
     } else {
         polled
     }
+}
+
+/// Is the gesture between these two points a drag, or a click with a shaky
+/// hand? This is the rule the tap is handed; it decides on the release.
+fn is_drag_between(from: (f64, f64), to: (f64, f64)) -> bool {
+    is_drag(dragged_to(from, to))
 }
 
 /// Is a rectangle this size a drag, or a click with a shaky hand?
@@ -351,11 +286,7 @@ pub fn begin(app: &AppHandle) -> Result<(), String> {
 
     let generation = GENERATION.fetch_add(1, Ordering::SeqCst) + 1;
     LEVEL.store(0, Ordering::SeqCst);
-    SCROLL.store(0, Ordering::SeqCst);
-    VERDICT.store(VERDICT_NONE, Ordering::SeqCst);
-    PRESSED.store(false, Ordering::SeqCst);
-    TAPPED_DRAG.store(false, Ordering::SeqCst);
-    REARM.store(false, Ordering::SeqCst);
+    pointer::reset();
     WANTED_AX.store(false, Ordering::SeqCst);
 
     {
@@ -490,7 +421,7 @@ pub fn snap_ready(app: AppHandle) {
     // Guard against a page that reports ready twice — a reload would otherwise
     // leave two taps fighting over the same click.
     if !already && ACTIVE.load(Ordering::SeqCst) {
-        spawn_tap(GENERATION.load(Ordering::SeqCst));
+        pointer::watch(GENERATION.load(Ordering::SeqCst), is_current, is_drag_between);
     }
 }
 
@@ -526,217 +457,6 @@ pub fn stop(app: &AppHandle, reason: &str) {
     }
 }
 
-// -------------------------------------------------------------------- the tap
-
-/// Watch for the click, the wheel and the two keys, and let everything else by.
-///
-/// The whole callback is a handful of atomic stores. That is the point: a tap
-/// whose callback is slow gets switched off by the system mid-session, and the
-/// cheapest way to never be slow is to never do anything.
-#[cfg(target_os = "macos")]
-fn spawn_tap(generation: u64) {
-    use core_foundation::runloop::{kCFRunLoopCommonModes, kCFRunLoopDefaultMode, CFRunLoop};
-    use core_graphics::event::{
-        CGEventTap, CGEventTapLocation, CGEventTapOptions, CGEventTapPlacement, CGEventType,
-        CallbackResult, EventField,
-    };
-
-    std::thread::spawn(move || {
-        fn decide(verdict: u8) {
-            // First verdict wins: a click and an Escape in the same tick should
-            // not be able to overwrite one another.
-            let _ = VERDICT.compare_exchange(
-                VERDICT_NONE,
-                verdict,
-                Ordering::SeqCst,
-                Ordering::SeqCst,
-            );
-        }
-
-        let tap = CGEventTap::new(
-            CGEventTapLocation::Session,
-            CGEventTapPlacement::HeadInsertEventTap,
-            CGEventTapOptions::Default,
-            vec![
-                CGEventType::LeftMouseDown,
-                CGEventType::LeftMouseUp,
-                CGEventType::LeftMouseDragged,
-                CGEventType::RightMouseDown,
-                CGEventType::RightMouseUp,
-                CGEventType::KeyDown,
-                CGEventType::KeyUp,
-                CGEventType::ScrollWheel,
-            ],
-            move |_proxy, etype, event| {
-                match etype {
-                    // The verdict waits for the button to come back up,
-                    // because until then a press is not yet a click: the same
-                    // gesture becomes a dragged area if the pointer travels.
-                    // Reading the location is a struct copy out of the event
-                    // that is already in hand — still nothing this callback has
-                    // to think about.
-                    CGEventType::LeftMouseDown => {
-                        let at = event.location();
-                        put(&PRESS_X, at.x);
-                        put(&PRESS_Y, at.y);
-                        put(&POINT_X, at.x);
-                        put(&POINT_Y, at.y);
-                        TAPPED_DRAG.store(false, Ordering::SeqCst);
-                        PRESSED.store(true, Ordering::SeqCst);
-                        CallbackResult::Drop
-                    }
-                    CGEventType::LeftMouseDragged => {
-                        let at = event.location();
-                        put(&POINT_X, at.x);
-                        put(&POINT_Y, at.y);
-                        TAPPED_DRAG.store(true, Ordering::SeqCst);
-                        CallbackResult::Drop
-                    }
-                    // The end of the gesture, and where it is decided — on the
-                    // two points, not on whether the tracker noticed in time.
-                    // A flick drawn and released inside one poll tick is still
-                    // a drag, and it is the release that says so.
-                    //
-                    // Dropped either way: passing it on would leave whatever is
-                    // underneath handling a mouse-up it never saw pressed.
-                    CGEventType::LeftMouseUp => {
-                        let at = event.location();
-                        put(&POINT_X, at.x);
-                        put(&POINT_Y, at.y);
-                        PRESSED.store(false, Ordering::SeqCst);
-                        decide(if is_drag(dragged_to(at.x, at.y)) {
-                            VERDICT_REGION
-                        } else {
-                            VERDICT_TAKE
-                        });
-                        CallbackResult::Drop
-                    }
-                    CGEventType::RightMouseDown | CGEventType::RightMouseUp => {
-                        decide(VERDICT_CANCEL);
-                        CallbackResult::Drop
-                    }
-                    CGEventType::KeyDown | CGEventType::KeyUp => {
-                        // Escape and nothing else. A bare letter was tried here
-                        // as a shortcut to the window list and taken out again:
-                        // a key that silently disappears system-wide is
-                        // indistinguishable from a broken keyboard, and the
-                        // tray menu reaches the list without that risk. Escape
-                        // is safe because it already means "get me out".
-                        let code = event.get_integer_value_field(EventField::KEYBOARD_EVENT_KEYCODE);
-                        if code == KEY_ESCAPE {
-                            decide(VERDICT_CANCEL);
-                            CallbackResult::Drop
-                        } else {
-                            CallbackResult::Keep
-                        }
-                    }
-                    CGEventType::ScrollWheel => {
-                        // A wheel reports whole lines. A trackpad reports pixels
-                        // and leaves the line delta at zero, so reading only the
-                        // first meant the gesture most Macs actually have did
-                        // nothing at all — the wheel appeared to be ignored on
-                        // every laptop. Only the sign is used downstream, which
-                        // is why no scaling is needed between the two units.
-                        let lines = event
-                            .get_integer_value_field(EventField::SCROLL_WHEEL_EVENT_DELTA_AXIS_1);
-                        let delta = if lines != 0 {
-                            lines
-                        } else {
-                            event.get_integer_value_field(
-                                EventField::SCROLL_WHEEL_EVENT_POINT_DELTA_AXIS_1,
-                            )
-                        };
-                        SCROLL.fetch_add(delta, Ordering::Relaxed);
-                        CallbackResult::Drop
-                    }
-                    // The system has switched the tap off — either the callback
-                    // was too slow or the user did something that invalidates
-                    // it. Rather than re-enable and hope, end the session:
-                    // clicks are reaching applications again from this moment,
-                    // and an outline that no longer owns the click is a lie.
-                    // Not a failure, and not the end of the session. macOS
-                    // switches a tap off when it decides the callback was slow,
-                    // and the moment it is most likely to decide that is the
-                    // first session after launch, when the main thread is busy
-                    // bringing up a webview. Ending the session there is what
-                    // made the first press of the capture key do nothing.
-                    //
-                    // Re-enabling is the documented answer, and it is safe here
-                    // because the tap is still valid — only switched off. The
-                    // loop below does it, so this stays a single store.
-                    CGEventType::TapDisabledByTimeout => {
-                        REARM.store(true, Ordering::SeqCst);
-                        CallbackResult::Keep
-                    }
-                    // This one is not ours to argue with: it means something
-                    // took the input away — secure input, a password field —
-                    // and clicks are reaching applications again from this
-                    // moment. An outline that no longer owns the click is a lie.
-                    CGEventType::TapDisabledByUserInput => {
-                        eprintln!("[snap] the tap was disabled by the system; ending the session");
-                        decide(VERDICT_CANCEL);
-                        CallbackResult::Keep
-                    }
-                    // Everything else passes through untouched, which is what
-                    // keeps ⌘Tab and ⌘Q working while a session is up.
-                    _ => CallbackResult::Keep,
-                }
-            },
-        );
-
-        let Ok(tap) = tap else {
-            eprintln!("[snap] the system refused an event tap");
-            VERDICT.store(VERDICT_CANCEL, Ordering::SeqCst);
-            return;
-        };
-
-        // SAFETY: the run loop source belongs to this thread's run loop, and
-        // both are dropped together when this function returns.
-        unsafe {
-            let Ok(source) = tap.mach_port().create_runloop_source(0) else {
-                eprintln!("[snap] the event tap has no run loop source");
-                VERDICT.store(VERDICT_CANCEL, Ordering::SeqCst);
-                return;
-            };
-            CFRunLoop::get_current().add_source(&source, kCFRunLoopCommonModes);
-            tap.enable();
-
-            let deadline = Instant::now() + MAX_SESSION;
-            let mut rearms = 0;
-            // Pumped in slices rather than run outright, so this thread notices
-            // the session ending without needing anyone to reach in and stop
-            // its run loop — and so the deadline is its own to enforce. The
-            // slices are also what give the tap somewhere to be switched back
-            // on from, without the callback doing more than a store.
-            while is_current(generation) && Instant::now() < deadline {
-                CFRunLoop::run_in_mode(kCFRunLoopDefaultMode, Duration::from_millis(100), false);
-
-                if REARM.swap(false, Ordering::SeqCst) {
-                    rearms += 1;
-                    // Bounded, because a callback that is genuinely too slow
-                    // would otherwise be switched off and on for the whole
-                    // session while every click vanished into it.
-                    if rearms > MAX_REARMS {
-                        eprintln!("[snap] the tap keeps being disabled; ending the session");
-                        VERDICT.store(VERDICT_CANCEL, Ordering::SeqCst);
-                        break;
-                    }
-                    eprintln!("[snap] the tap was disabled on a slow tick; switching it back on");
-                    tap.enable();
-                }
-            }
-
-            if is_current(generation) {
-                eprintln!("[snap] session hit its deadline; releasing the mouse");
-                VERDICT.store(VERDICT_CANCEL, Ordering::SeqCst);
-            }
-        }
-    });
-}
-
-#[cfg(not(target_os = "macos"))]
-fn spawn_tap(_generation: u64) {}
-
 // ---------------------------------------------------------------- the tracker
 
 /// Follow the pointer, and act on whatever the tap decided.
@@ -756,8 +476,8 @@ fn spawn_tracker(app: AppHandle, generation: u64) {
         let mut last: Option<(f64, f64, i32)> = None;
 
         while is_current(generation) {
-            match VERDICT.swap(VERDICT_NONE, Ordering::SeqCst) {
-                VERDICT_TAKE => {
+            match pointer::take_verdict() {
+                pointer::Verdict::Take => {
                     // What the outline was on at the instant of the click, not
                     // what is under the pointer now — those differ by a frame
                     // and the user chose the one they could see.
@@ -770,7 +490,7 @@ fn spawn_tracker(app: AppHandle, generation: u64) {
                     }
                     return;
                 }
-                VERDICT_REGION => {
+                pointer::Verdict::Region => {
                     let rect = dragged();
                     stop(&app, "an area was dragged");
                     ask_for_accessibility();
@@ -783,18 +503,18 @@ fn spawn_tracker(app: AppHandle, generation: u64) {
                     }
                     return;
                 }
-                VERDICT_CANCEL => {
+                pointer::Verdict::Cancel => {
                     stop(&app, "cancelled");
                     ask_for_accessibility();
                     commands::reveal_after_capture(&app);
                     return;
                 }
-                _ => {}
+                pointer::Verdict::None => {}
             }
 
             // One level per tick at most, so a trackpad flick walks the
             // ancestry rather than jumping to the bottom of it.
-            let wheel = SCROLL.swap(0, Ordering::Relaxed);
+            let wheel = pointer::take_scroll();
             let mut level = LEVEL.load(Ordering::SeqCst);
             if wheel != 0 {
                 level = (level + if wheel > 0 { -1 } else { 1 }).max(0);
@@ -819,15 +539,15 @@ fn spawn_tracker(app: AppHandle, generation: u64) {
             // at, so the whole resolve, which is the expensive half of this
             // loop, is skipped. Drawn from the pointer this loop already polls,
             // so it follows a drag however the drag reaches the machine.
-            let pressed = PRESSED.load(Ordering::SeqCst);
+            let pressed = pointer::pressed();
             if !pressed {
                 held = None;
             } else if held.is_none() {
                 held = Some(Instant::now());
             }
 
-            let (dx, dy) = drag_point((x, y));
-            let rect = dragged_to(dx, dy);
+            let (dx, dy) = drag_point(pointer::tapped_drag(), pointer::point(), (x, y));
+            let rect = dragged_to(pointer::press(), (dx, dy));
             let holding = held.is_some_and(|since| since.elapsed() >= HOLD_HINT);
             if pressed && (is_drag(rect) || holding) {
                 // Before the pointer has gone anywhere there is no rectangle to
@@ -1253,7 +973,7 @@ fn spawn_watchdog(app: AppHandle, generation: u64) {
 
             if dead {
                 eprintln!("[snap] the outline stopped answering; ending the session");
-                VERDICT.store(VERDICT_CANCEL, Ordering::SeqCst);
+                pointer::cancel();
                 return;
             }
         }
@@ -1267,10 +987,6 @@ mod tests {
     fn rect(x: f64, y: f64, width: f64, height: f64) -> Rect {
         Rect { x, y, width, height }
     }
-
-    /// The press and pointer cells are one set of globals for one session, and
-    /// the tests run in parallel threads. Whoever is using them takes this.
-    static PROBE: Mutex<()> = Mutex::new(());
 
     fn win(id: u32, pid: i32, title: &str, bounds: Rect) -> crate::capture::WindowInfo {
         crate::capture::WindowInfo {
@@ -1298,18 +1014,14 @@ mod tests {
     /// to the right, and a negative width is not a selection anyone can crop.
     #[test]
     fn an_area_is_the_same_whichever_way_it_was_dragged() {
-        let _probe = PROBE.lock().unwrap();
-        put(&PRESS_X, 400.0);
-        put(&PRESS_Y, 300.0);
-        put(&POINT_X, 100.0);
-        put(&POINT_Y, 120.0);
-        assert_eq!(dragged(), rect(100.0, 120.0, 300.0, 180.0));
-
-        put(&PRESS_X, 100.0);
-        put(&PRESS_Y, 120.0);
-        put(&POINT_X, 400.0);
-        put(&POINT_Y, 300.0);
-        assert_eq!(dragged(), rect(100.0, 120.0, 300.0, 180.0));
+        assert_eq!(
+            dragged_to((400.0, 300.0), (100.0, 120.0)),
+            rect(100.0, 120.0, 300.0, 180.0)
+        );
+        assert_eq!(
+            dragged_to((100.0, 120.0), (400.0, 300.0)),
+            rect(100.0, 120.0, 300.0, 180.0)
+        );
     }
 
     /// A dragged event this tap drops never reaches the window server, so the
@@ -1318,26 +1030,27 @@ mod tests {
     /// user dragged — so the events win whenever there are events.
     #[test]
     fn the_drag_is_followed_by_its_events_not_by_the_frozen_pointer() {
-        let _probe = PROBE.lock().unwrap();
-        put(&PRESS_X, 100.0);
-        put(&PRESS_Y, 100.0);
-        put(&POINT_X, 400.0);
-        put(&POINT_Y, 300.0);
+        let press = (100.0, 100.0);
+        let event = (400.0, 300.0);
 
         // The pointer has not moved off the press point; the events say it has.
-        TAPPED_DRAG.store(true, Ordering::SeqCst);
-        assert_eq!(drag_point((100.0, 100.0)), (400.0, 300.0));
-        assert_eq!(dragged_to_point((100.0, 100.0)), rect(100.0, 100.0, 300.0, 200.0));
+        assert_eq!(drag_point(true, event, (100.0, 100.0)), event);
+        assert_eq!(
+            band(press, true, event, (100.0, 100.0)),
+            rect(100.0, 100.0, 300.0, 200.0)
+        );
 
         // And with no drag events at all, the pointer is all there is.
-        TAPPED_DRAG.store(false, Ordering::SeqCst);
-        assert_eq!(drag_point((250.0, 260.0)), (250.0, 260.0));
-        assert_eq!(dragged_to_point((250.0, 260.0)), rect(100.0, 100.0, 150.0, 160.0));
+        assert_eq!(drag_point(false, event, (250.0, 260.0)), (250.0, 260.0));
+        assert_eq!(
+            band(press, false, event, (250.0, 260.0)),
+            rect(100.0, 100.0, 150.0, 160.0)
+        );
     }
 
-    fn dragged_to_point(polled: (f64, f64)) -> Rect {
-        let (x, y) = drag_point(polled);
-        dragged_to(x, y)
+    /// The band the tracker draws, composed exactly as `spawn_tracker` does.
+    fn band(press: (f64, f64), tapped: bool, event: (f64, f64), polled: (f64, f64)) -> Rect {
+        dragged_to(press, drag_point(tapped, event, polled))
     }
 
     /// Pressing hard enough to mean it moves the pointer a point or two, and
@@ -1345,14 +1058,12 @@ mod tests {
     /// three pixels across.
     #[test]
     fn a_click_with_a_shaky_hand_is_still_a_click() {
-        let _probe = PROBE.lock().unwrap();
-        put(&PRESS_X, 500.0);
-        put(&PRESS_Y, 500.0);
-        assert!(!is_drag(dragged_to(502.0, 497.0)));
-        assert!(!is_drag(dragged_to(506.0, 506.0)));
+        let press = (500.0, 500.0);
+        assert!(!is_drag_between(press, (502.0, 497.0)));
+        assert!(!is_drag_between(press, (506.0, 506.0)));
         // And a gesture anyone meant is far past it.
-        assert!(is_drag(dragged_to(520.0, 501.0)));
-        assert!(is_drag(dragged_to(500.0, 460.0)));
+        assert!(is_drag_between(press, (520.0, 501.0)));
+        assert!(is_drag_between(press, (500.0, 460.0)));
     }
 
     /// Pointing at the desktop used to mean pointing at nothing: no outline,
