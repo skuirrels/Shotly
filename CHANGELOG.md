@@ -8,6 +8,18 @@ The release notes on GitHub and the "what's new" text the in-app updater shows
 are both taken from this file — see `docs/RELEASING.md`. A version with nothing
 written here cannot be published.
 
+## 0.10.17 — 2026-08-19
+
+- Capture works on every screen again. With more than one display, the
+  crosshairs, the selection band and the window outline were only ever drawn
+  on one of them — every other screen dimmed and then showed nothing at all,
+  which made capturing there look broken.
+- The menu bar offers one Capture Anything instead of separate Capture Region,
+  Capture Window and Capture Screen items. It opens the same overlay the
+  editor's Capture button does: click a window, click the desktop, or drag out
+  an area. Capture Window from List is still there for a window that is hidden
+  behind another.
+
 ## 0.10.16 — 2026-08-19
 
 - The "what's new" list in the update notice reads properly again: a change

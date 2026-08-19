@@ -1,6 +1,6 @@
 [package]
 name = "shotly"
-version = "0.10.16"
+version = "0.10.17"
 description = "Capture, annotate, ship."
 authors = ["Ty Omidi"]
 edition = "2021"
@@ -38,10 +38,12 @@ libc = "0.2"
 arboard = { version = "3", features = ["image-data"] }
 ureq = { version = "3.4.0", default-features = false, features = ["json", "rustls"] }
 sha2 = "0.11.0"
-keyring = { version = "3", default-features = false, features = ["apple-native"] }
 objc2-core-video = "0.3"
 
 [target.'cfg(target_os = "macos")'.dependencies]
+# Only ever used to migrate an older install out of the login keychain, which
+# is a macOS-only thing to have to do. See `share::gauth::migrate_from_keychain`.
+keyring = { version = "3", default-features = false, features = ["apple-native"] }
 core-graphics = "0.25"
 core-foundation = "0.10"
 objc2 = "0.6"
