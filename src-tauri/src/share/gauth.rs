@@ -199,10 +199,9 @@ fn save(store: &Store) -> Result<(), String> {
     std::fs::write(&path, raw).map_err(|e| format!("could not write {path:?}: {e}"))?;
 
     // Owner-only, and set after the write rather than before: the bytes must
-    // never exist at the default mode, however briefly.
-    use std::os::unix::fs::PermissionsExt;
-    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))
-        .map_err(|e| format!("could not lock down {path:?}: {e}"))
+    // never exist readable, however briefly. How that is spelt is the
+    // platform's business — see `platform::paths::restrict_to_owner`.
+    crate::platform::paths::restrict_to_owner(&path)
 }
 
 /// Read the store, then hand it to `f`, keeping it in memory afterwards.

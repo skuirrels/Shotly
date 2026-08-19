@@ -10,6 +10,25 @@
 
 use std::path::Path;
 
+/// Move files to the Recycle Bin, all of them or none.
+///
+/// `IFileOperation` with `FOF_ALLOWUNDO`, which is the shell's own bulk delete
+/// — the same one Explorer uses, so the progress dialog, the undo entry and
+/// the "this is too big for the bin" prompt all come for free. The `trash`
+/// crate wraps it if pulling in COM by hand is not worth it.
+pub fn trash(_paths: &[std::path::PathBuf]) -> Result<(), String> {
+    Err("moving files to the Recycle Bin is not implemented yet".into())
+}
+
+/// Show a file where it lives, selected, in Explorer.
+///
+/// `explorer /select,<path>` is the direct equivalent of `open -R`. Worth
+/// knowing before writing it: `explorer.exe` exits non-zero on success, so the
+/// exit status must be ignored exactly as `open -R`'s is.
+pub fn reveal(_path: &Path) -> Result<(), String> {
+    Err("revealing a file is not implemented yet".into())
+}
+
 /// A clipboard write being assembled, one file at a time.
 ///
 /// Same shape as the macOS one, and for the same memory reason — see the note

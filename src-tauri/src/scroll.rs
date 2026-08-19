@@ -1663,6 +1663,17 @@ mod tests {
     /// matcher, and failed two runs in three.
     #[test]
     fn keeps_up_at_retina_size_in_debug() {
+        // Not on CI. This asserts wall-clock time, and a shared runner is
+        // busy with other people's builds — the first run of the workflow
+        // measured 462ms against a 450ms bound on code that had not changed,
+        // while the same commit passed minutes earlier. A flaky test on the
+        // blocking job is worse than no test: it teaches everyone that red
+        // means nothing. The guard it provides is against an algorithmic
+        // regression, and that is caught on a developer's own machine, where
+        // the number means something.
+        if std::env::var_os("CI").is_some() {
+            return;
+        }
         let page = page(2400, 6000);
         let h = 1600; // an 800pt-tall selection on a 2x display
 
