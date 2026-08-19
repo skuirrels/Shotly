@@ -163,13 +163,22 @@ static PRESS_X: AtomicU64 = AtomicU64::new(0);
 static PRESS_Y: AtomicU64 = AtomicU64::new(0);
 static POINT_X: AtomicU64 = AtomicU64::new(0);
 static POINT_Y: AtomicU64 = AtomicU64::new(0);
-/// Whether the button is currently held. The tracker draws the band from this
-/// and the live pointer rather than from the drag events, because a drag is not
-/// always delivered as one: anything driving the mouse programmatically —
-/// scripted tests, assistive software, some tablet drivers — moves the pointer
-/// with plain moved events while the button is down, and a band that only
-/// followed `LeftMouseDragged` simply never appeared for them.
+/// Whether the button is currently held.
 static PRESSED: AtomicBool = AtomicBool::new(false);
+/// Whether the tap has seen a drag event since the press.
+///
+/// Which of the two answers to believe about where the drag has got to, and
+/// getting it wrong is visible: the band is drawn from the *event* when there
+/// are events, because a `LeftMouseDragged` this tap drops never reaches the
+/// window server, and the pointer can therefore sit perfectly still on screen
+/// while a drag is happening. Polling it then gives the press point over and
+/// over — crosshairs that do not move, which is exactly how this was reported.
+///
+/// The polled pointer is still the answer when no drag events arrive at all:
+/// anything driving the mouse programmatically — scripted input, assistive
+/// software, some tablet drivers — moves it with plain moved events while the
+/// button is down, and those the tap never sees.
+static TAPPED_DRAG: AtomicBool = AtomicBool::new(false);
 
 const VERDICT_NONE: u8 = 0;
 const VERDICT_TAKE: u8 = 1;
@@ -318,6 +327,16 @@ fn dragged() -> Rect {
     dragged_to(got(&POINT_X), got(&POINT_Y))
 }
 
+/// Where the drag has got to: the last drag event if the tap has seen any,
+/// and the polled pointer if it has not. See `TAPPED_DRAG`.
+fn drag_point(polled: (f64, f64)) -> (f64, f64) {
+    if TAPPED_DRAG.load(Ordering::SeqCst) {
+        (got(&POINT_X), got(&POINT_Y))
+    } else {
+        polled
+    }
+}
+
 /// Is a rectangle this size a drag, or a click with a shaky hand?
 fn is_drag(rect: Rect) -> bool {
     rect.width > DRAG_SLOP || rect.height > DRAG_SLOP
@@ -351,6 +370,7 @@ pub fn begin(app: &AppHandle) -> Result<(), String> {
     SCROLL.store(0, Ordering::SeqCst);
     VERDICT.store(VERDICT_NONE, Ordering::SeqCst);
     PRESSED.store(false, Ordering::SeqCst);
+    TAPPED_DRAG.store(false, Ordering::SeqCst);
     REARM.store(false, Ordering::SeqCst);
     WANTED_AX.store(false, Ordering::SeqCst);
 
@@ -577,6 +597,7 @@ fn spawn_tap(generation: u64) {
                         put(&PRESS_Y, at.y);
                         put(&POINT_X, at.x);
                         put(&POINT_Y, at.y);
+                        TAPPED_DRAG.store(false, Ordering::SeqCst);
                         PRESSED.store(true, Ordering::SeqCst);
                         CallbackResult::Drop
                     }
@@ -584,6 +605,7 @@ fn spawn_tap(generation: u64) {
                         let at = event.location();
                         put(&POINT_X, at.x);
                         put(&POINT_Y, at.y);
+                        TAPPED_DRAG.store(true, Ordering::SeqCst);
                         CallbackResult::Drop
                     }
                     // The end of the gesture, and where it is decided — on the
@@ -820,7 +842,8 @@ fn spawn_tracker(app: AppHandle, generation: u64) {
                 held = Some(Instant::now());
             }
 
-            let rect = dragged_to(x, y);
+            let (dx, dy) = drag_point((x, y));
+            let rect = dragged_to(dx, dy);
             let holding = held.is_some_and(|since| since.elapsed() >= HOLD_HINT);
             if pressed && (is_drag(rect) || holding) {
                 // Before the pointer has gone anywhere there is no rectangle to
@@ -1261,6 +1284,10 @@ mod tests {
         Rect { x, y, width, height }
     }
 
+    /// The press and pointer cells are one set of globals for one session, and
+    /// the tests run in parallel threads. Whoever is using them takes this.
+    static PROBE: Mutex<()> = Mutex::new(());
+
     fn win(id: u32, pid: i32, title: &str, bounds: Rect) -> crate::capture::WindowInfo {
         crate::capture::WindowInfo {
             id,
@@ -1287,6 +1314,7 @@ mod tests {
     /// to the right, and a negative width is not a selection anyone can crop.
     #[test]
     fn an_area_is_the_same_whichever_way_it_was_dragged() {
+        let _probe = PROBE.lock().unwrap();
         put(&PRESS_X, 400.0);
         put(&PRESS_Y, 300.0);
         put(&POINT_X, 100.0);
@@ -1300,11 +1328,40 @@ mod tests {
         assert_eq!(dragged(), rect(100.0, 120.0, 300.0, 180.0));
     }
 
+    /// A dragged event this tap drops never reaches the window server, so the
+    /// pointer can sit still on screen for the whole gesture. Believing it
+    /// there is what left the crosshairs pinned to the press point while the
+    /// user dragged — so the events win whenever there are events.
+    #[test]
+    fn the_drag_is_followed_by_its_events_not_by_the_frozen_pointer() {
+        let _probe = PROBE.lock().unwrap();
+        put(&PRESS_X, 100.0);
+        put(&PRESS_Y, 100.0);
+        put(&POINT_X, 400.0);
+        put(&POINT_Y, 300.0);
+
+        // The pointer has not moved off the press point; the events say it has.
+        TAPPED_DRAG.store(true, Ordering::SeqCst);
+        assert_eq!(drag_point((100.0, 100.0)), (400.0, 300.0));
+        assert_eq!(dragged_to_point((100.0, 100.0)), rect(100.0, 100.0, 300.0, 200.0));
+
+        // And with no drag events at all, the pointer is all there is.
+        TAPPED_DRAG.store(false, Ordering::SeqCst);
+        assert_eq!(drag_point((250.0, 260.0)), (250.0, 260.0));
+        assert_eq!(dragged_to_point((250.0, 260.0)), rect(100.0, 100.0, 150.0, 160.0));
+    }
+
+    fn dragged_to_point(polled: (f64, f64)) -> Rect {
+        let (x, y) = drag_point(polled);
+        dragged_to(x, y)
+    }
+
     /// Pressing hard enough to mean it moves the pointer a point or two, and
     /// that has to stay a click on the window rather than become a selection
     /// three pixels across.
     #[test]
     fn a_click_with_a_shaky_hand_is_still_a_click() {
+        let _probe = PROBE.lock().unwrap();
         put(&PRESS_X, 500.0);
         put(&PRESS_Y, 500.0);
         assert!(!is_drag(dragged_to(502.0, 497.0)));
