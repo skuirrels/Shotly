@@ -116,6 +116,15 @@ const DRAG_SLOP: f64 = 6.0;
 /// The smallest area a drag can end on and still be worth capturing.
 const MIN_REGION: f64 = 8.0;
 
+/// How long the button has to be held before the overlay says, on its own,
+/// that an area is being started.
+///
+/// Without this there is nothing to see until the pointer has travelled past
+/// `DRAG_SLOP`: press and hold, and the window outline just sits there, which
+/// is indistinguishable from a feature that does not have the gesture at all.
+/// A click is over long before this.
+const HOLD_HINT: Duration = Duration::from_millis(150);
+
 /// How often the rubber band is redrawn while an area is being dragged.
 ///
 /// Faster than [`POLL`] because it can afford to be: a drag asks the
@@ -733,6 +742,8 @@ fn spawn_tracker(app: AppHandle, generation: u64) {
         let screens = display::displays().unwrap_or_default();
         let mut shown: Option<Highlight> = None;
         let mut aim: Option<Aim> = None;
+        // When the button went down, for the hold that starts an area.
+        let mut held: Option<Instant> = None;
         let mut anchor: Option<Anchor> = None;
         // Where the pointer was, and at what level, the last time the outline
         // was worked out.
@@ -797,20 +808,38 @@ fn spawn_tracker(app: AppHandle, generation: u64) {
                 continue;
             };
 
-            // An area is being dragged out. Nothing is being pointed at while
-            // that lasts — the rectangle is the answer — so the whole resolve,
-            // which is the expensive half of this loop, is skipped. Drawn from
-            // the pointer this loop already polls, so it follows a drag however
-            // the drag reaches the machine.
-            if PRESSED.load(Ordering::SeqCst) && is_drag(dragged_to(x, y)) {
-                let rect = dragged_to(x, y);
+            // The button is down. Once it has travelled — or simply been held
+            // — this is an area being dragged out, not something being pointed
+            // at, so the whole resolve, which is the expensive half of this
+            // loop, is skipped. Drawn from the pointer this loop already polls,
+            // so it follows a drag however the drag reaches the machine.
+            let pressed = PRESSED.load(Ordering::SeqCst);
+            if !pressed {
+                held = None;
+            } else if held.is_none() {
+                held = Some(Instant::now());
+            }
+
+            let rect = dragged_to(x, y);
+            let holding = held.is_some_and(|since| since.elapsed() >= HOLD_HINT);
+            if pressed && (is_drag(rect) || holding) {
+                // Before the pointer has gone anywhere there is no rectangle to
+                // show, so the overlay is told where the corner is instead and
+                // draws crosshairs on it. Saying "an area starts here" is the
+                // whole job: an outline that does not change when the button
+                // goes down is why this looked like nothing was happening.
+                let started = is_drag(rect);
                 let band = Highlight {
                     x: rect.x,
                     y: rect.y,
                     width: rect.width,
                     height: rect.height,
-                    label: "Selection".into(),
-                    size: format!("{} × {}", rect.width.round(), rect.height.round()),
+                    label: if started { "Selection".into() } else { "Drag out an area".into() },
+                    size: if started {
+                        format!("{} × {}", rect.width.round(), rect.height.round())
+                    } else {
+                        String::new()
+                    },
                     level: 0,
                     depth: 0,
                     window: false,

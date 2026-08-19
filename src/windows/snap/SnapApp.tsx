@@ -72,8 +72,62 @@ export function SnapApp() {
 
   return (
     <div className="pointer-events-none fixed inset-0 select-none overflow-hidden">
-      {target ? <Outline target={target} /> : <div className="absolute inset-0 bg-black/25" />}
-      <Hint dragging={target?.drag ?? false} needsAccessibility={needsAccessibility} />
+      {/* Three states, and the third is the one that was missing: the button
+          is down but the pointer has not moved yet, so there is no rectangle —
+          only the corner an area would start from. */}
+      {target ? (
+        target.drag && target.width < 2 && target.height < 2 ? (
+          <Crosshair at={target} />
+        ) : (
+          <Outline target={target} />
+        )
+      ) : (
+        <div className="absolute inset-0 bg-black/25" />
+      )}
+      <Hint
+        dragging={target?.drag ?? false}
+        started={Boolean(target?.drag && (target.width >= 2 || target.height >= 2))}
+        needsAccessibility={needsAccessibility}
+      />
+    </div>
+  );
+}
+
+/**
+ * Where an area would start, before it has any size.
+ *
+ * Crosshairs rather than a dot: they cross the whole screen, so the corner is
+ * findable without hunting for the pointer, and they say "you are selecting
+ * now" — which is exactly what a press with no visible change failed to say.
+ *
+ * Drawn only on the display holding the point. Every overlay is handed the
+ * same position in its own coordinates, so without this check the horizontal
+ * line would be painted straight across the other screen as well.
+ */
+function Crosshair({ at }: { at: Highlight }) {
+  const here =
+    at.x >= 0 && at.y >= 0 && at.x <= window.innerWidth && at.y <= window.innerHeight;
+
+  return (
+    <div className="absolute inset-0 bg-black/28">
+      {here ? (
+        <>
+          <div
+            className="absolute right-0 left-0 bg-accent/70"
+            style={{ top: at.y, height: 1 }}
+          />
+          <div
+            className="absolute top-0 bottom-0 bg-accent/70"
+            style={{ left: at.x, width: 1 }}
+          />
+          <span
+            className="absolute rounded-md bg-black/80 px-2 py-1 text-[12px] whitespace-nowrap text-white shadow-lg"
+            style={{ left: at.x + 12, top: at.y + 12 }}
+          >
+            {at.label}
+          </span>
+        </>
+      ) : null}
     </div>
   );
 }
@@ -110,7 +164,9 @@ function Outline({ target }: { target: Highlight }) {
         style={below ? { top: "100%", marginTop: 6 } : { bottom: 6, left: 6 }}
       >
         <span className="truncate font-medium">{target.label}</span>
-        <span className="font-mono text-white/70 tabular-nums">{target.size}</span>
+        {target.size ? (
+          <span className="font-mono text-white/70 tabular-nums">{target.size}</span>
+        ) : null}
         {target.depth > 0 ? (
           <span className="rounded bg-white/15 px-1.5 py-px text-[11px] text-white/80">
             {target.level + 1} of {target.depth}
@@ -130,17 +186,21 @@ function Outline({ target }: { target: Highlight }) {
  */
 function Hint({
   dragging,
+  started,
   needsAccessibility,
 }: {
   dragging: boolean;
+  started: boolean;
   needsAccessibility: boolean;
 }) {
   return (
     <div className="absolute top-8 left-1/2 -translate-x-1/2 rounded-xl bg-black/75 px-4 py-2.5 text-center shadow-lg">
       <p className="text-[13.5px] font-medium text-white">
-        {dragging
+        {started
           ? "Let go to capture this area"
-          : "Click a window or the desktop · drag to select an area"}
+          : dragging
+            ? "Drag out an area · let go to take what's underneath"
+            : "Click a window or the desktop · drag to select an area"}
       </p>
       {needsAccessibility ? (
         <p className="mt-0.5 text-[11.5px] text-accent">

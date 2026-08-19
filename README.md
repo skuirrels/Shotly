@@ -57,8 +57,8 @@ it:
 - **Click a window** and you get that window, taken from its own backing store —
   so anything sitting on top of it isn't in the picture.
 - **Click the desktop** and you get that whole screen.
-- **Press and drag** and you get the rectangle you drew instead, with its size
-  shown as you go.
+- **Press and hold** and crosshairs mark where an area would start; **drag**
+  and you get the rectangle you drew, with its size shown as you go.
 - **Scroll** while pointing at a window to tighten onto what's inside it — a
   toolbar, a sidebar, one panel. (That part needs Accessibility; Shotly asks
   once, after the capture.)
