@@ -4,7 +4,6 @@ mod backup;
 mod build_info;
 mod capture;
 mod combine;
-mod compose;
 mod commands;
 mod hotkeys;
 mod markup;
@@ -326,9 +325,9 @@ pub fn run() {
             //
             // And it follows the user between Spaces, because a menu-bar app
             // that does not is one you can open and never see. See
-            // `platform::follow_active_space`.
+            // `platform::chrome::follow_active_space`.
             if let Some(editor) = handle.get_webview_window("editor") {
-                if let Err(err) = platform::follow_active_space(&editor) {
+                if let Err(err) = platform::chrome::follow_active_space(&editor) {
                     eprintln!("[shotly] the editor will not follow Spaces: {err}");
                 }
 
@@ -340,7 +339,7 @@ pub fn run() {
                 // login in the first place.
                 if std::env::args().any(|arg| arg == AUTOSTART_ARG) {
                     let _ = editor.hide();
-                    platform::set_accessory_mode(&handle, true);
+                    platform::chrome::set_accessory_mode(&handle, true);
                 }
             }
 
@@ -354,7 +353,7 @@ pub fn run() {
                 if window.label() == "editor" {
                     api.prevent_close();
                     let _ = window.hide();
-                    platform::set_accessory_mode(window.app_handle(), true);
+                    platform::chrome::set_accessory_mode(window.app_handle(), true);
                 }
             }
         })
@@ -466,17 +465,16 @@ fn tray_menu(app: &tauri::AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
             .and_then(|b| b.accelerator)
     };
 
-    let region =
-        MenuItem::with_id(app, "region", "Capture Region", true, accel(Action::Region))?;
-    let window =
-        MenuItem::with_id(app, "window", "Capture Window", true, accel(Action::Window))?;
+    // One item where there were three. A window, the whole screen and an area
+    // are all the same gesture now — click what you want, or drag out what you
+    // want — so the choice belongs on screen rather than in this menu.
+    let anything =
+        MenuItem::with_id(app, "anything", "Capture Anything", true, accel(Action::Window))?;
     // The outline can only offer what the pointer can reach. This is the way to
     // a window that is behind another one, on another Space, or fully covered —
     // and the way to capture at all without granting Accessibility access.
     let window_list =
         MenuItem::with_id(app, "window-list", "Capture Window from List…", true, None::<&str>)?;
-    let screen =
-        MenuItem::with_id(app, "screen", "Capture Screen", true, accel(Action::Fullscreen))?;
     let scroll =
         MenuItem::with_id(app, "scroll", "Scrolling Capture", true, accel(Action::Scroll))?;
     // The one capture that starts somewhere other than the screen, and the
@@ -530,10 +528,8 @@ fn tray_menu(app: &tauri::AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
     let quit = MenuItem::with_id(app, "quit", "Quit Shotly", true, Some("Cmd+Q"))?;
 
     let mut items: Vec<&dyn tauri::menu::IsMenuItem<tauri::Wry>> = vec![
-        &region,
-        &window,
+        &anything,
         &window_list,
-        &screen,
         &scroll,
         &from_clipboard,
         &sep,
@@ -592,8 +588,7 @@ fn build_tray(app: &tauri::AppHandle) -> tauri::Result<()> {
             id @ ("undo" | "redo") => {
                 let _ = tauri::Emitter::emit_to(app, "editor", "editor:edit", id);
             }
-            "region" => dispatch(app, CaptureMode::Region),
-            "window" => dispatch(app, CaptureMode::Window),
+            "anything" => dispatch(app, CaptureMode::Window),
             "window-list" => {
                 if let Err(err) = commands::request_window_pick(app) {
                     eprintln!("[shotly] could not open the window list: {err}");
@@ -610,7 +605,6 @@ fn build_tray(app: &tauri::AppHandle) -> tauri::Result<()> {
                     .arg("x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")
                     .spawn();
             }
-            "screen" => dispatch(app, CaptureMode::Fullscreen),
             "new-from-clipboard" => {
                 let app = app.clone();
                 tauri::async_runtime::spawn(async move {
