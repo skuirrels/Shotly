@@ -62,7 +62,42 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter};
 
-use crate::compose::{Precision, Segment};
+// The vocabulary the planner and the writer share. It lives here, with the
+// planning, so that no platform's writer can quietly mean something else by
+// `Fast` — see `platform::editor` for what each costs on a given system.
+/// How the result gets written, and what that costs.
+///
+/// Both produce the same cut. What differs is whether the sample data is
+/// copied or made afresh, and everything else follows from that.
+#[derive(Debug, Clone, Copy, PartialEq, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Precision {
+    /// Copy the samples across. Lossless, and about as quick as copying the
+    /// file — measured at 0.6 s for a seven-minute recording. The catch is the
+    /// hidden run-up the format forces on any segment that does not start at
+    /// zero, which is why `trim::plan` has to round a cut away from the mark.
+    Fast,
+    /// Encode the frames again. The cut lands exactly on the mark and the
+    /// result carries no edit list and nothing hidden — verified as one
+    /// segment and zero unshown frames.
+    ///
+    /// It costs what encoding costs, which is not a little — seconds on a short
+    /// recording, minutes on a long one — which is why it is asked for rather
+    /// than assumed.
+    ///
+    /// Written through `AVAssetReader`/`AVAssetWriter` rather than an export
+    /// preset, so the result stays H.264 at the source's own size and frame
+    /// rate — see `platform::editor`, which is where either of these is
+    /// actually carried out.
+    Exact,
+}
+
+/// A stretch of the source to keep, in seconds.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Segment {
+    pub start: f64,
+    pub seconds: f64,
+}
 
 /// The shortest part worth keeping, and the closest two marks may get.
 ///
@@ -130,7 +165,7 @@ pub async fn video_trim(
 /// this is not the module to make that mistake in twice.
 #[tauri::command]
 pub async fn video_sync_points(path: String) -> Result<Vec<f64>, String> {
-    tauri::async_runtime::spawn_blocking(move || crate::compose::sync_points(Path::new(&path)))
+    tauri::async_runtime::spawn_blocking(move || crate::platform::editor::sync_points(Path::new(&path)))
         .await
         .map_err(|e| format!("could not read that recording's keyframes: {e}"))
 }
@@ -160,7 +195,7 @@ fn cut(
     // Only a Fast cut has to be rounded away from the mark, and only then is
     // there any point reading the keyframes.
     let sync = match precision {
-        Precision::Fast => crate::compose::sync_points(&source),
+        Precision::Fast => crate::platform::editor::sync_points(&source),
         Precision::Exact => Vec::new(),
     };
     let keep = plan(mode, start, end, whole, &sync)?;
@@ -171,7 +206,7 @@ fn cut(
     // short recording can finish inside one tick, and a progress bar that only
     // ever appears for slow trims is a progress bar nobody trusts.
     let _ = app.emit("trim:progress", 0.0_f32);
-    let written = crate::compose::write(&source, &scratch, &keep, precision, &mut |fraction| {
+    let written = crate::platform::editor::write(&source, &scratch, &keep, precision, &mut |fraction| {
         let _ = app.emit("trim:progress", fraction);
     });
     if written.is_err() {

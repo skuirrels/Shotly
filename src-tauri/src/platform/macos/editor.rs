@@ -1,5 +1,9 @@
 //! Writing out a recording as a list of the parts worth keeping.
 //!
+//! The macOS half of `platform::editor`. What a cut *is* — which segments
+//! to keep, where a resumed segment may safely start, what the user asked
+//! for — is `trim.rs`, and portable. This is only the writing out.
+//!
 //! One operation underneath two: keeping the middle and throwing the ends away
 //! is a list of one part, and cutting a section out of the middle is a list of
 //! two. Nothing here knows which of those it is doing — see `trim.rs`, which
@@ -35,6 +39,8 @@
 
 use std::path::Path;
 
+use crate::trim::{Precision, Segment};
+
 use block2::StackBlock;
 use objc2::rc::Retained;
 use objc2::runtime::AnyObject;
@@ -69,39 +75,6 @@ const TIMEOUT: std::time::Duration = std::time::Duration::from_secs(600);
 
 /// How often the export is asked whether it has finished.
 const POLL: std::time::Duration = std::time::Duration::from_millis(50);
-
-/// How the result gets written, and what that costs.
-///
-/// Both produce the same cut. What differs is whether the sample data is
-/// copied or made afresh, and everything else follows from that.
-#[derive(Debug, Clone, Copy, PartialEq, serde::Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum Precision {
-    /// Copy the samples across. Lossless, and about as quick as copying the
-    /// file — measured at 0.6 s for a seven-minute recording. The catch is the
-    /// hidden run-up the format forces on any segment that does not start at
-    /// zero, which is why `trim::plan` has to round a cut away from the mark.
-    Fast,
-    /// Encode the frames again. The cut lands exactly on the mark and the
-    /// result carries no edit list and nothing hidden — verified as one
-    /// segment and zero unshown frames.
-    ///
-    /// It costs what encoding costs, which is not a little — seconds on a short
-    /// recording, minutes on a long one — which is why it is asked for rather
-    /// than assumed.
-    ///
-    /// Written through `AVAssetReader`/`AVAssetWriter` rather than an export
-    /// preset, so the result stays H.264 at the source's own size and frame
-    /// rate. See `encode`.
-    Exact,
-}
-
-/// A stretch of the source to keep, in seconds.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct Segment {
-    pub start: f64,
-    pub seconds: f64,
-}
 
 /// Write `keep`, joined end to end, to `dest`.
 ///

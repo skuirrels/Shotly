@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { IconCamera } from "@/components/icons";
 import { Kbd } from "@/components/ui/Kbd";
 import * as ipc from "@/lib/ipc";
+import { nouns } from "../../lib/platform";
 
 /**
  * Shown above the library when macOS hasn't granted Screen Recording.
@@ -43,7 +44,7 @@ export function PermissionNotice() {
           onClick={() => void ipc.openScreenRecordingSettings()}
           className="rounded-lg bg-white/[0.08] px-2.5 py-1.5 text-[12px] font-medium text-ink hover:bg-white/[0.13]"
         >
-          Open System Settings
+          Open {nouns.settingsApp}
         </button>
         <button
           type="button"

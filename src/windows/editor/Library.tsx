@@ -23,6 +23,7 @@ import { type Scope, groupByDate, inScope, scopeExists } from "./dates";
 import { formatDuration, formatSize, formatWhen } from "./format";
 import { LibraryFilter } from "./LibraryFilter";
 import { useThumbnail } from "./thumbnails";
+import { nouns } from "../../lib/platform";
 
 interface Props {
   onOpen: (path: string) => void;
@@ -303,7 +304,7 @@ export function Library({
         run: () => void onPin(targets[0]),
       },
       !many && {
-        label: "Show in Finder",
+        label: nouns.reveal,
         icon: <IconFolder />,
         run: () => void ipc.revealInFinder(targets[0]),
       },
@@ -316,7 +317,7 @@ export function Library({
       },
       "separator" as const,
       {
-        label: many ? `Move ${targets.length} captures to Trash` : "Move to Trash",
+        label: many ? nouns.trashMany(targets.length) : nouns.trash,
         icon: <IconTrash />,
         danger: true,
         run: () => onDelete(targets),
@@ -572,21 +573,21 @@ function LibraryCard({
 
       {/* Row actions stay hidden until hover so the grid reads as images. */}
       <div className="absolute top-1.5 right-1.5 flex gap-1 opacity-0 transition-opacity duration-100 group-hover:opacity-100 focus-within:opacity-100">
-        <Tooltip label="Show in Finder">
+        <Tooltip label={nouns.reveal}>
           <button
             type="button"
             onClick={() => void ipc.revealInFinder(item.path)}
-            aria-label="Show in Finder"
+            aria-label={nouns.reveal}
             className="grid size-6 place-items-center rounded-md bg-black/65 text-ink-2 backdrop-blur hover:text-ink"
           >
             <IconFolder />
           </button>
         </Tooltip>
-        <Tooltip label="Move to Trash">
+        <Tooltip label={nouns.trash}>
           <button
             type="button"
             onClick={() => void onTrash(item)}
-            aria-label="Move to Trash"
+            aria-label={nouns.trash}
             className="grid size-6 place-items-center rounded-md bg-black/65 text-ink-2 backdrop-blur hover:text-danger"
           >
             <IconTrash />

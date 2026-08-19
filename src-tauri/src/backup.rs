@@ -15,9 +15,6 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager};
 
-/// Where macOS mounts the sync folders of every cloud provider.
-const CLOUD_STORAGE: &str = "Library/CloudStorage";
-
 /// The subfolder captures are copied into, inside whichever folder was chosen.
 ///
 /// Not to be confused with `share::FOLDER`, which is where a capture goes when
@@ -78,53 +75,23 @@ fn save(app: &AppHandle, settings: &Settings) -> Result<(), String> {
     std::fs::write(&path, raw).map_err(|e| format!("could not write {path:?}: {e}"))
 }
 
-/// The cloud folders this Mac has, as things to click rather than paths to type.
+/// The cloud folders this machine has, as things to click rather than paths to
+/// type.
 ///
-/// Google Drive names its folder after the signed-in account, so someone with
-/// a work and a personal account gets two entries and can tell them apart.
+/// Where those folders live, and how a provider's name is read out of one, is
+/// the operating system's business — see `platform::shell::cloud_folders`. On
+/// macOS they are all under one directory; on Windows each provider keeps its
+/// own, which is why this is a list-returning call rather than a path constant.
 #[tauri::command]
 pub fn backup_targets(app: AppHandle) -> Vec<Target> {
     let Ok(home) = app.path().home_dir() else {
         return Vec::new();
     };
-    let Ok(entries) = std::fs::read_dir(home.join(CLOUD_STORAGE)) else {
-        return Vec::new();
-    };
 
-    let mut targets = Vec::new();
-    for entry in entries.flatten() {
-        let name = entry.file_name().to_string_lossy().into_owned();
-        // Folders only, and no dotfiles: this directory has a .DS_Store in it,
-        // and offering that as somewhere to keep your screenshots would be a
-        // poor first impression.
-        if name.starts_with('.') || !entry.path().is_dir() {
-            continue;
-        }
-        let (provider, account) = match name.split_once('-') {
-            Some((provider, account)) => (provider, Some(account.to_string())),
-            None => (name.as_str(), None),
-        };
-
-        // Drive puts everything one level further down, under "My Drive";
-        // writing to the account root itself is not allowed.
-        let root = entry.path();
-        let path = if root.join("My Drive").is_dir() { root.join("My Drive") } else { root };
-
-        let provider = match provider {
-            "GoogleDrive" => "Google Drive",
-            "Dropbox" => "Dropbox",
-            "OneDrive" => "OneDrive",
-            other => other,
-        };
-
-        targets.push(Target {
-            label: match &account {
-                Some(account) if !account.is_empty() => format!("{provider} — {account}"),
-                _ => provider.to_string(),
-            },
-            path: path.to_string_lossy().into_owned(),
-        });
-    }
+    let mut targets: Vec<Target> = crate::platform::shell::cloud_folders(&home)
+        .into_iter()
+        .map(|found| Target { label: found.label, path: found.path })
+        .collect();
 
     targets.sort_by(|a, b| a.label.cmp(&b.label));
     targets

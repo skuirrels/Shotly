@@ -35,6 +35,7 @@ import { Tooltip } from "@/components/ui/Tooltip";
 import type { CaptureMode } from "@/lib/types";
 import { useEditor } from "@/state/editorStore";
 import type { View } from "./view";
+import { nouns, titlebarInsetLeft } from "../../lib/platform";
 
 /** What the bar shows in place of the editing controls while a movie is open. */
 export interface PlayerBar {
@@ -81,7 +82,8 @@ const MODES: { mode: CaptureMode; label: string; hint: string; shortcut: string;
 
 /**
  * Window chrome. Doubles as the drag region for the frameless titlebar, with
- * a left inset reserving space for the macOS traffic lights.
+ * a left inset reserving space for whatever the window's own controls need —
+ * the traffic lights on macOS, nothing on Windows. See `lib/platform`.
  *
  * The editing controls — undo, zoom, copy, save — are hidden rather than
  * disabled in the library, where none of them mean anything. A toolbar of
@@ -131,7 +133,8 @@ export function TopBar({
     // stay clickable without any opt-out of their own.
     <header
       data-tauri-drag-region
-      className="titlebar-drag @container relative z-30 flex h-[58px] shrink-0 items-center gap-1 border-b border-line-subtle bg-surface pr-2.5 pl-[86px]"
+      className="titlebar-drag @container relative z-30 flex h-[58px] shrink-0 items-center gap-1 border-b border-line-subtle bg-surface pr-2.5"
+      style={{ paddingLeft: titlebarInsetLeft }}
     >
       <ViewSwitch view={view} canEdit={canEdit} canPlay={player !== null} onView={onView} />
 
@@ -200,7 +203,7 @@ export function TopBar({
         {/* Destructive, so it stays quiet until hovered and always asks first. */}
         {browsing && (
           <Tooltip
-            label={pickedCount > 0 ? "Move selected captures to Trash" : "Select a capture to delete"}
+            label={pickedCount > 0 ? nouns.trashSelected : "Select a capture to delete"}
             shortcut="Backspace"
           >
             <button
@@ -223,7 +226,7 @@ export function TopBar({
           <>
             <IconButton
               icon={<IconFolder />}
-              label="Show in Finder"
+              label={nouns.reveal}
               onClick={player.onReveal}
             />
             {/* A recording is far too big to send as a file, so the useful
@@ -249,7 +252,7 @@ export function TopBar({
                 Open in…
               </button>
             </Tooltip>
-            <Tooltip label="Move this recording to the Trash">
+            <Tooltip label={nouns.trashThisRecording}>
               <button
                 type="button"
                 onClick={player.onDelete}

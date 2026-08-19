@@ -60,6 +60,7 @@ import { TopBar } from "./TopBar";
 import { UpdateNotice } from "./UpdateNotice";
 import { SWATCHES, TOOLS, styleControlsFor } from "./tools";
 import type { View } from "./view";
+import { nouns } from "../../lib/platform";
 
 /** Consecutive nudges within this window collapse into one undo step. */
 const NUDGE_COALESCE_MS = 600;
@@ -166,7 +167,7 @@ export function EditorApp() {
   const describe = useCallback(
     (err: unknown) =>
       String(err) === "permission-denied"
-        ? "Shotly needs Screen Recording permission. Enable it in System Settings, then relaunch Shotly."
+        ? `Shotly needs Screen Recording permission. Enable it in ${nouns.settingsApp}, then relaunch Shotly.`
         : `Capture failed: ${err}`,
     [],
   );
@@ -609,7 +610,7 @@ export function EditorApp() {
         {
           title: "Delete captures",
           kind: "warning",
-          okLabel: "Move to Trash",
+          okLabel: nouns.trash,
           cancelLabel: "Cancel",
         },
       );
@@ -627,7 +628,7 @@ export function EditorApp() {
           setMovie(null);
           setView("library");
         }
-        notify(paths.length === 1 ? "Moved to Trash" : `Moved ${paths.length} captures to Trash`);
+        notify(paths.length === 1 ? nouns.trashed : nouns.trashedMany(paths.length));
       } catch (e) {
         notify(`Delete failed: ${e}`, "error");
       } finally {
@@ -1038,7 +1039,7 @@ export function EditorApp() {
       },
       {
         id: "edit.delete",
-        title: view === "library" ? "Move selected captures to Trash" : "Delete selection",
+        title: view === "library" ? nouns.trashSelected : "Delete selection",
         group: "Edit",
         shortcut: "Backspace",
         altShortcut: "Delete",
@@ -1048,7 +1049,7 @@ export function EditorApp() {
       },
       {
         id: "edit.trashPicked",
-        title: "Move picked captures to Trash",
+        title: nouns.trashPicked,
         group: "Edit",
         // ⌘⌫ rather than the library's bare Backspace, because in the editor
         // that key already belongs to the annotation you have selected. This is
@@ -1456,7 +1457,7 @@ export function EditorApp() {
       },
       {
         id: "export.reveal",
-        title: "Show last save in Finder",
+        title: nouns.revealLast,
         group: "Export",
         shortcut: "Mod+Shift+R",
         enabled: () => saved !== null,
@@ -1688,7 +1689,7 @@ export function EditorApp() {
               onClick={() => void ipc.revealInFinder(saved)}
               className="ml-1 rounded-md bg-white/[0.08] px-2 py-0.5 text-[11.5px] text-ink-2 hover:bg-white/[0.14] hover:text-ink"
             >
-              Show in Finder
+              {nouns.reveal}
             </button>
           )}
         </div>

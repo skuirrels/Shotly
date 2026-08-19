@@ -284,22 +284,6 @@ fn ask_for_accessibility() {
     }
 }
 
-/// Where the pointer is, in global point space with a top-left origin.
-#[cfg(target_os = "macos")]
-fn cursor() -> Option<(f64, f64)> {
-    use core_graphics::event::CGEvent;
-    use core_graphics::event_source::{CGEventSource, CGEventSourceStateID};
-
-    let source = CGEventSource::new(CGEventSourceStateID::HIDSystemState).ok()?;
-    let point = CGEvent::new(source).ok()?.location();
-    Some((point.x, point.y))
-}
-
-#[cfg(not(target_os = "macos"))]
-fn cursor() -> Option<(f64, f64)> {
-    None
-}
-
 fn put(cell: &AtomicU64, value: f64) {
     cell.store(value.to_bits(), Ordering::Relaxed);
 }
@@ -432,7 +416,7 @@ fn open_overlays(app: &AppHandle) -> Result<(), String> {
         // and a desktop nobody can use if the page dies.
         window.set_ignore_cursor_events(true).map_err(|e| e.to_string())?;
 
-        crate::platform::elevate_overlay_window(&window)?;
+        crate::platform::chrome::elevate_overlay_window(&window)?;
 
         opened.push((label, (bounds.x, bounds.y)));
     }
@@ -825,7 +809,7 @@ fn spawn_tracker(app: AppHandle, generation: u64) {
                 }
             }
 
-            let Some((x, y)) = cursor() else {
+            let Some((x, y)) = crate::platform::pointer::cursor() else {
                 std::thread::sleep(POLL);
                 continue;
             };

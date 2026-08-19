@@ -2,18 +2,15 @@
 //!
 //! Two questions, and neither has an answer in the image crate: how big is it,
 //! and what does it look like. Both are answered without adding a dependency —
-//! the size and duration by reading the file's own index, the picture by asking
-//! QuickLook, which is the same thing Finder shows for the file.
+//! the size and duration by reading the file's own index, which is what this
+//! module does and does portably, and the picture by asking whatever draws
+//! thumbnails on this platform, which is `platform::shell::poster`.
 
 use std::io::{Read, Seek, SeekFrom};
 use std::path::Path;
-use std::process::Command;
 
 /// Extensions the library treats as movies.
 pub const EXTENSIONS: [&str; 3] = ["mov", "mp4", "m4v"];
-
-/// How long QuickLook may take over one poster frame.
-const TIMEOUT: std::time::Duration = std::time::Duration::from_secs(20);
 
 pub fn is_video(path: &Path) -> bool {
     path.extension()
@@ -169,82 +166,6 @@ fn be64(bytes: &[u8], at: usize) -> Option<u64> {
     Some(u64::from_be_bytes(bytes.get(at..at + 8)?.try_into().ok()?))
 }
 
-/// Write a still of `source` into `dest`, no larger than `max` on its long edge.
-///
-/// QuickLook rather than a frame grabber of our own: it is the picture the user
-/// already associates with the file from Finder, it costs no dependency and no
-/// codec decisions, and it is one subprocess in the same spirit as the rest of
-/// the capture layer. It writes `<name>.png` beside wherever it is pointed, so
-/// it is pointed at a directory of its own and the result moved into place.
-/// Somewhere for QuickLook to write, belonging to this one thumbnail.
-///
-/// Per call, not per process: thumbnails are asked for concurrently now that
-/// they are off the main thread, and this directory is deleted when its poster
-/// is done — a shared one would be deleted out from under whichever poster was
-/// still being written into it.
-fn scratch_for(dest: &Path) -> Option<std::path::PathBuf> {
-    let stem = dest.file_stem()?.to_string_lossy().into_owned();
-    Some(dest.parent()?.join(format!("ql-{stem}")))
-}
-
-pub fn poster(source: &Path, dest: &Path, max: u32) -> Result<(), String> {
-    let scratch = scratch_for(dest).ok_or("no cache directory")?;
-    std::fs::create_dir_all(&scratch).map_err(|e| e.to_string())?;
-
-    let mut child = Command::new("/usr/bin/qlmanage")
-        .args(["-t", "-s", &max.to_string(), "-o"])
-        .arg(&scratch)
-        .arg(source)
-        // No pipes: `output()` waits for the pipes to close rather than for the
-        // process to end, and QuickLook is a daemon-backed thing whose helpers
-        // can outlive the command. Whether it worked is answered by whether the
-        // file appeared, which needs no output at all.
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .spawn()
-        .map_err(|e| format!("could not run qlmanage: {e}"))?;
-
-    // A deadline, because this is somebody else's process. It normally takes
-    // well under a second — three seconds the first time after login, while
-    // QuickLook warms up — and a thumbnail is never worth waiting longer than
-    // this for.
-    let deadline = std::time::Instant::now() + TIMEOUT;
-    let finished = loop {
-        match child.try_wait() {
-            Ok(Some(_)) => break true,
-            Ok(None) if std::time::Instant::now() < deadline => {
-                std::thread::sleep(std::time::Duration::from_millis(25));
-            }
-            Ok(None) => {
-                let _ = child.kill();
-                let _ = child.wait();
-                break false;
-            }
-            Err(_) => break false,
-        }
-    };
-
-    let name = source.file_name().ok_or("no file name")?;
-    let produced = scratch.join(format!("{}.png", name.to_string_lossy()));
-
-    if !produced.exists() {
-        let _ = std::fs::remove_dir_all(&scratch);
-        return Err(if finished {
-            "QuickLook produced no thumbnail".into()
-        } else {
-            "QuickLook took too long over the thumbnail".into()
-        });
-    }
-
-    let moved = std::fs::rename(&produced, dest);
-    if moved.is_err() {
-        std::fs::copy(&produced, dest).map_err(|e| e.to_string())?;
-    }
-    let _ = std::fs::remove_dir_all(&scratch);
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -294,21 +215,6 @@ mod tests {
         assert_eq!(tkhd_size(&[0u8; 3]), None);
         // A size field that does not advance must not spin.
         assert_eq!(scan(&atom(b"mvhd", &[0u8; 4])[..4], b"mvhd"), None);
-    }
-
-    /// Two thumbnails being made at once must not share a workspace: each one
-    /// deletes its own when it finishes, and the first to finish would take the
-    /// other's poster frame with it.
-    #[test]
-    fn two_posters_never_share_a_scratch_directory() {
-        let cache = Path::new("/tmp/shotly/thumbs");
-        let one = scratch_for(&cache.join("1a2b-1786961840681-480.png")).unwrap();
-        let two = scratch_for(&cache.join("9f8e-1786961840681-480.png")).unwrap();
-
-        assert_ne!(one, two);
-        // Beside the thumbnail it is for, so cleaning the cache cleans these.
-        assert_eq!(one.parent().unwrap(), cache);
-        assert_eq!(scratch_for(Path::new("no-parent.png")), Some("ql-no-parent".into()));
     }
 
     #[test]

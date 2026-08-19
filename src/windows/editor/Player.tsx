@@ -20,6 +20,7 @@ import type { Trimmed, TrimMode, TrimPrecision } from "@/lib/types";
 import { formatDuration } from "./format";
 import { useThumbnail } from "./thumbnails";
 import { MIN_SELECTION, TrimActions, TrimTrack, type Range } from "./TrimBar";
+import { nouns } from "../../lib/platform";
 
 /**
  * What the player needs to know about a recording.
@@ -643,7 +644,7 @@ function Unplayable({ movie, onError }: { movie: Movie; onError: (message: strin
           className="flex h-8 items-center gap-1.5 rounded-lg bg-white/[0.07] px-3 text-[12.5px] font-medium text-ink transition-colors hover:bg-white/[0.11]"
         >
           <IconFolder />
-          Show in Finder
+          {nouns.reveal}
         </button>
       </div>
     </div>

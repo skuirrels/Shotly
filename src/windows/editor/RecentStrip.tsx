@@ -6,6 +6,7 @@ import * as ipc from "@/lib/ipc";
 import type { LibraryItem } from "@/lib/types";
 import { formatWhen } from "./format";
 import { useThumbnail } from "./thumbnails";
+import { nouns } from "../../lib/platform";
 
 /**
  * Recent captures, alongside the one being edited.
@@ -208,13 +209,13 @@ export function RecentStrip({
         run: () => onCopy(targets),
       },
       !many && {
-        label: "Show in Finder",
+        label: nouns.reveal,
         icon: <IconFolder />,
         run: () => void ipc.revealInFinder(targets[0]),
       },
       "separator" as const,
       {
-        label: many ? `Move ${targets.length} captures to Trash` : "Move to Trash",
+        label: many ? nouns.trashMany(targets.length) : nouns.trash,
         icon: <IconTrash />,
         danger: true,
         run: () => onDelete(targets),

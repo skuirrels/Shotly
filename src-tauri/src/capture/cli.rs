@@ -170,27 +170,14 @@ pub fn scale_of_file(path: &std::path::Path) -> f64 {
 ///
 /// Used only when a capture carries no DPI: still better than assuming the
 /// primary display, since the cursor ends the drag on the screen just captured.
-#[cfg(target_os = "macos")]
 fn scale_under_cursor() -> Option<f64> {
-    use core_graphics::event::CGEvent;
-    use core_graphics::event_source::{CGEventSource, CGEventSourceStateID};
-
-    let source = CGEventSource::new(CGEventSourceStateID::HIDSystemState).ok()?;
-    let point = CGEvent::new(source).ok()?.location();
+    let (x, y) = crate::platform::pointer::cursor()?;
 
     display::displays().ok()?.into_iter().find_map(|d| {
         let b = d.bounds;
-        let inside = point.x >= b.x
-            && point.y >= b.y
-            && point.x < b.x + b.width
-            && point.y < b.y + b.height;
+        let inside = x >= b.x && y >= b.y && x < b.x + b.width && y < b.y + b.height;
         inside.then_some(d.scale)
     })
-}
-
-#[cfg(not(target_os = "macos"))]
-fn scale_under_cursor() -> Option<f64> {
-    None
 }
 
 /// Best available backing scale for a freshly captured file.
@@ -415,5 +402,80 @@ impl CaptureBackend for ScreencaptureCli {
 
     fn list_windows(&self) -> Result<Vec<WindowInfo>> {
         display::windows()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The smallest thing that passes for a PNG: signature, an IHDR, one
+    /// empty IDAT, IEND. Chunk lengths and CRCs are real, so the walkers in
+    /// `png_scale` and `with_dpi` see exactly what a file would show them.
+    fn tiny_png() -> Vec<u8> {
+        let mut png = b"\x89PNG\r\n\x1a\n".to_vec();
+        for (kind, body) in [
+            (&b"IHDR"[..], &[0, 0, 0, 1, 0, 0, 0, 1, 8, 6, 0, 0, 0][..]),
+            (&b"IDAT"[..], &[][..]),
+            (&b"IEND"[..], &[][..]),
+        ] {
+            let mut chunk = kind.to_vec();
+            chunk.extend_from_slice(body);
+            png.extend_from_slice(&(body.len() as u32).to_be_bytes());
+            png.extend_from_slice(&chunk);
+            png.extend_from_slice(&crc32(&chunk).to_be_bytes());
+        }
+        png
+    }
+
+    #[test]
+    fn crc32_matches_the_png_specification() {
+        // The check value every CRC-32 implementation is verified against.
+        assert_eq!(crc32(b"123456789"), 0xCBF4_3926);
+    }
+
+    #[test]
+    fn a_dpi_tag_written_is_a_dpi_tag_read_back() {
+        let dir = tempfile::tempdir().unwrap();
+        for scale in [1.0, 2.0, 3.0] {
+            let stamped = with_dpi(&tiny_png(), scale);
+            let path = dir.path().join(format!("{scale}.png"));
+            std::fs::write(&path, &stamped).unwrap();
+            assert_eq!(scale_of_file(&path), scale, "at {scale}x");
+        }
+    }
+
+    #[test]
+    fn stamping_twice_leaves_one_tag() {
+        let twice = with_dpi(&with_dpi(&tiny_png(), 2.0), 3.0);
+        let hits = twice.windows(4).filter(|w| w == b"pHYs").count();
+        assert_eq!(hits, 1, "a replaced tag must not leave the old one behind");
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("restamped.png");
+        std::fs::write(&path, &twice).unwrap();
+        assert_eq!(scale_of_file(&path), 3.0, "the later stamp wins");
+    }
+
+    #[test]
+    fn a_file_with_no_tag_reads_as_1x() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("untagged.png");
+        std::fs::write(&path, tiny_png()).unwrap();
+        assert_eq!(scale_of_file(&path), 1.0);
+    }
+
+    #[test]
+    fn what_is_not_a_png_comes_back_untouched() {
+        for bytes in [&b""[..], &b"GIF89a"[..], &b"\x89PNG\r\n\x1a\n\0\0"[..]] {
+            assert_eq!(with_dpi(bytes, 2.0), bytes.to_vec());
+        }
+
+        // Truncated mid-chunk — the header still readable, the declared
+        // length overrunning the buffer: the walker must hand back the
+        // original rather than a half-written copy.
+        let mut cut = tiny_png();
+        cut.truncate(cut.len() - 2);
+        assert_eq!(with_dpi(&cut, 2.0), cut);
     }
 }

@@ -812,8 +812,8 @@ pub fn scroll_begin(app: AppHandle) -> Result<(), String> {
     // them, since the pages worth capturing whole are read full screen — opens
     // on the desktop Space: nothing visible, clicks going to the app behind,
     // and a WebView macOS never composites and therefore suspends. Only the
-    // Space, not the window level: see `platform::show_on_every_space`.
-    if let Err(err) = crate::platform::show_on_every_space(&window) {
+    // Space, not the window level: see `platform::chrome::show_on_every_space`.
+    if let Err(err) = crate::platform::chrome::show_on_every_space(&window) {
         eprintln!("[shotly] the scrolling-capture overlay may open on another Space: {err}");
     }
 

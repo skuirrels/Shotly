@@ -5,13 +5,19 @@
  * the single source of truth for the key handler, the tooltips, the command
  * palette and the cheat sheet — so a rebind can never leave a stale hint
  * somewhere in the UI.
+ *
+ * `Mod` is the platform's own primary modifier — ⌘ on macOS, Ctrl on Windows
+ * — which is the whole reason shortcuts are authored as `Mod+` rather than as
+ * the key itself. Everything else about the grammar is identical on both.
  */
+import { isWindows } from "../platform";
 
 export interface Chord {
   /** `KeyboardEvent.code` for physical keys, else a `KeyboardEvent.key` name. */
   code?: string;
   key?: string;
-  mod: boolean; // Cmd on macOS
+  /** The platform's primary modifier: ⌘ on macOS, Ctrl on Windows. */
+  mod: boolean;
   shift: boolean;
   alt: boolean;
   ctrl: boolean;
@@ -93,10 +99,19 @@ export function parseShortcut(spec: string): Chord {
 }
 
 export function matchesChord(e: KeyboardEvent, chord: Chord): boolean {
-  if (e.metaKey !== chord.mod) return false;
+  // On Windows `Mod` *is* Ctrl, so the two flags read the same key and a chord
+  // asking for both is unsatisfiable — deliberately. Nothing authors one: the
+  // capture hotkeys that use Ctrl are registered by Rust and never reach here,
+  // and every in-app binding is written `Mod+…`.
+  if (isWindows) {
+    if (e.ctrlKey !== (chord.mod || chord.ctrl)) return false;
+    if (e.metaKey) return false;
+  } else {
+    if (e.metaKey !== chord.mod) return false;
+    if (e.ctrlKey !== chord.ctrl) return false;
+  }
   if (e.shiftKey !== chord.shift) return false;
   if (e.altKey !== chord.alt) return false;
-  if (e.ctrlKey !== chord.ctrl) return false;
 
   if (chord.code) return e.code === chord.code;
   if (chord.key) return e.key === chord.key;
@@ -127,21 +142,54 @@ const GLYPHS: Record<string, string> = {
   Equal: "=",
 };
 
-/** Render a chord the way macOS does — ⌃⌥⇧⌘ in that fixed order. */
+/**
+ * Render a chord the way this platform writes one.
+ *
+ * macOS stacks glyphs in the fixed order ⌃⌥⇧⌘; Windows spells the modifiers
+ * out and joins them with `+`. Both end in the same key name, which is why
+ * only the prefix differs.
+ */
 export function formatShortcut(spec: string): string {
   const chord = parseShortcut(spec);
+
+  const token = chord.code ?? chord.key ?? "";
+  const key = GLYPHS[token]
+    ?? (token.startsWith("Key") ? token.slice(3)
+      : token.startsWith("Digit") ? token.slice(5)
+        : token);
+
+  if (isWindows) {
+    const parts: string[] = [];
+    // `Mod` and `Ctrl` are the same key here, so a chord carrying either says
+    // "Ctrl" once rather than twice.
+    if (chord.mod || chord.ctrl) parts.push("Ctrl");
+    if (chord.alt) parts.push("Alt");
+    if (chord.shift) parts.push("Shift");
+    parts.push(WINDOWS_NAMES[token] ?? key);
+    return parts.join("+");
+  }
+
   let out = "";
   if (chord.ctrl) out += "⌃";
   if (chord.alt) out += "⌥";
   if (chord.shift) out += "⇧";
   if (chord.mod) out += "⌘";
-
-  const token = chord.code ?? chord.key ?? "";
-  if (GLYPHS[token]) return out + GLYPHS[token];
-  if (token.startsWith("Key")) return out + token.slice(3);
-  if (token.startsWith("Digit")) return out + token.slice(5);
-  return out + token;
+  return out + key;
 }
+
+/** The keys Windows names rather than draws. */
+const WINDOWS_NAMES: Record<string, string> = {
+  Escape: "Esc",
+  Enter: "Enter",
+  Tab: "Tab",
+  Backspace: "Backspace",
+  Delete: "Del",
+  ArrowUp: "Up",
+  ArrowDown: "Down",
+  ArrowLeft: "Left",
+  ArrowRight: "Right",
+  Space: "Space",
+};
 
 /**
  * Is the user typing into a field right now?

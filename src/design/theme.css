@@ -39,7 +39,11 @@
   --radius-lg: 12px;
   --radius-xl: 16px;
 
-  --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Inter", system-ui, sans-serif;
+  /* The system's own UI face, whichever system this is: macOS resolves the
+     first entries, Windows falls through to Segoe. Naming both beats
+     `system-ui` alone, which picks the wrong weight axis on Windows. */
+  --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI Variable Text",
+    "Segoe UI", "Inter", system-ui, sans-serif;
   --font-mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, monospace;
 
   /* macOS-flavoured easing: quick to leave, slow to settle. */

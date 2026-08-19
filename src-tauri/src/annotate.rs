@@ -167,22 +167,6 @@ pub fn toggle(app: &AppHandle) -> Result<(), String> {
     start(app, None)
 }
 
-/// Where the pointer is, in global point space.
-#[cfg(target_os = "macos")]
-fn cursor_point() -> Option<(f64, f64)> {
-    use core_graphics::event::CGEvent;
-    use core_graphics::event_source::{CGEventSource, CGEventSourceStateID};
-
-    let source = CGEventSource::new(CGEventSourceStateID::HIDSystemState).ok()?;
-    let point = CGEvent::new(source).ok()?.location();
-    Some((point.x, point.y))
-}
-
-#[cfg(not(target_os = "macos"))]
-fn cursor_point() -> Option<(f64, f64)> {
-    None
-}
-
 /// Choose the display to annotate.
 ///
 /// An explicit request wins; otherwise it is whichever screen the pointer is
@@ -201,7 +185,7 @@ fn pick_display(displays: &[DisplayInfo], preferred: Option<u32>) -> Option<&Dis
         }
     }
 
-    if let Some((x, y)) = cursor_point() {
+    if let Some((x, y)) = crate::platform::pointer::cursor() {
         let under = displays.iter().find(|d| {
             let b = d.bounds;
             x >= b.x && y >= b.y && x < b.x + b.width && y < b.y + b.height
@@ -268,7 +252,7 @@ fn start(app: &AppHandle, preferred: Option<u32>) -> Result<(), String> {
     // every click on the screen it did land on. That is indistinguishable from a
     // machine that has seized, and pressing the key again only toggles the one
     // you cannot see.
-    if let Err(err) = crate::platform::follow_active_space(&window) {
+    if let Err(err) = crate::platform::chrome::follow_active_space(&window) {
         eprintln!("[annotate] the layer will not follow Spaces: {err}");
     }
 
@@ -375,7 +359,7 @@ fn follow_cursor(app: &AppHandle, generation: u64) {
             }
 
             let rect = *state.hot_rect.lock().unwrap();
-            let over = match (rect, cursor_point(), window.outer_position(), window.scale_factor()) {
+            let over = match (rect, crate::platform::pointer::cursor(), window.outer_position(), window.scale_factor()) {
                 (Some(r), Some((cx, cy)), Ok(origin), Ok(scale)) => {
                     // The page measures itself from its own top-left; the
                     // cursor is in global points. Meet in the middle.

@@ -199,7 +199,7 @@ pub fn schedule(app: &AppHandle) {
 /// lands in a window you cannot see has told you nothing.
 pub fn check_from_tray(app: &AppHandle) {
     if let Some(editor) = app.get_webview_window("editor") {
-        crate::platform::set_accessory_mode(app, false);
+        crate::platform::chrome::set_accessory_mode(app, false);
         let _ = editor.show();
         let _ = editor.set_focus();
     }

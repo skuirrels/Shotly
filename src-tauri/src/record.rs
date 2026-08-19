@@ -30,7 +30,7 @@
 //! cost you the last second of a recording, not the recording.
 
 use std::path::PathBuf;
-use std::process::{Child, Command};
+use std::process::Child;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
@@ -224,11 +224,11 @@ pub fn record_begin(app: AppHandle) -> Result<(), String> {
 
     // Space membership only, while this is still a full-screen sheet. It is
     // raised above everything else when — and only when — it shrinks into the
-    // panel. See `platform::show_on_every_space`.
-    if let Err(err) = crate::platform::show_on_every_space(&window) {
+    // panel. See `platform::chrome::show_on_every_space`.
+    if let Err(err) = crate::platform::chrome::show_on_every_space(&window) {
         eprintln!("[shotly] the recording overlay may open on another Space: {err}");
     }
-    if let Err(err) = crate::platform::hide_from_capture(&window) {
+    if let Err(err) = crate::platform::chrome::hide_from_capture(&window) {
         eprintln!("[shotly] the recording panel may appear in the recording: {err}");
     }
 
@@ -267,8 +267,6 @@ fn set_phase(app: &AppHandle, phase: Phase) {
     *app.state::<RecordState>().phase.lock().unwrap() = phase;
     let _ = app.emit_to(LABEL, "record:phase", phase.as_str());
 }
-
-
 
 /// The overlay's place on screen, so the page can map a drag to global points.
 #[tauri::command]
@@ -382,9 +380,7 @@ fn start(app: &AppHandle, target: &[&str], what: String) -> Result<(), String> {
     }
 
     let path = scratch_path()?;
-    let mut args: Vec<String> = vec!["-v".into(), "-x".into()];
-    args.extend(target.iter().map(|s| (*s).to_string()));
-    args.push(path.to_string_lossy().into_owned());
+    let target: Vec<String> = target.iter().map(|s| (*s).to_string()).collect();
 
     // The panel moves out of the way before the shutter opens. It is invisible
     // to the recording (see `hide_from_capture`), but a window still being
@@ -392,10 +388,7 @@ fn start(app: &AppHandle, target: &[&str], what: String) -> Result<(), String> {
     // the first second of a recording is the one people watch.
     shrink_to_hud(app)?;
 
-    let child = Command::new("/usr/sbin/screencapture")
-        .args(&args)
-        .spawn()
-        .map_err(|e| format!("could not start the recording: {e}"))?;
+    let child = crate::platform::recorder::start(&target, &path)?;
 
     let started = Instant::now();
     {
@@ -524,7 +517,7 @@ fn finish(app: &AppHandle, keep: bool) -> Result<Option<String>, String> {
 
     // SIGINT is how a recording ends: `screencapture` catches it and writes the
     // movie's index. Killing it outright would leave an unplayable file.
-    interrupt(&session.child);
+    crate::platform::recorder::interrupt(&session.child);
 
     let deadline = Instant::now() + FINALISE_GRACE;
     loop {
@@ -569,19 +562,6 @@ fn finish(app: &AppHandle, keep: bool) -> Result<Option<String>, String> {
 
     Ok(Some(path))
 }
-
-#[cfg(unix)]
-fn interrupt(child: &Child) {
-    // SAFETY: `kill(2)` with a pid this process owns and a signal number that
-    // is always valid. The child is still owned by `Session`, so the pid cannot
-    // have been reaped and reused underneath us.
-    unsafe {
-        libc::kill(child.id() as i32, libc::SIGINT);
-    }
-}
-
-#[cfg(not(unix))]
-fn interrupt(_child: &Child) {}
 
 fn scratch_path() -> Result<PathBuf, String> {
     let dir = std::env::temp_dir().join("shotly");
@@ -689,10 +669,10 @@ fn open_hud(app: &AppHandle, display: Rect) -> Result<(), String> {
 /// the whole display.
 fn raise_panel(app: &AppHandle) {
     let Some(window) = app.get_webview_window(LABEL) else { return };
-    if let Err(err) = crate::platform::elevate_overlay_window(&window) {
+    if let Err(err) = crate::platform::chrome::elevate_overlay_window(&window) {
         eprintln!("[shotly] the recording panel may sit behind other windows: {err}");
     }
-    if let Err(err) = crate::platform::hide_from_capture(&window) {
+    if let Err(err) = crate::platform::chrome::hide_from_capture(&window) {
         eprintln!("[shotly] the recording panel may appear in the recording: {err}");
     }
 }
@@ -783,14 +763,14 @@ mod tests {
     #[ignore = "records the screen; run it by hand"]
     fn interrupting_the_recorder_leaves_a_playable_movie() {
         let path = scratch_path().expect("scratch directory");
-        let mut child = Command::new("/usr/sbin/screencapture")
+        let mut child = std::process::Command::new("/usr/sbin/screencapture")
             .args(["-v", "-x", "-R", "0,0,320,200"])
             .arg(&path)
             .spawn()
             .expect("screencapture should start");
 
         std::thread::sleep(Duration::from_secs(2));
-        interrupt(&child);
+        crate::platform::recorder::interrupt(&child);
         let status = child.wait().expect("screencapture should exit");
 
         let movie = std::fs::read(&path).expect("a movie should have been written");

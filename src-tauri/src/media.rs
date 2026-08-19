@@ -21,7 +21,13 @@ use std::path::{Path, PathBuf};
 
 use tauri::http::{Request, Response, StatusCode};
 
-/// The URL scheme. `media://localhost/<percent-encoded path>` on macOS.
+/// The URL scheme.
+///
+/// `media://localhost/<percent-encoded path>` on macOS; wry cannot register
+/// a bare scheme on Windows, so `convertFileSrc` builds
+/// `http://media.localhost/<same>` there instead. Only the path is ever read,
+/// so both are served identically — pinned by
+/// `the_windows_shaped_uri_is_served_the_same`.
 pub const SCHEME: &str = "media";
 
 /// The most bytes handed back in one response.
@@ -54,7 +60,9 @@ pub fn serve_async(
 
 /// Everything above the thread boundary, so it can be tested without one.
 pub fn serve(root: &Path, request: &Request<Vec<u8>>) -> Response<Vec<u8>> {
-    // `convertFileSrc` builds `media://localhost/<encodeURIComponent(path)>`,
+    // `convertFileSrc` builds `media://localhost/<encodeURIComponent(path)>`
+    // — or `http://media.localhost/…` on Windows, which differs only in the
+    // part this never looks at —
     // which encodes the separators too — so the path component arrives as one
     // escaped blob behind the authority's slash. Decoding first and then
     // re-establishing a single leading slash handles that and the literal form
@@ -316,6 +324,24 @@ mod tests {
 
     fn uri_for(dir: &tempfile::TempDir) -> String {
         uri_for_path(&dir.path().join("a recording.mov"))
+    }
+
+    /// On Windows, wry cannot register a bare custom scheme, so
+    /// `convertFileSrc` builds `http://media.localhost/<encoded>` instead of
+    /// `media://localhost/<encoded>`. The handler reads only the URI's path,
+    /// so both must serve identically — this pins that before a Windows build
+    /// exists to depend on it.
+    #[test]
+    fn the_windows_shaped_uri_is_served_the_same() {
+        let (dir, bytes) = fixture();
+        let mac = uri_for(&dir);
+        let win = mac.replacen("media://localhost/", "http://media.localhost/", 1);
+
+        for uri in [mac, win] {
+            let response = serve(dir.path(), &request(&uri, Some("bytes=100-199")));
+            assert_eq!(response.status(), StatusCode::PARTIAL_CONTENT, "{uri}");
+            assert_eq!(response.body().as_slice(), &bytes[100..200], "{uri}");
+        }
     }
 
     /// The first request a video element makes carries no range, and the reply

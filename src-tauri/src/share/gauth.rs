@@ -128,12 +128,13 @@ struct Store {
 /// The store, read once per launch.
 static STORE: Mutex<Option<Store>> = Mutex::new(None);
 
+/// Where this app keeps files that are its own business.
+///
+/// `~/Library/Application Support/<id>` on macOS and
+/// `%APPDATA%\\<id>` on Windows — the same idea, spelt differently, which is
+/// why the spelling is `platform`'s to know rather than this module's.
 fn config_dir() -> std::path::PathBuf {
-    std::env::var("HOME")
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(|_| std::env::temp_dir())
-        .join("Library/Application Support")
-        .join(SERVICE)
+    crate::platform::paths::config_dir(SERVICE)
 }
 
 fn store_path() -> std::path::PathBuf {
@@ -147,15 +148,28 @@ fn load() -> Store {
             return store;
         }
     }
-    migrate_from_keychain()
+    // Nothing to migrate on a platform that never had a keychain to migrate
+    // out of: this exists solely to rescue sign-ins from macOS's login
+    // keychain, which no other system has ever written.
+    #[cfg(target_os = "macos")]
+    {
+        migrate_from_keychain()
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        Store::default()
+    }
 }
 
 /// Take an existing sign-in out of the keychain, once.
+///
+/// macOS only, and permanently so — see the call site.
 ///
 /// The last prompt anybody sees: whatever is there is copied to the store and
 /// then deleted, because a live refresh token left behind in the keychain is a
 /// credential nobody is watching any more. A machine with nothing there — every
 /// new install — never touches the keychain at all and is never asked.
+#[cfg(target_os = "macos")]
 fn migrate_from_keychain() -> Store {
     let read = |key: &str| {
         keyring::Entry::new(SERVICE, key).ok().and_then(|e| e.get_password().ok())

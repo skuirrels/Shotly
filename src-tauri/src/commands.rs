@@ -234,7 +234,7 @@ pub fn request_window_pick(app: &AppHandle) -> CmdResult<()> {
 
     let editor = app.get_webview_window("editor").ok_or("editor window missing")?;
     *app.state::<AppState>().hid_editor.lock().unwrap() = false;
-    platform::set_accessory_mode(app, false);
+    platform::chrome::set_accessory_mode(app, false);
     editor.show().map_err(|e| e.to_string())?;
     editor.set_focus().map_err(|e| e.to_string())?;
     app.emit_to("editor", "editor:pick-window", ()).map_err(|e| e.to_string())
@@ -262,7 +262,7 @@ pub fn request_settings(app: &AppHandle, tab: &str) -> CmdResult<()> {
 pub fn present_editor(app: &AppHandle) -> CmdResult<()> {
     let editor = app.get_webview_window("editor").ok_or("editor window missing")?;
     *app.state::<AppState>().hid_editor.lock().unwrap() = false;
-    platform::set_accessory_mode(app, false);
+    platform::chrome::set_accessory_mode(app, false);
     editor.show().map_err(|e| e.to_string())?;
     editor.set_focus().map_err(|e| e.to_string())
 }
@@ -311,7 +311,7 @@ fn deliver_with(app: &AppHandle, frame: Frame, markup: Option<String>) -> CmdRes
     let editor = app.get_webview_window("editor").ok_or("editor window missing")?;
     // We're showing the editor with the result, so the hide is settled.
     *app.state::<AppState>().hid_editor.lock().unwrap() = false;
-    platform::set_accessory_mode(app, false);
+    platform::chrome::set_accessory_mode(app, false);
     editor.show().map_err(|e| e.to_string())?;
     editor.set_focus().map_err(|e| e.to_string())?;
     app.emit_to("editor", "editor:open", result.clone()).map_err(|e| e.to_string())?;
@@ -668,28 +668,11 @@ pub fn save_editable_png(
 
 /// Whether this file's contents live somewhere other than this disk.
 ///
-/// macOS marks a file whose bytes a file provider — iCloud Drive, Dropbox,
-/// Google Drive — has evicted with `SF_DATALESS`. `stat` still answers, so the
-/// name, size and date are free; **reading a single byte blocks until the
-/// provider has fetched the whole file**, which for a screen recording is a
-/// download of hundreds of megabytes.
-///
-/// Five hang reports in two days all had the same shape: the main thread, in a
-/// WebKit URL-scheme callback, stopped in `apfs_materialize_dataless_file_ext`.
-/// Anything that opens a library file has to either be off the main thread or
-/// ask this first — and listing a folder should never trigger a download at
-/// all, which is what the caller in `read_library` uses this for.
-#[cfg(target_os = "macos")]
+/// Are this file's bytes actually on the disk, or has a cloud provider evicted
+/// them? See `platform::shell::is_dataless` — the answer, and the reason it
+/// matters, are both the operating system's.
 pub fn is_dataless(meta: &std::fs::Metadata) -> bool {
-    use std::os::macos::fs::MetadataExt;
-    /// `sys/stat.h`: "file is dataless object".
-    const SF_DATALESS: u32 = 0x4000_0000;
-    meta.st_flags() & SF_DATALESS != 0
-}
-
-#[cfg(not(target_os = "macos"))]
-pub fn is_dataless(_meta: &std::fs::Metadata) -> bool {
-    false
+    crate::platform::shell::is_dataless(meta)
 }
 
 /// The folder every capture lands in: `~/Documents/Shotly`.
@@ -821,28 +804,9 @@ fn place_file(source: &std::path::Path, target: &std::path::Path) -> CmdResult<(
 /// so a library sorted by name reads chronologically. Rust needs its own copy
 /// because a recording can be filed with no page left alive to ask.
 pub fn stamped_stem(prefix: &str) -> String {
-    let secs = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0) as libc::time_t;
+    let (year, month, day, hour, minute, second) = crate::platform::clock::local_now();
 
-    let mut tm: libc::tm = unsafe { std::mem::zeroed() };
-    // SAFETY: `localtime_r` fills a caller-owned `tm` and touches nothing else;
-    // both pointers are to live stack values. The `_r` form is the one that can
-    // be called from any thread.
-    unsafe {
-        libc::localtime_r(&secs, &mut tm);
-    }
-
-    format!(
-        "{prefix} {:04}-{:02}-{:02} at {:02}.{:02}.{:02}",
-        tm.tm_year + 1900,
-        tm.tm_mon + 1,
-        tm.tm_mday,
-        tm.tm_hour,
-        tm.tm_min,
-        tm.tm_sec
-    )
+    format!("{prefix} {year:04}-{month:02}-{day:02} at {hour:02}.{minute:02}.{second:02}")
 }
 
 // ---------------------------------------------------------------- library
@@ -1140,8 +1104,8 @@ fn thumbnail(path: String, max: u32) -> CmdResult<String> {
 
     if crate::video::is_video(source) {
         // A movie's poster frame comes from QuickLook at the size asked for,
-        // so there is nothing left to resize. See `video::poster`.
-        crate::video::poster(source, &dest, max)?;
+        // so there is nothing left to resize. See `platform::shell::poster`.
+        crate::platform::shell::poster(source, &dest, max)?;
         return Ok(dest.to_string_lossy().into_owned());
     }
 
@@ -1187,36 +1151,13 @@ pub fn trash_captures(app: AppHandle, paths: Vec<String>) -> CmdResult<()> {
         targets.push(target);
     }
 
-    let list = targets
-        .iter()
-        .map(|t| format!("POSIX file \"{}\"", t.to_string_lossy().replace('"', "\\\"")))
-        .collect::<Vec<_>>()
-        .join(", ");
-
-    let script = format!("tell application \"Finder\" to delete {{{list}}}");
-    let status = std::process::Command::new("/usr/bin/osascript")
-        .args(["-e", &script])
-        .status()
-        .map_err(|e| e.to_string())?;
-
-    if status.success() {
-        Ok(())
-    } else {
-        Err(match targets.len() {
-            1 => "could not move that file to the Trash".into(),
-            n => format!("could not move those {n} files to the Trash"),
-        })
-    }
+    crate::platform::shell::trash(&targets)
 }
 
 /// Reveal a saved capture in Finder.
 #[tauri::command]
 pub fn reveal_in_finder(path: String) -> CmdResult<()> {
-    std::process::Command::new("/usr/bin/open")
-        .args(["-R", &path])
-        .spawn()
-        .map(|_| ())
-        .map_err(|e| e.to_string())
+    crate::platform::shell::reveal(std::path::Path::new(&path))
 }
 
 /// How much image data one copy may put on the pasteboard, across all items.
@@ -1268,52 +1209,27 @@ pub fn copy_files_to_clipboard(app: AppHandle, paths: Vec<String>) -> CmdResult<
         resolved.push(target);
     }
 
-    #[cfg(target_os = "macos")]
-    {
-        use objc2::runtime::ProtocolObject;
-        use objc2_app_kit::{
-            NSPasteboard, NSPasteboardItem, NSPasteboardTypeFileURL, NSPasteboardTypePNG,
+    // The budget and the transcoding are the same on every platform; only the
+    // clipboard underneath is not. One file at a time, so that each capture's
+    // bytes are freed as soon as they have been copied — reading all of them
+    // first would hold the whole budget twice over at the moment of the write.
+    let mut budget = IMAGE_BUDGET;
+    let mut write = crate::platform::shell::ClipboardWrite::with_capacity(resolved.len());
+
+    for path in &resolved {
+        // Image data is rationed; the file itself always goes. Past the budget
+        // an item carries only its path, so it still pastes as a file.
+        let png = if budget > 0 {
+            let bytes = png_bytes(path)?;
+            budget = budget.saturating_sub(bytes.len());
+            Some(bytes)
+        } else {
+            None
         };
-        use objc2_foundation::{NSArray, NSData, NSString, NSURL};
-
-        let mut items = Vec::with_capacity(resolved.len());
-        let mut budget = IMAGE_BUDGET;
-
-        for path in &resolved {
-            let item = NSPasteboardItem::new();
-
-            // The file URL is cheap and always worth attaching.
-            // SAFETY: the pasteboard type constants are immortal statics, and
-            // every object here is one we just created.
-            unsafe {
-                let url = NSURL::fileURLWithPath(&NSString::from_str(&path.to_string_lossy()));
-                if let Some(string) = url.absoluteString() {
-                    item.setString_forType(&string, NSPasteboardTypeFileURL);
-                }
-            }
-
-            // Image data is not. "Select all, copy" on a large library would
-            // otherwise read every capture into memory at once and hand the
-            // whole lot to the window server. Past the budget the items still
-            // carry their file URL, so they still paste as files.
-            if budget > 0 {
-                let png = png_bytes(path)?;
-                budget = budget.saturating_sub(png.len());
-                unsafe { item.setData_forType(&NSData::with_bytes(&png), NSPasteboardTypePNG) };
-            }
-
-            items.push(ProtocolObject::from_retained(item));
-        }
-
-        // `clearContents` must precede the write, or the pasteboard rejects it.
-        let pasteboard = NSPasteboard::generalPasteboard();
-        pasteboard.clearContents();
-        if !pasteboard.writeObjects(&NSArray::from_retained_slice(&items)) {
-            return Err("the clipboard rejected the selection".into());
-        }
+        write.push(path, png);
     }
 
-    Ok(())
+    write.finish()
 }
 
 #[tauri::command]
@@ -1393,7 +1309,7 @@ fn data_url(png: &[u8]) -> String {
 pub fn hide_editor(app: AppHandle, window: WebviewWindow) -> CmdResult<()> {
     window.hide().map_err(|e| e.to_string())?;
     // Drop back to the menu bar so Shotly stops occupying the Dock and Cmd-Tab.
-    platform::set_accessory_mode(&app, true);
+    platform::chrome::set_accessory_mode(&app, true);
     Ok(())
 }
 
@@ -1475,6 +1391,12 @@ mod naming_tests {
         assert_eq!(time.matches('.').count(), 2);
         assert!(date.chars().all(|c| c.is_ascii_digit() || c == '-'));
         assert!(time.chars().all(|c| c.is_ascii_digit() || c == '.'));
+
+        // A broken local-time call tends to fail as a zeroed struct, which
+        // formats as the year 1900 — right shape, nonsense date. Pin the
+        // century so a portability rewrite cannot pass on shape alone.
+        let year: i32 = date[..4].parse().expect("a numeric year");
+        assert!((2020..2200).contains(&year), "{year} is not a plausible year");
     }
 }
 
