@@ -40,7 +40,7 @@ Five keys, and they work in any app:
 | | |
 |---|---|
 | <kbd>⌃⇧4</kbd> | **Region** — drag out the part of the screen you want |
-| <kbd>⌃⇧5</kbd> | **Window** — pick from a grid of every open window, shown as it looks |
+| <kbd>⌃⇧5</kbd> | **Anything** — click a window, click the desktop, or drag out an area |
 | <kbd>⌃⇧3</kbd> | **Full screen** |
 | <kbd>⌃⇧6</kbd> | **Scrolling capture** — a whole page, taller than the screen |
 | <kbd>⌃⇧R</kbd> | **Record** — an area, a window or the screen, as a movie |
@@ -50,13 +50,25 @@ Command-Shift-3/4/5 for its own screenshot tools, and quietly stealing those
 would be rude. **You can change any of them** — see
 [Changing the keys](#changing-the-keys).
 
-Region selection uses the macOS selector you already know, complete with its
-magnifier and pixel readout.
+**Anything** (<kbd>⌃⇧5</kbd>) is the one to reach for, because it doesn't make
+you decide first. An outline follows the pointer and snaps to whatever is under
+it:
 
-**Window** opens a picker instead of a crosshair: every open window as a live
-thumbnail, filterable by app or title, arrow keys and <kbd>⏎</kbd> to take one.
-It reaches windows the pointer cannot — behind other windows, or fully covered —
-and because you choose by looking, you always get the window you meant.
+- **Click a window** and you get that window, taken from its own backing store —
+  so anything sitting on top of it isn't in the picture.
+- **Click the desktop** and you get that whole screen.
+- **Press and drag** and you get the rectangle you drew instead, with its size
+  shown as you go.
+- **Scroll** while pointing at a window to tighten onto what's inside it — a
+  toolbar, a sidebar, one panel. (That part needs Accessibility; Shotly asks
+  once, after the capture.)
+
+<kbd>esc</kbd> or a right-click gets you out. For a window that's behind another
+or fully covered, the pointer can't reach it — use **Capture Window from List**
+in the menu bar, which shows every open window as a live thumbnail.
+
+Region selection (<kbd>⌃⇧4</kbd>) is still there separately, and uses the macOS
+selector you already know, complete with its magnifier and pixel readout.
 
 ### Recording the screen
 

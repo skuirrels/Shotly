@@ -34,6 +34,8 @@ interface Highlight {
   /** How many levels there are, or 0 while the outline is on the window. */
   depth: number;
   window: boolean;
+  /** An area being dragged out, rather than something being pointed at. */
+  drag: boolean;
 }
 
 export function SnapApp() {
@@ -71,7 +73,7 @@ export function SnapApp() {
   return (
     <div className="pointer-events-none fixed inset-0 select-none overflow-hidden">
       {target ? <Outline target={target} /> : <div className="absolute inset-0 bg-black/25" />}
-      <Hint needsAccessibility={needsAccessibility} />
+      <Hint dragging={target?.drag ?? false} needsAccessibility={needsAccessibility} />
     </div>
   );
 }
@@ -84,7 +86,7 @@ function Outline({ target }: { target: Highlight }) {
 
   return (
     <div
-      className="absolute rounded-md border-2 border-accent"
+      className={target.drag ? "absolute border-2 border-accent" : "absolute rounded-md border-2 border-accent"}
       style={{
         left: target.x,
         top: target.y,
@@ -95,9 +97,12 @@ function Outline({ target }: { target: Highlight }) {
         boxShadow: "0 0 0 9999px rgba(0,0,0,0.28), inset 0 0 0 1px rgba(255,255,255,0.22)",
         backgroundColor: "rgba(255,107,53,0.06)",
         // Slides between windows instead of teleporting, which is most of why
-        // this reads as snapping to something rather than blinking.
-        transition:
-          "left 90ms cubic-bezier(0.2,0.8,0.2,1), top 90ms cubic-bezier(0.2,0.8,0.2,1), width 90ms cubic-bezier(0.2,0.8,0.2,1), height 90ms cubic-bezier(0.2,0.8,0.2,1)",
+        // this reads as snapping to something rather than blinking — and is
+        // exactly wrong for a rectangle the user is dragging, where the same
+        // easing reads as the selection failing to keep up with the mouse.
+        transition: target.drag
+          ? "none"
+          : "left 90ms cubic-bezier(0.2,0.8,0.2,1), top 90ms cubic-bezier(0.2,0.8,0.2,1), width 90ms cubic-bezier(0.2,0.8,0.2,1), height 90ms cubic-bezier(0.2,0.8,0.2,1)",
       }}
     >
       <span
@@ -123,11 +128,19 @@ function Outline({ target }: { target: Highlight }) {
  * paragraph the moment you touch the wheel is a hint nobody finishes reading,
  * and the other advice keeps until the session after this one.
  */
-function Hint({ needsAccessibility }: { needsAccessibility: boolean }) {
+function Hint({
+  dragging,
+  needsAccessibility,
+}: {
+  dragging: boolean;
+  needsAccessibility: boolean;
+}) {
   return (
     <div className="absolute top-8 left-1/2 -translate-x-1/2 rounded-xl bg-black/75 px-4 py-2.5 text-center shadow-lg">
       <p className="text-[13.5px] font-medium text-white">
-        Point at a window, then click to capture it
+        {dragging
+          ? "Let go to capture this area"
+          : "Click a window or the desktop · drag to select an area"}
       </p>
       {needsAccessibility ? (
         <p className="mt-0.5 text-[11.5px] text-accent">

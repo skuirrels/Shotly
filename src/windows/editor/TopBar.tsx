@@ -69,9 +69,13 @@ interface Props {
   busy: string | null;
 }
 
+// All-in-one first, because it is the one that needs no decision beforehand:
+// point at a window and click, drag out an area, or click the desktop for the
+// screen. The other two stay for the people whose hands already know them, and
+// because Region hands the job to macOS' own crosshair, which some prefer.
 const MODES: { mode: CaptureMode; label: string; hint: string; shortcut: string; icon: typeof IconRegion }[] = [
+  { mode: "window", label: "Anything", hint: "Click a window, drag an area", shortcut: "Mod+Shift+5", icon: IconWindow },
   { mode: "region", label: "Region", hint: "Drag any area", shortcut: "Mod+Shift+4", icon: IconRegion },
-  { mode: "window", label: "Window", hint: "Pick a window", shortcut: "Mod+Shift+5", icon: IconWindow },
   { mode: "fullscreen", label: "Screen", hint: "Whole display", shortcut: "Mod+Shift+3", icon: IconDisplay },
 ];
 
@@ -427,19 +431,21 @@ const MODE_KEY = "shotly.captureMode";
 
 function storedMode(): CaptureMode {
   const saved = localStorage.getItem(MODE_KEY) as CaptureMode | null;
-  return saved && MODES.some((m) => m.mode === saved) ? saved : "region";
+  // All-in-one unless someone has chosen otherwise: it is the only one that
+  // can be wrong about nothing, since the choice is made by pointing.
+  return saved && MODES.some((m) => m.mode === saved) ? saved : "window";
 }
 
 /**
  * Capture as a split button: the main half fires one mode, the chevron offers
  * the others.
  *
- * The main half is labelled with the mode it will actually run — "Region", not
- * "Capture" — because a button called Capture sitting above a menu of three
- * capture modes gives no clue which of the three you get by pressing it. The
- * menu marks the same mode as current, and picking a different one both
- * captures immediately and rebinds the button, so it settles on whichever mode
- * you actually use.
+ * The main half says "Capture", because that is what it does; which mode it
+ * will run is in the tooltip, and the menu badges the same one as current.
+ * Naming the mode on the button instead was tried and read as a filter — a
+ * button labelled "Window" above a list of capture modes looks like a state,
+ * not a verb. Picking a different mode both captures immediately and rebinds
+ * the button, so it settles on whichever one you actually use.
  */
 function CaptureMenu({
   onCapture,

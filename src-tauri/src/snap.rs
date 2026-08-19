@@ -1,12 +1,17 @@
-//! Point at a window; Shotly outlines it and takes it.
+//! Point at what you want; Shotly outlines it and takes it.
 //!
-//! Snagit's window capture is the thing being answered here: an outline that
-//! follows the pointer, snaps to whatever is under it, and takes that on click.
-//! Shotly had a version of this once, drawn from `CGWindowListCopyWindowInfo`,
-//! and it was removed because that list contains windows which are not on
-//! screen and cannot be told apart from ones that are. See `ax.rs` for what
-//! replaced it and why the accessibility API can be trusted where the window
-//! list could not.
+//! Snagit's all-in-one capture is the thing being answered here: one session
+//! that gives you three captures, and never asks which you meant beforehand.
+//! Click a window and it takes that window; click the desktop and it takes the
+//! screen; press and drag and it takes the rectangle you drew instead. The
+//! choice is made by pointing, which is the whole advantage — picking a mode
+//! first means finding out afterwards that it was the wrong one.
+//!
+//! Shotly had a version of the outline once, drawn from
+//! `CGWindowListCopyWindowInfo`, and it was removed because that list contains
+//! windows which are not on screen and cannot be told apart from ones that
+//! are. See `ax.rs` for what replaced it and why the accessibility API can be
+//! trusted where the window list could not.
 //!
 //! # Who owns the click
 //!
@@ -99,6 +104,26 @@ const MAX_REARMS: u32 = 5;
 /// The only key the tap answers for.
 const KEY_ESCAPE: i64 = 53;
 
+/// How far the pointer must travel with the button down before the gesture is
+/// a drag rather than a click.
+///
+/// A click is nobody's steady hand: pressing hard enough to mean it moves the
+/// pointer a point or two, and treating that as a two-pixel selection instead
+/// of taking the window would be maddening. Generous on purpose — a drag
+/// anyone intends is far larger than this.
+const DRAG_SLOP: f64 = 6.0;
+
+/// The smallest area a drag can end on and still be worth capturing.
+const MIN_REGION: f64 = 8.0;
+
+/// How often the rubber band is redrawn while an area is being dragged.
+///
+/// Faster than [`POLL`] because it can afford to be: a drag asks the
+/// accessibility API nothing at all, it is two subtractions and an emit, and a
+/// selection rectangle that lags the pointer by 40ms feels broken in a way a
+/// snapping outline does not.
+const DRAG_POLL: Duration = Duration::from_millis(16);
+
 /// How closely a window's bounds must match an accessibility frame to be
 /// considered the same window. They agree exactly in practice; this is slack
 /// for a float that has been converted twice.
@@ -122,9 +147,26 @@ static REARM: AtomicBool = AtomicBool::new(false);
 /// access to answer it with. See `ask_for_accessibility`.
 static WANTED_AX: AtomicBool = AtomicBool::new(false);
 
+/// Where the button went down, and where the pointer is now — global points,
+/// as `f64` bits, because the tap callback may not allocate or lock and this
+/// is the cheapest thing that can carry a coordinate out of it.
+static PRESS_X: AtomicU64 = AtomicU64::new(0);
+static PRESS_Y: AtomicU64 = AtomicU64::new(0);
+static POINT_X: AtomicU64 = AtomicU64::new(0);
+static POINT_Y: AtomicU64 = AtomicU64::new(0);
+/// Whether the button is currently held. The tracker draws the band from this
+/// and the live pointer rather than from the drag events, because a drag is not
+/// always delivered as one: anything driving the mouse programmatically —
+/// scripted tests, assistive software, some tablet drivers — moves the pointer
+/// with plain moved events while the button is down, and a band that only
+/// followed `LeftMouseDragged` simply never appeared for them.
+static PRESSED: AtomicBool = AtomicBool::new(false);
+
 const VERDICT_NONE: u8 = 0;
 const VERDICT_TAKE: u8 = 1;
 const VERDICT_CANCEL: u8 = 2;
+/// The button was released after a drag: take the rectangle, not the window.
+const VERDICT_REGION: u8 = 3;
 
 #[derive(Default)]
 pub struct SnapState {
@@ -157,6 +199,25 @@ struct Highlight {
     level: i32,
     depth: i32,
     window: bool,
+    /// This is a rectangle being dragged rather than something being pointed
+    /// at. The page draws it without the snapping animation: a band that eases
+    /// towards the pointer reads as lag, not as polish.
+    drag: bool,
+}
+
+/// What a click would take.
+///
+/// Three answers from one session, which is the whole point of it: the window
+/// under the pointer, the screen when the pointer is on nothing else, and the
+/// area if the button was dragged instead of clicked. Snagit calls this
+/// all-in-one, and the reason it wins is that the choice is made by pointing
+/// rather than by picking a mode beforehand and finding out afterwards that it
+/// was the wrong one.
+#[derive(Clone)]
+enum Aim {
+    Window(ax::Node),
+    Screen(Rect),
+    Region(Rect),
 }
 
 /// The window a level is counted from. When this changes, the level resets:
@@ -221,6 +282,38 @@ fn cursor() -> Option<(f64, f64)> {
     None
 }
 
+fn put(cell: &AtomicU64, value: f64) {
+    cell.store(value.to_bits(), Ordering::Relaxed);
+}
+
+fn got(cell: &AtomicU64) -> f64 {
+    f64::from_bits(cell.load(Ordering::Relaxed))
+}
+
+/// The rectangle between where the button went down and some later point,
+/// whichever way round it was dragged.
+fn dragged_to(x1: f64, y1: f64) -> Rect {
+    let (x0, y0) = (got(&PRESS_X), got(&PRESS_Y));
+    Rect {
+        x: x0.min(x1),
+        y: y0.min(y1),
+        width: (x1 - x0).abs(),
+        height: (y1 - y0).abs(),
+    }
+}
+
+/// The rectangle as it stood when the button came up — the exact one, taken
+/// from the event itself rather than from wherever the pointer has drifted to
+/// by the time the tracker next looks.
+fn dragged() -> Rect {
+    dragged_to(got(&POINT_X), got(&POINT_Y))
+}
+
+/// Is a rectangle this size a drag, or a click with a shaky hand?
+fn is_drag(rect: Rect) -> bool {
+    rect.width > DRAG_SLOP || rect.height > DRAG_SLOP
+}
+
 /// Start pointing. Idempotent: a second call while a session is up does nothing.
 ///
 /// Screen recording is the only permission this needs. It used to demand
@@ -248,6 +341,7 @@ pub fn begin(app: &AppHandle) -> Result<(), String> {
     LEVEL.store(0, Ordering::SeqCst);
     SCROLL.store(0, Ordering::SeqCst);
     VERDICT.store(VERDICT_NONE, Ordering::SeqCst);
+    PRESSED.store(false, Ordering::SeqCst);
     REARM.store(false, Ordering::SeqCst);
     WANTED_AX.store(false, Ordering::SeqCst);
 
@@ -462,14 +556,44 @@ fn spawn_tap(generation: u64) {
             ],
             move |_proxy, etype, event| {
                 match etype {
+                    // The verdict waits for the button to come back up,
+                    // because until then a press is not yet a click: the same
+                    // gesture becomes a dragged area if the pointer travels.
+                    // Reading the location is a struct copy out of the event
+                    // that is already in hand — still nothing this callback has
+                    // to think about.
                     CGEventType::LeftMouseDown => {
-                        decide(VERDICT_TAKE);
+                        let at = event.location();
+                        put(&PRESS_X, at.x);
+                        put(&PRESS_Y, at.y);
+                        put(&POINT_X, at.x);
+                        put(&POINT_Y, at.y);
+                        PRESSED.store(true, Ordering::SeqCst);
                         CallbackResult::Drop
                     }
-                    // The other half of a click we already took, and any drag
-                    // that follows it. Passing these on would leave whatever is
+                    CGEventType::LeftMouseDragged => {
+                        let at = event.location();
+                        put(&POINT_X, at.x);
+                        put(&POINT_Y, at.y);
+                        CallbackResult::Drop
+                    }
+                    // The end of the gesture, and where it is decided — on the
+                    // two points, not on whether the tracker noticed in time.
+                    // A flick drawn and released inside one poll tick is still
+                    // a drag, and it is the release that says so.
+                    //
+                    // Dropped either way: passing it on would leave whatever is
                     // underneath handling a mouse-up it never saw pressed.
-                    CGEventType::LeftMouseUp | CGEventType::LeftMouseDragged => {
+                    CGEventType::LeftMouseUp => {
+                        let at = event.location();
+                        put(&POINT_X, at.x);
+                        put(&POINT_Y, at.y);
+                        PRESSED.store(false, Ordering::SeqCst);
+                        decide(if is_drag(dragged_to(at.x, at.y)) {
+                            VERDICT_REGION
+                        } else {
+                            VERDICT_TAKE
+                        });
                         CallbackResult::Drop
                     }
                     CGEventType::RightMouseDown | CGEventType::RightMouseUp => {
@@ -604,8 +728,11 @@ fn spawn_tap(_generation: u64) {}
 fn spawn_tracker(app: AppHandle, generation: u64) {
     std::thread::spawn(move || {
         let stack = Stack::take();
+        // Read once, like the window list and for the same reason: nothing can
+        // be moved or rearranged while the tap holds the mouse.
+        let screens = display::displays().unwrap_or_default();
         let mut shown: Option<Highlight> = None;
-        let mut target: Option<ax::Node> = None;
+        let mut aim: Option<Aim> = None;
         let mut anchor: Option<Anchor> = None;
         // Where the pointer was, and at what level, the last time the outline
         // was worked out.
@@ -617,12 +744,25 @@ fn spawn_tracker(app: AppHandle, generation: u64) {
                     // What the outline was on at the instant of the click, not
                     // what is under the pointer now — those differ by a frame
                     // and the user chose the one they could see.
-                    let chosen = target.clone();
-                    stop(&app, "a window was taken");
+                    let chosen = aim.clone();
+                    stop(&app, "a target was taken");
                     ask_for_accessibility();
                     match chosen {
-                        Some(node) => finish(&app, node),
+                        Some(chosen) => finish(&app, chosen),
                         None => commands::reveal_after_capture(&app),
+                    }
+                    return;
+                }
+                VERDICT_REGION => {
+                    let rect = dragged();
+                    stop(&app, "an area was dragged");
+                    ask_for_accessibility();
+                    // A drag that ended almost where it started is somebody
+                    // changing their mind, not a two-point capture.
+                    if rect.width >= MIN_REGION && rect.height >= MIN_REGION {
+                        finish(&app, Aim::Region(rect));
+                    } else {
+                        commands::reveal_after_capture(&app);
                     }
                     return;
                 }
@@ -657,6 +797,37 @@ fn spawn_tracker(app: AppHandle, generation: u64) {
                 continue;
             };
 
+            // An area is being dragged out. Nothing is being pointed at while
+            // that lasts — the rectangle is the answer — so the whole resolve,
+            // which is the expensive half of this loop, is skipped. Drawn from
+            // the pointer this loop already polls, so it follows a drag however
+            // the drag reaches the machine.
+            if PRESSED.load(Ordering::SeqCst) && is_drag(dragged_to(x, y)) {
+                let rect = dragged_to(x, y);
+                let band = Highlight {
+                    x: rect.x,
+                    y: rect.y,
+                    width: rect.width,
+                    height: rect.height,
+                    label: "Selection".into(),
+                    size: format!("{} × {}", rect.width.round(), rect.height.round()),
+                    level: 0,
+                    depth: 0,
+                    window: false,
+                    drag: true,
+                };
+                if shown.as_ref() != Some(&band) {
+                    shown = Some(band.clone());
+                    *app.state::<SnapState>().last.lock().unwrap() = Some(band.clone());
+                    show(&app, Some(&band));
+                }
+                // The pointer has moved a long way by the time a band is let
+                // go, and the cached answer belongs to where it started.
+                last = None;
+                std::thread::sleep(DRAG_POLL);
+                continue;
+            }
+
             // A tick where nothing has moved does no work. Level 0 is now only
             // a hit test against a list already in hand and would be cheap to
             // repeat, but the levels below it are still IPC to another
@@ -673,15 +844,22 @@ fn spawn_tracker(app: AppHandle, generation: u64) {
             }
             last = Some((x, y, level));
 
-            let found = resolve(&stack, x, y, level, &mut anchor);
-            let (node, next) = match found {
-                Some((node, highlight)) => (Some(node), Some(highlight)),
+            // A window if the pointer is on one, and the screen it is on if it
+            // is not. Pointing at the desktop used to mean pointing at nothing:
+            // no outline, and a click that ended the session having taken
+            // nothing at all.
+            let found = match resolve(&stack, x, y, level, &mut anchor) {
+                Some((node, highlight)) => Some((Aim::Window(node), highlight)),
+                None => whole_screen(&screens, x, y),
+            };
+            let (found, next) = match found {
+                Some((found, highlight)) => (Some(found), Some(highlight)),
                 None => (None, None),
             };
 
             if next != shown {
                 shown = next.clone();
-                target = node;
+                aim = found;
                 // Recorded before it is sent, so that a page which is not
                 // listening yet can be given it on `snap_ready`.
                 *app.state::<SnapState>().last.lock().unwrap() = next.clone();
@@ -841,9 +1019,41 @@ fn resolve(
         level,
         depth,
         window: node.window,
+        drag: false,
     };
 
     Some((node, highlight))
+}
+
+/// The display the pointer is on, offered whole.
+///
+/// What makes the all-in-one all-in-one: with no window under the pointer
+/// there is still something worth taking, and it is the thing the desktop is
+/// showing. Nothing here needs accessibility or a window list — a point in a
+/// rectangle is the entire question.
+fn whole_screen(screens: &[crate::capture::DisplayInfo], x: f64, y: f64) -> Option<(Aim, Highlight)> {
+    let bounds = screens
+        .iter()
+        .find(|d| {
+            let b = d.bounds;
+            x >= b.x && y >= b.y && x < b.x + b.width && y < b.y + b.height
+        })?
+        .bounds;
+
+    let highlight = Highlight {
+        x: bounds.x,
+        y: bounds.y,
+        width: bounds.width,
+        height: bounds.height,
+        label: "Whole screen".into(),
+        size: format!("{} × {}", bounds.width.round(), bounds.height.round()),
+        level: 0,
+        depth: 0,
+        window: false,
+        drag: false,
+    };
+
+    Some((Aim::Screen(bounds), highlight))
 }
 
 /// Global point space to the overlay page's own coordinates.
@@ -881,14 +1091,14 @@ fn caption(node: &ax::Node) -> String {
 
 // ---------------------------------------------------------------- the capture
 
-/// Take what was pointed at, and open it in the editor.
-fn finish(app: &AppHandle, node: ax::Node) {
+/// Take what was pointed at — or dragged out — and open it in the editor.
+fn finish(app: &AppHandle, aim: Aim) {
     // The overlay is closed by now, but closing is not the same as gone: the
     // crop path photographs the screen, and a window the compositor has yet to
     // drop would still be in the picture.
     std::thread::sleep(SETTLE);
 
-    match capture(app, &node) {
+    match capture(app, &aim) {
         Ok(frame) => {
             if let Err(err) = commands::deliver(app, frame) {
                 eprintln!("[snap] could not open the capture: {err}");
@@ -902,24 +1112,36 @@ fn finish(app: &AppHandle, node: ax::Node) {
     }
 }
 
-fn capture(app: &AppHandle, node: &ax::Node) -> Result<Frame, String> {
+fn capture(app: &AppHandle, aim: &Aim) -> Result<Frame, String> {
     let state = app.state::<AppState>();
 
-    // A whole window is better taken by id: that reads the window's own backing
-    // store, so anything overlapping it is simply not in the picture. Falling
-    // back to the screen matters more than it sounds — a full-screen window
-    // cannot be captured by id at all, and it is exactly the size of a display,
-    // so cropping the screen to it gives the same pixels.
-    if node.window {
-        if let Some(id) = window_id_for(&state, node) {
-            match state.backend.capture_window(id) {
-                Ok(frame) => return Ok(frame),
-                Err(err) => eprintln!("[snap] window {id} could not be captured by id: {err}"),
+    let rect = match aim {
+        // A whole window is better taken by id: that reads the window's own
+        // backing store, so anything overlapping it is simply not in the
+        // picture. Falling back to the screen matters more than it sounds — a
+        // full-screen window cannot be captured by id at all, and it is exactly
+        // the size of a display, so cropping the screen to it gives the same
+        // pixels.
+        Aim::Window(node) => {
+            if node.window {
+                if let Some(id) = window_id_for(&state, node) {
+                    match state.backend.capture_window(id) {
+                        Ok(frame) => return Ok(frame),
+                        Err(err) => {
+                            eprintln!("[snap] window {id} could not be captured by id: {err}")
+                        }
+                    }
+                }
             }
+            node.rect
         }
-    }
+        // A screen and an area are the same operation: photograph the display
+        // and cut a rectangle out of it. For a screen the rectangle happens to
+        // be the whole thing.
+        Aim::Screen(rect) | Aim::Region(rect) => *rect,
+    };
 
-    crop_screen(&state, node.rect)
+    crop_screen(&state, rect)
 }
 
 /// The CGWindowID behind an accessibility window.
@@ -1020,6 +1242,69 @@ mod tests {
             pid,
             full_screen: false,
         }
+    }
+
+    fn screen(x: f64, y: f64, width: f64, height: f64) -> crate::capture::DisplayInfo {
+        crate::capture::DisplayInfo {
+            id: 1,
+            bounds: rect(x, y, width, height),
+            scale: 2.0,
+            is_primary: true,
+        }
+    }
+
+    /// A rectangle is whatever two corners were involved, in whichever order
+    /// they were named: people drag up and to the left as readily as down and
+    /// to the right, and a negative width is not a selection anyone can crop.
+    #[test]
+    fn an_area_is_the_same_whichever_way_it_was_dragged() {
+        put(&PRESS_X, 400.0);
+        put(&PRESS_Y, 300.0);
+        put(&POINT_X, 100.0);
+        put(&POINT_Y, 120.0);
+        assert_eq!(dragged(), rect(100.0, 120.0, 300.0, 180.0));
+
+        put(&PRESS_X, 100.0);
+        put(&PRESS_Y, 120.0);
+        put(&POINT_X, 400.0);
+        put(&POINT_Y, 300.0);
+        assert_eq!(dragged(), rect(100.0, 120.0, 300.0, 180.0));
+    }
+
+    /// Pressing hard enough to mean it moves the pointer a point or two, and
+    /// that has to stay a click on the window rather than become a selection
+    /// three pixels across.
+    #[test]
+    fn a_click_with_a_shaky_hand_is_still_a_click() {
+        put(&PRESS_X, 500.0);
+        put(&PRESS_Y, 500.0);
+        assert!(!is_drag(dragged_to(502.0, 497.0)));
+        assert!(!is_drag(dragged_to(506.0, 506.0)));
+        // And a gesture anyone meant is far past it.
+        assert!(is_drag(dragged_to(520.0, 501.0)));
+        assert!(is_drag(dragged_to(500.0, 460.0)));
+    }
+
+    /// Pointing at the desktop used to mean pointing at nothing: no outline,
+    /// and a click that ended the session having taken nothing at all.
+    #[test]
+    fn the_desktop_offers_the_screen_it_belongs_to() {
+        // Two displays side by side, the second one to the left of the first.
+        let screens = [screen(0.0, 0.0, 1512.0, 982.0), screen(-2560.0, -200.0, 2560.0, 1440.0)];
+
+        let (aim, highlight) = whole_screen(&screens, 700.0, 500.0).expect("the pointer is on one");
+        assert!(matches!(aim, Aim::Screen(r) if r == rect(0.0, 0.0, 1512.0, 982.0)));
+        assert_eq!(highlight.width, 1512.0);
+        assert!(!highlight.drag);
+
+        // The one with a negative origin is found by the same arithmetic, and
+        // it is the reason the test has two: a display placed above or to the
+        // left of the primary is where an off-by-origin bug shows up.
+        let (aim, _) = whole_screen(&screens, -1000.0, 100.0).expect("the pointer is on the other");
+        assert!(matches!(aim, Aim::Screen(r) if r == rect(-2560.0, -200.0, 2560.0, 1440.0)));
+
+        // And a point on neither is nothing to offer, not the nearest guess.
+        assert!(whole_screen(&screens, 5000.0, 5000.0).is_none());
     }
 
     #[test]

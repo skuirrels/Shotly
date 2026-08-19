@@ -62,7 +62,7 @@ impl Action {
     pub fn label(self) -> &'static str {
         match self {
             Action::Region => "Capture region",
-            Action::Window => "Capture window",
+            Action::Window => "Capture anything",
             Action::Fullscreen => "Capture full screen",
             Action::Scroll => "Scrolling capture",
             Action::Annotate => "Annotate the screen",
@@ -75,7 +75,7 @@ impl Action {
     pub fn hint(self) -> &'static str {
         match self {
             Action::Region => "Drag out the part of the screen to keep.",
-            Action::Window => "Pick a window; Shotly takes it whole.",
+            Action::Window => "Click a window or the desktop, or drag out an area.",
             Action::Fullscreen => "The whole display, straight to the library.",
             Action::Scroll => "Pick a region, scroll the page yourself; Shotly stitches it.",
             Action::Annotate => "Draw over the live screen. Also the way out.",
