@@ -16,10 +16,19 @@ interface Props {
  * pushing the Relaunch button off the notice.
  */
 function Changes({ notes }: { notes: string | null }) {
-  const lines = (notes ?? "")
-    .split("\n")
-    .map((line) => line.replace(/^\s*[-*]\s*/, "").trim())
-    .filter(Boolean);
+  // A bullet in the changelog is wrapped across as many lines as it takes, so
+  // the lines have to be put back together: splitting on newlines alone turned
+  // one sentence into four bullets, each starting mid-clause.
+  const lines: string[] = [];
+  for (const raw of (notes ?? "").split("\n")) {
+    const line = raw.trim();
+    if (!line) continue;
+    if (/^[-*]\s+/.test(line) || lines.length === 0) {
+      lines.push(line.replace(/^[-*]\s+/, ""));
+    } else {
+      lines[lines.length - 1] += ` ${line}`;
+    }
+  }
 
   if (lines.length === 0) return null;
 
