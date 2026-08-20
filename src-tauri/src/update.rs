@@ -126,13 +126,36 @@ async fn install(app: &AppHandle, announce: bool) -> Result<(), String> {
         emit(app, Status::Checking);
     }
 
-    let updater = app.updater().map_err(|e| e.to_string())?;
+    // Asked for without a cache in the way, and asked for out loud.
+    //
+    // The manifest comes back from GitHub with no `cache-control` and no
+    // `expires` — only `last-modified` and an etag — which is exactly the
+    // response any intermediary is entitled to invent a freshness lifetime
+    // for, the usual guess being a tenth of the file's age. A release
+    // published an hour ago therefore reads as fresh for six minutes to a
+    // proxy that has seen the previous answer, and the update quietly does
+    // not exist for that long. `no-cache` on the request is the standard
+    // instruction not to do that: serve it, but revalidate first.
+    let updater = app
+        .updater_builder()
+        .header("Cache-Control", "no-cache")
+        .map_err(|e| e.to_string())?
+        .header("Pragma", "no-cache")
+        .map_err(|e| e.to_string())?
+        .build()
+        .map_err(|e| e.to_string())?;
+
     let Some(update) = updater.check().await.map_err(|e| e.to_string())? else {
+        // Logged either way, because "the updater cannot see it" is otherwise
+        // impossible to tell from "the updater has not looked yet" — and the
+        // two have completely different answers.
+        eprintln!("[shotly] update check: already newest ({})", app.package_info().version);
         if announce {
             emit(app, Status::UpToDate);
         }
         return Ok(());
     };
+    eprintln!("[shotly] update check: {} is available", update.version);
 
     let version = update.version.clone();
     let notes = update.body.clone();
