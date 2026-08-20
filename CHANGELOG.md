@@ -8,6 +8,14 @@ The release notes on GitHub and the "what's new" text the in-app updater shows
 are both taken from this file — see `docs/RELEASING.md`. A version with nothing
 written here cannot be published.
 
+## 0.10.20 — 2026-08-20
+
+- Pointing at a web page frames the whole page again. Capturing a browser
+  outlined the page from below the site's own header — a repository's
+  navigation, an app's coloured title bar — because the trim that removes the
+  browser's toolbars kept going and took the site's with them. It now stops
+  where the browser stops.
+
 ## 0.10.19 — 2026-08-20
 
 - Rectangles have a corner radius. Square by default, which is what a box
