@@ -8,6 +8,14 @@ The release notes on GitHub and the "what's new" text the in-app updater shows
 are both taken from this file — see `docs/RELEASING.md`. A version with nothing
 written here cannot be published.
 
+## 0.10.21 — 2026-08-20
+
+- Pointing at a browser frames the page for as long as the app is running.
+  The trim that removes a browser's toolbars used to stop working part way
+  through a session — the outline would quietly go back to taking the whole
+  window, and stay that way until Shotly was restarted. Chrome, Edge, Brave,
+  and anything else built on Chromium: Slack, Teams, VS Code, Discord.
+
 ## 0.10.20 — 2026-08-20
 
 - Pointing at a web page frames the whole page again. Capturing a browser
