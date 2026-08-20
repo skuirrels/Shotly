@@ -8,6 +8,19 @@ The release notes on GitHub and the "what's new" text the in-app updater shows
 are both taken from this file — see `docs/RELEASING.md`. A version with nothing
 written here cannot be published.
 
+## 0.10.18 — 2026-08-20
+
+- Capture what a window is showing, rather than the toolbars above it. Point at
+  a page and Shotly frames the page; point at the ribbon and it frames the whole
+  window, because that is what you pointed at. Captures of a Word document used
+  to arrive with two inches of ribbon across the top to be cropped off by hand.
+  Scroll up to take the whole window anyway, scroll down to tighten further in.
+- The same in Chrome, Edge and Brave, which tell nothing to anyone about where
+  their toolbars end. Where an application will not say, Shotly works it out
+  from the window itself.
+- Groundwork for a Windows version: everything platform-specific now lives in
+  one place, and both platforms are built and checked on every push.
+
 ## 0.10.17 — 2026-08-19
 
 - Capture works on every screen again. With more than one display, the
