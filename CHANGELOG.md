@@ -8,6 +8,17 @@ The release notes on GitHub and the "what's new" text the in-app updater shows
 are both taken from this file — see `docs/RELEASING.md`. A version with nothing
 written here cannot be published.
 
+## 0.10.19 — 2026-08-20
+
+- Rectangles have a corner radius. Square by default, which is what a box
+  drawn round a button or a paragraph should be — the old fixed rounding was
+  too slight to look deliberate and too much to look sharp. The control sits
+  beside the stroke width, rounds a rectangle you have already drawn, and is
+  remembered, so rounded or square stays whichever you chose.
+- Shotly notices a new version sooner. The update check now asks for the
+  release manifest without a cache in the way, so a version published minutes
+  ago is not read as one that does not exist yet.
+
 ## 0.10.18 — 2026-08-20
 
 - Capture what a window is showing, rather than the toolbars above it. Point at
