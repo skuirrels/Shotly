@@ -311,6 +311,11 @@ impl Bands {
     /// question could not be put at all, which is a different thing and must
     /// not be remembered as the first: an application that was busy for one
     /// frame would otherwise have the trim switched off for the whole session.
+    ///
+    /// A reply that describes nothing counts as the second, not the first —
+    /// see [`ax::describes_window`]. It reaches `look` by the same three
+    /// tries, which costs an application that is merely slow nothing and gets
+    /// a Chromium window onto the pixels where it belongs.
     fn ask(window: &ax::Node) -> Option<Option<f64>> {
         // Without accessibility this feature is off, rather than falling back
         // to reading pixels for every window on the desktop. The fallback is
@@ -319,6 +324,13 @@ impl Bands {
             return Some(None);
         }
         let children = ax::window_children(window.pid, window.rect)?;
+        // Replying is not the same as answering. A window described only as
+        // itself plus its traffic lights has told us nothing, and taking that
+        // for "nothing above the contents" is what switched the pixel fallback
+        // off for every Chromium window the moment Chrome's tree came on.
+        if !ax::describes_window(window.rect, &children) {
+            return None;
+        }
         Some(ax::content_top(window.rect, &children))
     }
 

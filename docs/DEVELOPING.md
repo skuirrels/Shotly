@@ -497,6 +497,28 @@ nothing above its contents, and `Bands` keeps those two apart: `Asked::Answer`
 is a settled answer, `Asked::Looking` is a window being read off the screen
 instead. Only the second ever reaches `edges`.
 
+**A reply is not a description**, and the gate has to know the difference.
+Chrome refuses everyone — until it doesn't: querying a Chromium process long
+enough switches its accessibility tree on, and Shotly does exactly that, every
+tick, for as long as a session runs. What it then answers with is four
+children: one `AXGroup` whose frame is the window's frame to the pixel, and the
+three 16x16 buttons that close, minimise and zoom it. The window restated, and
+its traffic lights.
+
+That is worse than silence. `ax::content_top` correctly finds no chrome in it,
+`Bands` reads that as *this window has nothing above its contents*, marks it
+`Asked::Answer(None)` — and the pixel fallback, which had been reading those
+windows correctly, never runs again for that window. The trim simply
+disappears, on the windows it was written for, some minutes into using the app.
+
+`ax::describes_window` is the guard: a child counts only if it is a real
+division of the window — at least half its width, at least `MIN_CHROME` tall,
+and not simply the window handed back. Nothing qualifying means nothing was
+said, `ask` returns the bare `None`, and the window reaches the pixels through
+the same three tries an application that is merely busy gets. Structural rather
+than a check for Chrome, because a Chromium shell is this shape wherever it
+turns up.
+
 The rule there is that window chrome is a stack of full-width strips, so the
 boundary is the **last full-width horizontal step** inside the top of the
 window — a step, not a line, because the colour has to differ above and below.

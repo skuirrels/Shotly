@@ -72,6 +72,14 @@ const MAX_CHROME: f64 = 0.5;
 /// been through a coordinate conversion.
 const EDGE_SLACK: f64 = 2.0;
 
+/// How much of the window's width a child must span before it counts as having
+/// divided the window at all.
+///
+/// Far below [`CHROME_WIDTH`], because this is a different question: not "is
+/// this child a toolbar" but "has the application said anything about the
+/// shape of its window". Half the width is enough to be a pane.
+const DIVIDES_WIDTH: f64 = 0.5;
+
 /// One thing that could be captured: a rectangle, and what the system calls it.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Node {
@@ -128,6 +136,34 @@ pub fn refine(chain: Vec<Node>, x: f64, y: f64) -> Vec<Node> {
     }
 
     out
+}
+
+/// Whether these children amount to a description of the window at all.
+///
+/// A reply is not a description. Chrome answers the accessibility API — once
+/// something has prompted it to switch its tree on, which querying it for long
+/// enough will — with exactly four children: one `AXGroup` whose frame is the
+/// window's own frame to the pixel, and the three 16x16 buttons in the corner
+/// that close, minimise and zoom it. That is the window restated and its
+/// traffic lights. It says nothing whatever about where the tab strip ends or
+/// the page begins.
+///
+/// Left unchecked it is worse than silence, because [`content_top`] correctly
+/// finds no chrome in it and the caller reads that as *this window has nothing
+/// above its contents* — a settled answer, which switches off the pixel
+/// fallback that was reading such windows correctly. So a child only counts if
+/// it is a real division of the window: wide enough to be a pane, tall enough
+/// to be furniture, and not simply the window handed back again.
+///
+/// The test is structural rather than a check for Chrome, because Chrome is
+/// not the only thing that answers this way — a Chromium shell is the same
+/// shape wherever it turns up.
+pub fn describes_window(window: Rect, children: &[Node]) -> bool {
+    children.iter().any(|child| {
+        !same(child.rect, window)
+            && child.rect.width >= window.width * DIVIDES_WIDTH
+            && child.rect.height >= MIN_CHROME
+    })
 }
 
 /// Where a window's own contents begin, below whatever it stacks on top of
@@ -201,6 +237,50 @@ mod tests {
             pid: 1,
             window: false,
         }
+    }
+
+    /// Chrome's whole answer, measured: a 1512x895 window at (0,33) whose
+    /// children are one group with the window's own frame and the three 16x16
+    /// buttons that close, minimise and zoom it. Nothing there divides the
+    /// window, so it is not an answer and the pixels have to be looked at.
+    #[test]
+    fn a_window_restated_with_its_traffic_lights_describes_nothing() {
+        let window = Rect { x: 0.0, y: 33.0, width: 1512.0, height: 895.0 };
+        let children = vec![
+            node(0.0, 33.0, 1512.0, 895.0),
+            node(12.0, 45.5, 16.0, 16.0),
+            node(35.0, 45.5, 16.0, 16.0),
+            node(58.0, 45.5, 16.0, 16.0),
+        ];
+        assert!(!describes_window(window, &children));
+        // And the reason it matters: the rule below finds no chrome in it,
+        // which read as a settled "nothing to cut" is what took the trim away.
+        assert_eq!(content_top(window, &children), None);
+    }
+
+    /// A window described the way an application that means it describes one.
+    /// Word's shape: a title bar, a ribbon, and the document under them.
+    #[test]
+    fn a_window_with_furniture_in_it_describes_itself() {
+        let window = Rect { x: 0.0, y: 0.0, width: 1822.0, height: 1068.0 };
+        let children = vec![
+            node(0.0, 0.0, 1822.0, 40.0),
+            node(0.0, 40.0, 1822.0, 105.0),
+            node(0.0, 145.0, 1822.0, 903.0),
+        ];
+        assert!(describes_window(window, &children));
+    }
+
+    /// An application with nothing above its contents still describes its
+    /// window, so long as it says so with something other than the window: a
+    /// content pane inset below the title bar is an answer, and must not be
+    /// sent to the pixels to be second-guessed.
+    #[test]
+    fn a_window_that_is_all_contents_still_describes_itself() {
+        let window = Rect { x: 0.0, y: 0.0, width: 900.0, height: 700.0 };
+        let children = vec![node(0.0, 28.0, 900.0, 672.0)];
+        assert!(describes_window(window, &children));
+        assert_eq!(content_top(window, &children), None);
     }
 
     #[test]
