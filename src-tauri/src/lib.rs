@@ -5,6 +5,7 @@ mod build_info;
 mod capture;
 mod combine;
 mod commands;
+mod edges;
 mod hotkeys;
 mod markup;
 mod ocr;

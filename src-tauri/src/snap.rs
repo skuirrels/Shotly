@@ -38,11 +38,13 @@
 //!   that is swallowing the clicks.
 
 use crate::ax;
+use crate::edges;
 use crate::capture::{display, CaptureBackend, Frame, Rect};
 use crate::commands::{self, AppState};
 use crate::platform::pointer;
 use serde::Serialize;
 use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU64, Ordering};
+use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder};
@@ -215,56 +217,91 @@ impl Anchor {
 /// editor in the instant before the window server finishes taking it off the
 /// screen, and one such answer used to switch the trim off for the rest of the
 /// session — with the pointer standing still, nothing ever asked again.
-#[derive(Default)]
-struct Bands(Vec<Band>);
+///
+/// A window that will not answer at all is a different case again, and it gets
+/// looked at instead of asked. See [`Asked::Looking`] and `edges`.
+struct Bands {
+    seen: Vec<Band>,
+    /// Answers coming back from the scans, which run off the tracker's thread.
+    told: Sender<(Anchor, Option<f64>)>,
+    inbox: Receiver<(Anchor, Option<f64>)>,
+}
 
 struct Band {
     window: Anchor,
-    /// Where this window's contents begin. `None` is a real answer: a window
-    /// with nothing above its contents worth cutting off.
-    top: Option<f64>,
-    /// How many more times to ask before `top` is believed. A window that has
-    /// answered is never asked again; one that cannot answer is asked a few
-    /// times and then taken at its silence, so that an application which never
-    /// answers at all costs a handful of probes rather than one per tick.
-    tries: u8,
+    state: Asked,
 }
 
-/// How many times a window may fail to answer before it is left alone.
+/// How far along the question is, for one window.
+enum Asked {
+    /// Still being put to the application itself, with this many tries left.
+    Application(u8),
+    /// The application refused; its pixels are being read on another thread.
+    Looking,
+    /// Settled. `None` is an answer: a window with nothing above its contents
+    /// worth cutting off.
+    Answer(Option<f64>),
+}
+
+/// How many times a window may fail to answer before it is looked at instead.
 const TRIES: u8 = 3;
 
 impl Bands {
-    fn top(&mut self, window: &ax::Node) -> Option<f64> {
+    fn new() -> Self {
+        let (told, inbox) = mpsc::channel();
+        Bands { seen: Vec::new(), told, inbox }
+    }
+
+    fn top(&mut self, app: &AppHandle, window: &ax::Node) -> Option<f64> {
+        self.collect();
+
         let here = Anchor { pid: window.pid, rect: window.rect };
-        let at = match self.0.iter().position(|band| band.window.same_window_as(here)) {
+        let at = match self.seen.iter().position(|band| band.window.same_window_as(here)) {
             Some(at) => at,
             None => {
-                self.0.push(Band { window: here, top: None, tries: TRIES });
-                self.0.len() - 1
+                self.seen.push(Band { window: here, state: Asked::Application(TRIES) });
+                self.seen.len() - 1
             }
         };
 
-        if self.0[at].tries > 0 {
-            match Self::ask(window) {
-                Some(top) => {
-                    self.0[at].top = top;
-                    self.0[at].tries = 0;
+        if let Asked::Application(left) = self.seen[at].state {
+            self.seen[at].state = match Self::ask(window) {
+                Some(top) => Asked::Answer(top),
+                None if left > 1 => Asked::Application(left - 1),
+                // Out of tries. An application that will not describe itself is
+                // not an application with nothing to describe — Chrome answers
+                // nothing at all, to anyone — so the last resort is to look at
+                // it rather than to take the silence for a no.
+                None => {
+                    self.look(app, here, window);
+                    Asked::Looking
                 }
-                None => self.0[at].tries -= 1,
-            }
+            };
         }
 
-        self.0[at].top
+        match self.seen[at].state {
+            Asked::Answer(top) => top,
+            _ => None,
+        }
+    }
+
+    /// Take delivery of any scan that has finished.
+    fn collect(&mut self) {
+        while let Ok((window, top)) = self.inbox.try_recv() {
+            if let Some(band) = self.seen.iter_mut().find(|b| b.window.same_window_as(window)) {
+                band.state = Asked::Answer(top);
+            }
+        }
     }
 
     /// Has every window seen so far given its answer?
     ///
     /// The tracker skips a tick where nothing has moved, and a pointer that
     /// arrives somewhere and stops moving is the ordinary case — so a window
-    /// still waiting to be asked has to keep that tick from being skipped, or
-    /// its second chance never comes.
+    /// still waiting on an answer has to keep that tick from being skipped, or
+    /// the answer arrives and nothing redraws.
     fn settled(&self) -> bool {
-        self.0.iter().all(|band| band.tries == 0)
+        self.seen.iter().all(|band| matches!(band.state, Asked::Answer(_)))
     }
 
     /// The window's own account of what it stacks above its contents.
@@ -275,11 +312,43 @@ impl Bands {
     /// not be remembered as the first: an application that was busy for one
     /// frame would otherwise have the trim switched off for the whole session.
     fn ask(window: &ax::Node) -> Option<Option<f64>> {
+        // Without accessibility this feature is off, rather than falling back
+        // to reading pixels for every window on the desktop. The fallback is
+        // for applications that refuse; it is not a second implementation.
         if !ax::trusted() {
             return Some(None);
         }
         let children = ax::window_children(window.pid, window.rect)?;
         Some(ax::content_top(window.rect, &children))
+    }
+
+    /// Read the window's own pixels, on a thread of its own.
+    ///
+    /// Off this one because it photographs a window and decodes a PNG, which
+    /// is orders of magnitude more than a 40ms tick can afford. Until the
+    /// answer lands the outline goes on framing the whole window and then
+    /// tightens, which is the right way round — never wrong, briefly less
+    /// specific.
+    fn look(&self, app: &AppHandle, here: Anchor, window: &ax::Node) {
+        let app = app.clone();
+        let window = window.clone();
+        let told = self.told.clone();
+        std::thread::spawn(move || {
+            // Answers even when it fails, because silence would leave this
+            // window `Looking` for the rest of the session — and the tracker
+            // does not skip a tick while anything is still being looked at.
+            let _ = told.send((here, Self::looked_at(&app, &window)));
+        });
+    }
+
+    fn looked_at(app: &AppHandle, window: &ax::Node) -> Option<f64> {
+        let state = app.state::<AppState>();
+        let id = window_id_for(&state, window)?;
+        // Flush, so that a row of pixels is a point below the window's top.
+        let frame = state.backend.capture_window_flush(id).ok()?;
+        let image = image::open(&frame.path).ok()?.into_rgba8();
+        let _ = std::fs::remove_file(&frame.path);
+        Some(window.rect.y + edges::content_top(&image, frame.scale)?)
     }
 }
 
@@ -580,7 +649,7 @@ fn spawn_tracker(app: AppHandle, generation: u64) {
         let screens = display::displays().unwrap_or_default();
         // Where each window's contents begin, filled in as the pointer
         // reaches them and never asked twice.
-        let mut bands = Bands::default();
+        let mut bands = Bands::new();
         let mut shown: Option<Highlight> = None;
         let mut aim: Option<Aim> = None;
         // The level being shown, which is what the wheel steps from.
@@ -727,7 +796,7 @@ fn spawn_tracker(app: AppHandle, generation: u64) {
             // is not. Pointing at the desktop used to mean pointing at nothing:
             // no outline, and a click that ended the session having taken
             // nothing at all.
-            let found = match resolve(&stack, &mut bands, x, y, &mut anchor) {
+            let found = match resolve(&app, &stack, &mut bands, x, y, &mut anchor) {
                 Some((node, highlight)) => Some((Aim::Window(node), highlight)),
                 None => whole_screen(&screens, x, y),
             };
@@ -864,6 +933,7 @@ impl Stack {
 /// while the pointer is over them, the window itself while it is over the
 /// toolbars stacked above them.
 fn resolve(
+    app: &AppHandle,
     stack: &Stack,
     bands: &mut Bands,
     x: f64,
@@ -886,7 +956,7 @@ fn resolve(
     // ribbon and you are pointing at the window, point at the page and you are
     // pointing at the page.
     let inside = bands
-        .top(&window)
+        .top(app, &window)
         .filter(|top| y >= *top)
         .map(|top| contents(&window, top));
 

@@ -136,6 +136,16 @@ pub trait CaptureBackend: Send + Sync {
     /// Capture a single window including its shadow and rounded corners.
     fn capture_window(&self, window_id: u32) -> Result<Frame>;
 
+    /// The same window with the shadow left off, so the image is exactly the
+    /// window's own rectangle and a row of pixels maps to a point on screen.
+    ///
+    /// Separate from `capture_window` rather than a flag on it because it is
+    /// not something anyone wants to look at — a window without its shadow
+    /// reads as badly cropped. This one is for measuring: see `edges`, which
+    /// works out where a window's toolbars end when the application will not
+    /// say.
+    fn capture_window_flush(&self, window_id: u32) -> Result<Frame>;
+
     fn list_windows(&self) -> Result<Vec<WindowInfo>>;
 
     fn displays(&self) -> Result<Vec<DisplayInfo>>;

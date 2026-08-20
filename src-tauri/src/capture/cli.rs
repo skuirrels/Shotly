@@ -206,6 +206,37 @@ impl ScreencaptureCli {
         Ok(Self { scratch })
     }
 
+    /// One window, with or without the shadow around it.
+    ///
+    /// `flush` is what makes the image measurable: with the shadow left off it
+    /// is exactly the window's rectangle, so image row `y` is point `y / scale`
+    /// below the window's top edge. With it on there is an inset on every side,
+    /// and an uneven one — the shadow falls further below a window than above
+    /// it — which no caller should have to know about.
+    fn shoot_window(&self, window_id: u32, flush: bool) -> Result<Frame> {
+        if !has_permission() {
+            return Err(CaptureError::PermissionDenied);
+        }
+
+        let bounds = display::windows()?
+            .into_iter()
+            .find(|w| w.id == window_id)
+            .map(|w| w.bounds)
+            .ok_or_else(|| CaptureError::Process("that window no longer exists".into()))?;
+
+        let path = self.temp_png("window");
+        let id_str = window_id.to_string();
+        let path_str = path.to_string_lossy().into_owned();
+        let mut args = vec!["-x", "-t", "png", "-l", &id_str];
+        if flush {
+            args.push("-o");
+        }
+        args.push(&path_str);
+        Self::run(&args)?;
+
+        Self::frame_from_file(path, bounds)
+    }
+
     fn temp_png(&self, tag: &str) -> PathBuf {
         let n = COUNTER.fetch_add(1, Ordering::Relaxed);
         let stamp = std::time::SystemTime::now()
@@ -380,24 +411,13 @@ impl CaptureBackend for ScreencaptureCli {
     }
 
     fn capture_window(&self, window_id: u32) -> Result<Frame> {
-        if !has_permission() {
-            return Err(CaptureError::PermissionDenied);
-        }
+        // No `-o`: the drop shadow is part of what makes a window capture look
+        // like a window capture.
+        self.shoot_window(window_id, false)
+    }
 
-        let bounds = display::windows()?
-            .into_iter()
-            .find(|w| w.id == window_id)
-            .map(|w| w.bounds)
-            .ok_or_else(|| CaptureError::Process("that window no longer exists".into()))?;
-
-        let path = self.temp_png("window");
-        let id_str = window_id.to_string();
-        let path_str = path.to_string_lossy().into_owned();
-        // No `-o` here: the drop shadow is part of what makes a window capture
-        // look like a window capture.
-        Self::run(&["-x", "-t", "png", "-l", &id_str, &path_str])?;
-
-        Self::frame_from_file(path, bounds)
+    fn capture_window_flush(&self, window_id: u32) -> Result<Frame> {
+        self.shoot_window(window_id, true)
     }
 
     fn list_windows(&self) -> Result<Vec<WindowInfo>> {

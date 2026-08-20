@@ -471,18 +471,57 @@ that declares nothing useful (Spotify draws its own chrome inside one
 `AXGroup`) is left whole, and so is one where the arithmetic would take more
 than half the window.
 
-**What this does not cover: Chrome.** Measured on Chrome 151, every
-accessibility question about the browser — `AXRole`, `AXWindows`, even *setting*
-`AXManualAccessibility` — comes back `kAXErrorAPIDisabled` (−25211). Nothing
-Shotly can do from outside changes that, and the same silence already switches
-off the scroll-to-tighten levels there. Chrome windows are framed whole, which
-is what they were before. Native applications, the Office suite, Mail, Messages
-and Finder all answer.
+**Chrome answers none of this**, which is what `edges` is for — see below.
+Measured on Chrome 151: every accessibility question about the browser —
+`AXRole`, `AXWindows`, a hit test over its own tab strip, even *setting*
+`AXManualAccessibility` — comes back `kAXErrorAPIDisabled` (−25211), to any
+client, trusted or not. Nothing Shotly can do from outside changes it. Native
+applications, the Office suite, Mail, Messages and Finder all answer normally.
 
 **The band is deliberately not a window.** `contents` builds a node with
 `window: false`, so the capture comes off the screen rather than out of the
 window's own backing store — which would hand back the ribbon this exists to
 remove.
+
+### When the application will not say (`edges.rs`)
+
+An application that refuses the accessibility API is not an application with
+nothing above its contents, and `Bands` keeps those two apart: `Asked::Answer`
+is a settled answer, `Asked::Looking` is a window being read off the screen
+instead. Only the second ever reaches `edges`.
+
+The rule there is that window chrome is a stack of full-width strips, so the
+boundary is the **last full-width horizontal step** inside the top of the
+window — a step, not a line, because the colour has to differ above and below.
+That single condition is what separates a toolbar's lower edge from a
+spreadsheet gridline or a row of text, which also cross the whole window but
+leave the same colour on both sides.
+
+**Why it is safe to ship a heuristic.** Measured across a desktop of windows,
+it is right on Chrome (87pt, the browser chrome exactly), a terminal (33pt, the
+tab bar) and Spotify (58pt, its top nav), and wrong on Excel, where it lands in
+the grid instead of under the ribbon. Excel never reaches it — Excel answers
+accessibility, and answers correctly. **Every window the rule gets wrong is a
+window that never asks it**, which is the entire argument for the gate.
+
+**Cost**: one `capture_window_flush` and a PNG decode, measured at ~230ms, so it
+runs on a thread of its own and the answer arrives a beat after the pointer
+does. Until it lands the outline frames the whole window — never wrong, briefly
+less specific. `flush` matters: with the drop shadow on, the image is inset on
+every side, and unevenly, so a row of pixels would not be a point on screen.
+
+**How Snagit does it, as far as can be told.** The behaviour was worth copying
+because Snagit has it, so the mechanism was worth finding. It is not
+accessibility (Chrome refuses everyone), not Apple Events — those exist in
+`SnagitHelper`, running `execute javascript "document.title = window.innerHeight"`
+through the tab's title, but that is scrolling capture and needs a permission
+prompt plus Chrome's *Allow JavaScript from Apple Events*, which is off — and
+not a private API or an extension, neither of which is in the bundle. What
+`TSCRegionSelection` does link is ScreenCaptureKit and `CGBitmapContext`: it
+rasterises screen content while you hover. And Snagit's own capture history on
+this machine holds thirteen Chrome captures at 2048×981 from a 2048×1068
+window — **87pt trimmed, the same figure `edges` arrives at on the same
+window**. So: pixels, almost certainly, and the same pixels.
 
 ## Screen recording (`record.rs`)
 
