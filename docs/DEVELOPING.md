@@ -242,6 +242,24 @@ registered listener, app menu and tray alike.
 The ⌘/ sheet lists the global hotkeys read-only and links here. Two panels that
 can both record the same key is one panel too many.
 
+**A hotkey handler must not touch the hotkey registry.** The global-shortcut
+plugin holds its own registry lock across the whole of the handler you give it,
+so anything reached from in there that registers or unregisters a shortcut asks
+for a mutex that same thread already holds. On macOS that thread is the *main*
+one — the handler is a Carbon callback running inside `[NSApplication
+sendEvent:]` — so what stops is not the feature but the entire application: no
+drawing, no menu bar, no tray, force-quit only.
+
+That is what the second press of ⌃⇧A did. It reached `annotate::stop`, which
+hands Escape back. `hold_escape` now posts to a queue that one thread of its own
+drains, which both breaks the cycle and keeps borrow and return in order.
+
+Note the shape of the trap, because the obvious fix is the wrong one: moving the
+*whole* handler off the main thread trades a deadlock for a crash. Starting the
+annotation layer calls `setCollectionBehavior` on the NSWindow, and AppKit traps
+on the spot when that is called from anywhere but the main thread. Window work
+belongs there; only the registry call has to leave.
+
 ## Two keys that cannot be tested from a script
 
 Worth knowing before you go hunting for a bug that isn't there.

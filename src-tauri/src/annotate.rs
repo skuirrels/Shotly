@@ -24,7 +24,8 @@
 
 use crate::capture::{display, DisplayInfo};
 use std::str::FromStr;
-use std::sync::Mutex;
+use std::sync::mpsc::{self, Sender};
+use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut};
@@ -125,6 +126,11 @@ pub fn is_escape(shortcut: &Shortcut) -> bool {
     escape().is_some_and(|esc| &esc == shortcut)
 }
 
+/// The one thread that borrows and returns Escape, and the queue it reads.
+///
+/// See `hold_escape` for why there is a thread at all.
+static ESCAPE_HOLDER: OnceLock<Sender<bool>> = OnceLock::new();
+
 /// Borrow Escape, or give it back.
 ///
 /// Only ever held while the layer owns the mouse. Handing the machine back —
@@ -132,7 +138,36 @@ pub fn is_escape(shortcut: &Shortcut) -> bool {
 /// stepped aside to work in another application needs Escape to mean what it
 /// means everywhere else. Released on teardown as well, so a layer that dies
 /// cannot take the key with it.
+///
+/// Handed to a thread of its own rather than done here, because one of the
+/// callers is `stop`, and one of the ways to reach `stop` is the annotate
+/// hotkey. The global-shortcut plugin holds its registry lock for the whole of
+/// its callback, so asking it to unregister a key from inside that callback
+/// asks for a lock the same thread is already holding — and on macOS that
+/// thread is the main one, running a Carbon hotkey handler inside
+/// `[NSApplication sendEvent:]`. Nothing draws, nothing clicks, the menu bar
+/// and the tray are gone, and force-quit is the only way out. That was the
+/// second press of Ctrl+Shift+A, every time.
+///
+/// A queue rather than a thread per call, so that a borrow and a return still
+/// land in the order they were asked for. The wait is invisible — the work is
+/// one system call — and it is a wait for the caller's own callback to finish,
+/// which it is about to do.
 pub fn hold_escape(app: &AppHandle, hold: bool) {
+    let queue = ESCAPE_HOLDER.get_or_init(|| {
+        let (tx, rx) = mpsc::channel::<bool>();
+        let app = app.clone();
+        std::thread::spawn(move || {
+            for hold in rx {
+                apply_escape(&app, hold);
+            }
+        });
+        tx
+    });
+    let _ = queue.send(hold);
+}
+
+fn apply_escape(app: &AppHandle, hold: bool) {
     let Some(esc) = escape() else { return };
     if hold {
         if let Err(err) = app.global_shortcut().register(esc) {

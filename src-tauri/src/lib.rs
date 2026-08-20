@@ -147,6 +147,15 @@ pub fn run() {
                     if event.state() != ShortcutState::Pressed {
                         return;
                     }
+                    // Everything below runs on the main thread, and runs
+                    // there with the plugin's own registry lock held over it.
+                    // So: window work is fine and belongs here, but nothing
+                    // reached from here may register or unregister a shortcut
+                    // — that asks for a mutex this very thread is holding and
+                    // stops dead, taking the menu bar and the tray with it.
+                    // `annotate::hold_escape` is the one that does, and it
+                    // answers off-thread for exactly this reason.
+                    //
                     // Escape is borrowed by the annotation layer while it is
                     // on screen and owns the mouse, because WKWebView eats it
                     // before the page can see it. It belongs to no action and
