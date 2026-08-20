@@ -55,6 +55,19 @@ pub fn chain_at(_x: f64, _y: f64) -> Vec<Node> {
     Vec::new()
 }
 
+/// What a window puts directly inside itself: its title bar, its toolbars, and
+/// whatever holds its contents.
+///
+/// `IUIAutomation`'s `RawViewWalker` over the element `ElementFromHandle`
+/// returns for the window — the same question in Win32 dress, and asked about
+/// the window rather than about a point for the same reason `window_children`
+/// is on the macOS side: the caller already knows which window it means.
+/// `None` until implemented, and the outline frames whole windows in the
+/// meantime, which is the answer a Mac without accessibility access gives.
+pub fn window_children(_pid: i32, _frame: crate::capture::Rect) -> Option<Vec<Node>> {
+    None
+}
+
 // ------------------------------------------------------- owning the click
 //
 // The macOS session takes the click with a `CGEventTap`, for a reason that

@@ -115,7 +115,14 @@ const BOUNDS_SLACK: f64 = 2.0;
 static ACTIVE: AtomicBool = AtomicBool::new(false);
 static GENERATION: AtomicU64 = AtomicU64::new(0);
 /// How far into the ancestry the outline is: 0 is the window.
-static LEVEL: AtomicI32 = AtomicI32::new(0);
+static LEVEL: AtomicI32 = AtomicI32::new(AUTO);
+
+/// The level nobody has chosen, which is where every window starts.
+///
+/// The outline works its own out — the contents of a window while the pointer
+/// is over them, the window itself while it is over the toolbars above them —
+/// and the wheel replaces it with a real number the moment it is turned.
+const AUTO: i32 = -1;
 /// Set when the wheel was turned during a session that had no accessibility
 /// access to answer it with. See `ask_for_accessibility`.
 static WANTED_AX: AtomicBool = AtomicBool::new(false);
@@ -150,6 +157,9 @@ struct Highlight {
     /// the outline is on the window and has not been asked to look inside.
     level: i32,
     depth: i32,
+    /// What this level is, where its number does not say it. Empty unless
+    /// there is something to add.
+    note: String,
     window: bool,
     /// This is a rectangle being dragged rather than something being pointed
     /// at. The page draws it without the snapping animation: a band that eases
@@ -188,6 +198,108 @@ impl Anchor {
     /// throw away the level the user had chosen.
     fn same_window_as(self, other: Anchor) -> bool {
         self.pid == other.pid && near(self.rect, other.rect)
+    }
+}
+
+/// Where each window's contents begin, worked out once for each window.
+///
+/// Cached because this is the one thing on the cheap path that costs a round
+/// trip to another application, and cacheable for the same reason the window
+/// list is read once: nothing can move while the tap holds the mouse. A
+/// session visits a handful of windows, so a list searched end to end is the
+/// right shape for it.
+///
+/// What is deliberately *not* cached is a window failing to answer. That is
+/// the mistake this feature would otherwise repeat for the third time in this
+/// file: measured, the first probe of a session can land on Shotly's own
+/// editor in the instant before the window server finishes taking it off the
+/// screen, and one such answer used to switch the trim off for the rest of the
+/// session — with the pointer standing still, nothing ever asked again.
+#[derive(Default)]
+struct Bands(Vec<Band>);
+
+struct Band {
+    window: Anchor,
+    /// Where this window's contents begin. `None` is a real answer: a window
+    /// with nothing above its contents worth cutting off.
+    top: Option<f64>,
+    /// How many more times to ask before `top` is believed. A window that has
+    /// answered is never asked again; one that cannot answer is asked a few
+    /// times and then taken at its silence, so that an application which never
+    /// answers at all costs a handful of probes rather than one per tick.
+    tries: u8,
+}
+
+/// How many times a window may fail to answer before it is left alone.
+const TRIES: u8 = 3;
+
+impl Bands {
+    fn top(&mut self, window: &ax::Node) -> Option<f64> {
+        let here = Anchor { pid: window.pid, rect: window.rect };
+        let at = match self.0.iter().position(|band| band.window.same_window_as(here)) {
+            Some(at) => at,
+            None => {
+                self.0.push(Band { window: here, top: None, tries: TRIES });
+                self.0.len() - 1
+            }
+        };
+
+        if self.0[at].tries > 0 {
+            match Self::ask(window) {
+                Some(top) => {
+                    self.0[at].top = top;
+                    self.0[at].tries = 0;
+                }
+                None => self.0[at].tries -= 1,
+            }
+        }
+
+        self.0[at].top
+    }
+
+    /// Has every window seen so far given its answer?
+    ///
+    /// The tracker skips a tick where nothing has moved, and a pointer that
+    /// arrives somewhere and stops moving is the ordinary case — so a window
+    /// still waiting to be asked has to keep that tick from being skipped, or
+    /// its second chance never comes.
+    fn settled(&self) -> bool {
+        self.0.iter().all(|band| band.tries == 0)
+    }
+
+    /// The window's own account of what it stacks above its contents.
+    ///
+    /// `Some` is an answer, including `Some(None)` — a window with nothing
+    /// above its contents worth cutting off. The bare `None` means the
+    /// question could not be put at all, which is a different thing and must
+    /// not be remembered as the first: an application that was busy for one
+    /// frame would otherwise have the trim switched off for the whole session.
+    fn ask(window: &ax::Node) -> Option<Option<f64>> {
+        if !ax::trusted() {
+            return Some(None);
+        }
+        let children = ax::window_children(window.pid, window.rect)?;
+        Some(ax::content_top(window.rect, &children))
+    }
+}
+
+/// A window with everything it stacks above its contents cut off the top.
+///
+/// Deliberately not marked as a window. A whole window is captured from its
+/// own backing store, which would hand back the ribbon this exists to remove;
+/// this has to come off the screen like any other rectangle.
+fn contents(window: &ax::Node, top: f64) -> ax::Node {
+    ax::Node {
+        rect: Rect {
+            x: window.rect.x,
+            y: top,
+            width: window.rect.width,
+            height: window.rect.y + window.rect.height - top,
+        },
+        role: String::new(),
+        title: window.title.clone(),
+        pid: window.pid,
+        window: false,
     }
 }
 
@@ -285,7 +397,7 @@ pub fn begin(app: &AppHandle) -> Result<(), String> {
     }
 
     let generation = GENERATION.fetch_add(1, Ordering::SeqCst) + 1;
-    LEVEL.store(0, Ordering::SeqCst);
+    LEVEL.store(AUTO, Ordering::SeqCst);
     pointer::reset();
     WANTED_AX.store(false, Ordering::SeqCst);
 
@@ -466,8 +578,13 @@ fn spawn_tracker(app: AppHandle, generation: u64) {
         // Read once, like the window list and for the same reason: nothing can
         // be moved or rearranged while the tap holds the mouse.
         let screens = display::displays().unwrap_or_default();
+        // Where each window's contents begin, filled in as the pointer
+        // reaches them and never asked twice.
+        let mut bands = Bands::default();
         let mut shown: Option<Highlight> = None;
         let mut aim: Option<Aim> = None;
+        // The level being shown, which is what the wheel steps from.
+        let mut showing = 0;
         // When the button went down, for the hold that starts an area.
         let mut held: Option<Instant> = None;
         let mut anchor: Option<Anchor> = None;
@@ -514,11 +631,15 @@ fn spawn_tracker(app: AppHandle, generation: u64) {
 
             // One level per tick at most, so a trackpad flick walks the
             // ancestry rather than jumping to the bottom of it.
+            //
+            // Stepped from what is on screen rather than from what was stored,
+            // because until the wheel is turned there is nothing stored: the
+            // outline has been choosing its own level. Turning the wheel is
+            // what makes that choice a number — and one step up from a
+            // window's contents is the window, ribbon and all.
             let wheel = pointer::take_scroll();
-            let mut level = LEVEL.load(Ordering::SeqCst);
             if wheel != 0 {
-                level = (level + if wheel > 0 { -1 } else { 1 }).max(0);
-                LEVEL.store(level, Ordering::SeqCst);
+                LEVEL.store((showing + if wheel > 0 { -1 } else { 1 }).max(0), Ordering::SeqCst);
 
                 // Tightening onto what is inside a window is the one thing here
                 // that needs accessibility. Without it the wheel does nothing at
@@ -569,6 +690,7 @@ fn spawn_tracker(app: AppHandle, generation: u64) {
                     },
                     level: 0,
                     depth: 0,
+                    note: String::new(),
                     window: false,
                     drag: true,
                 };
@@ -594,7 +716,8 @@ fn spawn_tracker(app: AppHandle, generation: u64) {
             // *failure* is what made this feature look broken once before: the
             // first resolve could fail, and a pointer which then never moved
             // left a dimmed screen with no outline on it for the whole session.
-            if shown.is_some() && last == Some((x, y, level)) {
+            let level = LEVEL.load(Ordering::SeqCst);
+            if shown.is_some() && last == Some((x, y, level)) && bands.settled() {
                 std::thread::sleep(POLL);
                 continue;
             }
@@ -604,7 +727,7 @@ fn spawn_tracker(app: AppHandle, generation: u64) {
             // is not. Pointing at the desktop used to mean pointing at nothing:
             // no outline, and a click that ended the session having taken
             // nothing at all.
-            let found = match resolve(&stack, x, y, level, &mut anchor) {
+            let found = match resolve(&stack, &mut bands, x, y, &mut anchor) {
                 Some((node, highlight)) => Some((Aim::Window(node), highlight)),
                 None => whole_screen(&screens, x, y),
             };
@@ -612,6 +735,10 @@ fn spawn_tracker(app: AppHandle, generation: u64) {
                 Some((found, highlight)) => (Some(found), Some(highlight)),
                 None => (None, None),
             };
+
+            if let Some(next) = &next {
+                showing = next.level;
+            }
 
             if next != shown {
                 shown = next.clone();
@@ -709,55 +836,83 @@ impl Stack {
     ///
     /// The window itself never comes from accessibility now. It does not need
     /// to: finding the window is a hit test against a filtered list, which is
-    /// free and works on every Mac. Accessibility buys exactly one thing here,
-    /// which is the ability to tighten onto a toolbar or a single row once you
-    /// are already on the right window, and it is skipped silently when it has
-    /// not been granted rather than gating the feature behind it.
-    fn chain_at(&self, x: f64, y: f64) -> Vec<ax::Node> {
+    /// free and works on every Mac. Accessibility buys the levels *inside* the
+    /// window — where its contents begin, and the toolbar or single row under
+    /// the pointer — and it is skipped silently when it has not been granted
+    /// rather than gating the feature behind it.
+    fn chain_at(&self, x: f64, y: f64, inside: Option<ax::Node>) -> Vec<ax::Node> {
         let Some(window) = self.hit(x, y) else { return Vec::new() };
         let mut chain = vec![window];
+        // Between the window and everything the application declares, because
+        // that is where it sits: narrower than the window, wider than anything
+        // in it.
+        chain.extend(inside);
         if ax::trusted() {
-            let inner = ax::refine(ax::chain_at(x, y), x, y);
-            chain.extend(inner.into_iter().filter(|n| !n.window));
+            chain.extend(ax::chain_at(x, y).into_iter().filter(|n| !n.window));
         }
-        chain
+        // Refined as one list rather than two, so an element reported at
+        // exactly the size of the contents does not become a scroll step that
+        // appears to do nothing.
+        ax::refine(chain, x, y)
     }
 }
 
 /// What to draw at a point, or `None` where nothing can be captured.
 ///
-/// Level 0 is deliberately not the same code path as the rest: it only needs
-/// the window, which is a hit test against a list already in hand, and it is
-/// where the pointer spends almost all of its time.
+/// Which level, as well as which rectangle. Nobody chooses a level until they
+/// turn the wheel, so until they do this picks one: the contents of the window
+/// while the pointer is over them, the window itself while it is over the
+/// toolbars stacked above them.
 fn resolve(
     stack: &Stack,
+    bands: &mut Bands,
     x: f64,
     y: f64,
-    level: i32,
     anchor: &mut Option<Anchor>,
 ) -> Option<(ax::Node, Highlight)> {
-    let (window, mut node, mut level, depth) = if level == 0 {
-        let window = stack.hit(x, y)?;
-        (window.clone(), window, 0, 0)
-    } else {
-        let chain = stack.chain_at(x, y);
-        let depth = chain.len() as i32;
-        let window = chain.first()?.clone();
-        let node = ax::at_level(&chain, level)?.clone();
-        // Clamped rather than refused, so the caption agrees with the outline
-        // once the ancestry runs out.
-        (window, node, level.min((depth - 1).max(0)), depth)
-    };
+    let window = stack.hit(x, y)?;
 
     // Having drilled three levels into one window, moving to another should
-    // not land three levels into that one too.
+    // not land three levels into that one too — it should go back to letting
+    // the outline decide.
     let here = Anchor { pid: window.pid, rect: window.rect };
     if anchor.is_some_and(|previous| !previous.same_window_as(here)) {
-        LEVEL.store(0, Ordering::SeqCst);
-        node = window.clone();
-        level = 0;
+        LEVEL.store(AUTO, Ordering::SeqCst);
     }
     *anchor = Some(here);
+
+    // The contents of this window, where it has said where they begin and the
+    // pointer is in them. Which is the whole of the behaviour: point at the
+    // ribbon and you are pointing at the window, point at the page and you are
+    // pointing at the page.
+    let inside = bands
+        .top(&window)
+        .filter(|top| y >= *top)
+        .map(|top| contents(&window, top));
+
+    let chosen = LEVEL.load(Ordering::SeqCst);
+    let level = match chosen {
+        AUTO if inside.is_some() => 1,
+        AUTO => 0,
+        chosen => chosen,
+    };
+
+    // Both of the levels a session actually spends its time on are free: a hit
+    // test against a list already in hand, and a cut this session has already
+    // paid for once. Only the levels below them walk another application's
+    // tree, which is as many as fifty round trips for one tick.
+    let (node, level, depth, note) = match (level, inside) {
+        (0, _) => (window, 0, 0, ""),
+        (1, Some(inside)) => (inside, 1, 0, "without toolbars"),
+        (level, inside) => {
+            let chain = stack.chain_at(x, y, inside);
+            let depth = chain.len() as i32;
+            let node = ax::at_level(&chain, level)?.clone();
+            // Clamped rather than refused, so the caption agrees with the
+            // outline once the ancestry runs out.
+            (node, level.min((depth - 1).max(0)), depth, "")
+        }
+    };
 
     if node.rect.is_empty() {
         return None;
@@ -774,6 +929,7 @@ fn resolve(
         size: format!("{} × {}", node.rect.width.round(), node.rect.height.round()),
         level,
         depth,
+        note: note.into(),
         window: node.window,
         drag: false,
     };
@@ -805,6 +961,7 @@ fn whole_screen(screens: &[crate::capture::DisplayInfo], x: f64, y: f64) -> Opti
         size: format!("{} × {}", bounds.width.round(), bounds.height.round()),
         level: 0,
         depth: 0,
+        note: String::new(),
         window: false,
         drag: false,
     };

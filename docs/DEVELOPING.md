@@ -387,10 +387,10 @@ which is why the two filters differ: `is_target` keeps full-screen windows so th
 picker can list them and explain they cannot be captured by id, and
 `is_pointable` throws them away.
 
-Accessibility is now optional and buys exactly one thing: the levels *below* the
-window, which the scroll wheel steps through — a toolbar or a single row rather
-than the whole window. `Stack::chain_at` asks `ax::trusted()` and skips it in
-silence when it is not granted.
+Accessibility is now optional and buys the levels *inside* the window: where
+its contents begin, which the outline picks on its own (below), and the toolbar
+or single row the wheel steps down onto. `Stack::chain_at` asks `ax::trusted()`
+and skips it in silence when it is not granted.
 
 **The property the whole design rests on.** A window that ignores mouse events
 is invisible to accessibility hit-testing; one that accepts them is not.
@@ -435,9 +435,54 @@ like a broken Mac:
   that looked broken. `getCurrentWebviewWindow().listen` is scoped to the page
   it is called from, and is what makes `emit_to(label, …)` mean anything.
 
+- **Never ask accessibility about a point when you already know the window.**
+  `window_children` looks the window up by process and frame instead of
+  hit-testing the pointer, and the reason is measured: with Shotly's editor
+  hidden for the capture but still lying under the pointer, a hit test *from
+  inside Shotly* comes back as Shotly's own window, while the same test run
+  from any other process comes back as the window underneath. Nothing about
+  the desktop is different; the caller is. The window list has already decided
+  which window is meant — front to back, with Shotly's own filtered out — so
+  asking the point again can only introduce a second opinion.
+
 Related: the first target is routinely resolved before the page has finished
 loading, so the first `emit_to` goes nowhere. `snap_ready` re-sends the current
 outline for exactly that reason.
+
+### Cutting the toolbars off (`ax::content_top`)
+
+Pointing at a window used to mean capturing all of it, ribbon and title bar
+included, and cropping that off afterwards is the tax the all-in-one capture
+exists to remove. So the outline works out where a window's *contents* begin
+and frames those instead — unless the pointer is up on the toolbars, in which
+case pointing at them means what it says and the whole window is framed. The
+wheel still overrides both: one step up from the contents is the window.
+
+**The rule is geometric, not a list of roles**, because roles are whatever an
+application decided to call things. Measured on this desktop: Word's ribbon is
+an `AXTabGroup` described as "ribbon", Mail's and Messages' are `AXToolbar`,
+and Excel puts an `AXUnknown` under both for the formula bar. What they have in
+common is shape — full width, far too short to be the content, stacked at the
+top — so `content_top` walks down from the window's top edge, and anything
+reaching the current line that spans the window and is short enough moves the
+line to its own bottom. Word: 40pt of title bar plus 105pt of ribbon, cut at
+137pt of a 1068pt window, which is the same rectangle Snagit frames. A window
+that declares nothing useful (Spotify draws its own chrome inside one
+`AXGroup`) is left whole, and so is one where the arithmetic would take more
+than half the window.
+
+**What this does not cover: Chrome.** Measured on Chrome 151, every
+accessibility question about the browser — `AXRole`, `AXWindows`, even *setting*
+`AXManualAccessibility` — comes back `kAXErrorAPIDisabled` (−25211). Nothing
+Shotly can do from outside changes that, and the same silence already switches
+off the scroll-to-tighten levels there. Chrome windows are framed whole, which
+is what they were before. Native applications, the Office suite, Mail, Messages
+and Finder all answer.
+
+**The band is deliberately not a window.** `contents` builds a node with
+`window: false`, so the capture comes off the screen rather than out of the
+window's own backing store — which would hand back the ribbon this exists to
+remove.
 
 ## Screen recording (`record.rs`)
 

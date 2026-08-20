@@ -34,6 +34,8 @@ interface Highlight {
   level: number;
   /** How many levels there are, or 0 while the outline is on the window. */
   depth: number;
+  /** What this level is, where its number does not say it. Usually empty. */
+  note: string;
   window: boolean;
   /** An area being dragged out, rather than something being pointed at. */
   drag: boolean;
@@ -178,6 +180,14 @@ function Outline({ target }: { target: Highlight }) {
         {target.size ? (
           <span className="font-mono text-white/70 tabular-nums">{target.size}</span>
         ) : null}
+        {/* Said out loud, because the outline alone cannot: a window and the
+            same window without its ribbon are two rectangles that differ by an
+            inch, and which one is about to be taken should not be a guess. */}
+        {target.note ? (
+          <span className="rounded bg-accent/30 px-1.5 py-px text-[11px] text-white/90">
+            {target.note}
+          </span>
+        ) : null}
         {target.depth > 0 ? (
           <span className="rounded bg-white/15 px-1.5 py-px text-[11px] text-white/80">
             {target.level + 1} of {target.depth}
@@ -220,8 +230,9 @@ function Hint({
         </p>
       ) : (
         <p className="mt-0.5 text-[11.5px] text-white/60">
-          Scroll to tighten onto what's inside · Esc cancels · for a window that's
-          hidden behind another, use Capture Window from List in the {nouns.menuBar}
+          Scroll to widen or tighten what's outlined · Esc cancels · for a window
+          that's hidden behind another, use Capture Window from List in the{" "}
+          {nouns.menuBar}
         </p>
       )}
     </div>

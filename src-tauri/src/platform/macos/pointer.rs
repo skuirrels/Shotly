@@ -56,7 +56,8 @@ const MAX_WALK: usize = 48;
 
 use crate::ax::Node;
 use crate::capture::Rect;
-use core_foundation::base::{CFRelease, CFTypeRef, TCFType};
+use core_foundation::array::CFArray;
+use core_foundation::base::{CFRelease, CFRetain, CFTypeRef, TCFType};
 use core_foundation::string::{CFString, CFStringRef};
 use std::ffi::c_void;
 
@@ -71,6 +72,7 @@ const VALUE_CGSIZE: u32 = 2;
 #[link(name = "ApplicationServices", kind = "framework")]
 extern "C" {
     fn AXUIElementCreateSystemWide() -> AXUIElementRef;
+    fn AXUIElementCreateApplication(pid: i32) -> AXUIElementRef;
     fn AXUIElementCopyElementAtPosition(
         application: AXUIElementRef,
         x: f32,
@@ -169,6 +171,31 @@ impl El {
         // SAFETY: `self.0` is live; `pid` is left at 0 on failure.
         unsafe { AXUIElementGetPid(self.0, &mut pid) };
         pid
+    }
+
+    /// One attribute's worth of elements — its children, its windows.
+    ///
+    /// One request for the lot, which is what makes `window_children`
+    /// affordable: a window's own furniture is one round trip, where walking
+    /// its tree is the fifty that `chain_at` warns about.
+    fn elements(&self, name: &str) -> Vec<El> {
+        let Some(value) = self.attribute(name) else {
+            return Vec::new();
+        };
+        // SAFETY: the value is a CFArrayRef we own; the wrapper releases it,
+        // and with it the references it holds to its items.
+        let array = unsafe { CFArray::<*const c_void>::wrap_under_create_rule(value as _) };
+        array
+            .iter()
+            .map(|item| {
+                // SAFETY: the array owns each item, so a reference is taken
+                // for the wrapper that is going to release one.
+                let el = El(unsafe { CFRetain(*item as _) } as AXUIElementRef);
+                // SAFETY: the element is live; the timeout is per element.
+                unsafe { AXUIElementSetMessagingTimeout(el.0, MESSAGING_TIMEOUT) };
+                el
+            })
+            .collect()
     }
 
     fn node(&self, window: bool) -> Option<Node> {
@@ -284,6 +311,51 @@ pub fn chain_at(x: f64, y: f64) -> Vec<Node> {
         Some(window) => std::iter::once(window).chain(inward).collect(),
         None => inward,
     }
+}
+
+/// What a window puts directly inside itself: its title bar, its toolbars, and
+/// whatever holds its contents.
+///
+/// Found by process and frame rather than by hit-testing a point, and that is
+/// the whole trick. The caller already knows which window it means — the
+/// window list said so, front to back, with Shotly's own filtered out — and
+/// asking a point again only invites a different answer. Measured: with
+/// Shotly's editor hidden for the capture but still lying under the pointer, a
+/// hit test *from inside Shotly* comes back as Shotly's own window, while the
+/// same test from any other process comes back as the window underneath. There
+/// is no version of this that ends well; asking about the window instead of
+/// about the point does not raise the question.
+///
+/// `None` when the application will not answer — which is not rare. Chrome
+/// declines the accessibility API outright until something convinces it
+/// otherwise, and returns `kAXErrorAPIDisabled` to every question until then.
+pub fn window_children(pid: i32, frame: Rect) -> Option<Vec<Node>> {
+    // SAFETY: returns a new application element under the create rule.
+    let app = El(unsafe { AXUIElementCreateApplication(pid) });
+    if app.0.is_null() {
+        return None;
+    }
+    // SAFETY: the element is live; an application that is busy must not cost
+    // more than a frame.
+    unsafe { AXUIElementSetMessagingTimeout(app.0, MESSAGING_TIMEOUT) };
+
+    // The frames agree exactly in practice — see `window_id_for`, which
+    // matches the same two lists the same way — so this is slack for a float
+    // that has been converted twice, not a search for the nearest window.
+    let window = app
+        .elements("AXWindows")
+        .into_iter()
+        .find(|w| w.frame().is_some_and(|f| near(f, frame)))?;
+
+    Some(window.elements("AXChildren").iter().filter_map(|c| c.node(false)).collect())
+}
+
+/// Frames within a couple of points of each other are the same frame.
+fn near(a: Rect, b: Rect) -> bool {
+    (a.x - b.x).abs() <= 2.0
+        && (a.y - b.y).abs() <= 2.0
+        && (a.width - b.width).abs() <= 2.0
+        && (a.height - b.height).abs() <= 2.0
 }
 
 // ------------------------------------------------------------ owning the click

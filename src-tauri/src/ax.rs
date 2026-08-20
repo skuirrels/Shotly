@@ -51,6 +51,27 @@ const MAX_LEVELS: usize = 16;
 /// thicker than its target.
 const MIN_EDGE: f64 = 12.0;
 
+/// How much of its window's width a thing has to span to be furniture rather
+/// than content. Toolbars go edge to edge; the document under them does too,
+/// but it is never short.
+const CHROME_WIDTH: f64 = 0.9;
+
+/// And how tall it may be, as a fraction of the window. Measured: Word's
+/// ribbon is 105pt of a 1068pt window and its title bar 40pt, while the split
+/// group holding the document is 903pt. Nothing in between was ever seen.
+const CHROME_HEIGHT: f64 = 0.35;
+
+/// The least a cut can take and still be worth making.
+const MIN_CHROME: f64 = 16.0;
+
+/// And the most. A window that appears to be more than half furniture has been
+/// misread, and framing the remainder would be worse than framing the window.
+const MAX_CHROME: f64 = 0.5;
+
+/// Frames within this of each other line up. Same reason as `same`: these have
+/// been through a coordinate conversion.
+const EDGE_SLACK: f64 = 2.0;
+
 /// One thing that could be captured: a rectangle, and what the system calls it.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Node {
@@ -109,6 +130,47 @@ pub fn refine(chain: Vec<Node>, x: f64, y: f64) -> Vec<Node> {
     out
 }
 
+/// Where a window's own contents begin, below whatever it stacks on top of
+/// them — its title bar, its toolbar, its ribbon.
+///
+/// This is the one thing Snagit's all-in-one does that pointing at a window
+/// could not say: hover over a document and it frames the document, not the
+/// window with two inches of buttons across the top. Every capture of a Word
+/// page otherwise arrives with the ribbon in it, and cropping that off by hand
+/// afterwards is the tax the feature exists to remove.
+///
+/// The rule is geometric rather than a list of roles, and deliberately so.
+/// Roles are what an application chooses to call things: Word's ribbon is an
+/// `AXTabGroup`, Mail's is an `AXToolbar`, Excel puts an `AXUnknown` under
+/// both. What they have in common is shape — each one goes the full width of
+/// the window, is far too short to be the content, and sits above it. So walk
+/// down from the top edge: anything reaching the current line, spanning the
+/// window and short enough not to be the thing being framed, moves the line to
+/// its own bottom. Where the line stops is where the contents start.
+///
+/// `None` when there is nothing above the contents worth cutting off, which is
+/// the answer for most windows and for every application that declines to
+/// describe itself at all.
+pub fn content_top(window: Rect, children: &[Node]) -> Option<f64> {
+    let mut line = window.y;
+    let mut left: Vec<&Node> = children.iter().collect();
+
+    // Repeatedly, because they stack: Word's ribbon only touches the top of
+    // the window once the title bar above it has been accounted for.
+    while let Some(index) = left.iter().position(|n| {
+        n.rect.width >= window.width * CHROME_WIDTH - EDGE_SLACK
+            && n.rect.height <= window.height * CHROME_HEIGHT
+            && n.rect.y <= line + EDGE_SLACK
+            && n.rect.y + n.rect.height > line + EDGE_SLACK
+    }) {
+        let node = left.remove(index);
+        line = node.rect.y + node.rect.height;
+    }
+
+    let cut = line - window.y;
+    (cut >= MIN_CHROME && cut <= window.height * MAX_CHROME).then_some(line)
+}
+
 /// The entry a given level names, clamping rather than failing.
 ///
 /// Scrolling past the end of the chain is not an error — it is someone spinning
@@ -121,11 +183,11 @@ pub fn at_level(chain: &[Node], level: i32) -> Option<&Node> {
     chain.get((level.max(0) as usize).min(last))
 }
 
-/// The three questions only the operating system can answer, re-exported so
+/// The questions only the operating system can answer, re-exported so
 /// that callers say `ax::trusted()` as they always have. Their implementations
 /// live in [`platform::pointer`](crate::platform::pointer) — see the note at
 /// the top of this file about which half of this module is portable.
-pub use crate::platform::pointer::{chain_at, request_trust, trusted};
+pub use crate::platform::pointer::{chain_at, request_trust, trusted, window_children};
 
 #[cfg(test)]
 mod tests {
@@ -185,6 +247,62 @@ mod tests {
     fn drops_levels_too_small_to_aim_at() {
         let chain = vec![node(0.0, 0.0, 800.0, 600.0), node(40.0, 40.0, 4.0, 4.0)];
         assert_eq!(refine(chain, 41.0, 41.0).len(), 1);
+    }
+
+    /// Word, measured: a 1822x1068 window at -2003,-223 with a title bar, a
+    /// ribbon, the document and a status bar. The cut belongs under the ribbon
+    /// and above the document — and below the status bar's own top, because
+    /// what is being answered is where the contents *start*, not where they
+    /// end. Snagit frames the same rectangle.
+    #[test]
+    fn cuts_word_under_its_ribbon() {
+        let window = Rect { x: -2003.0, y: -223.0, width: 1822.0, height: 1068.0 };
+        let kids = vec![
+            node(-2003.0, -223.0, 1822.0, 40.0),  // title bar
+            node(-1992.0, -211.0, 16.0, 16.0),    // close
+            node(-2003.0, -191.0, 1822.0, 105.0), // ribbon
+            node(-2003.0, -86.0, 1822.0, 903.0),  // the document
+            node(-2003.0, 817.0, 1822.0, 28.0),   // status bar
+        ];
+        assert_eq!(content_top(window, &kids), Some(-86.0));
+    }
+
+    /// Mail, measured: one unified toolbar, and a split group that fills the
+    /// whole window including the space behind it. The split group must not be
+    /// mistaken for furniture, and the toolbar must still be found under it.
+    #[test]
+    fn cuts_under_a_toolbar_the_content_reaches_behind() {
+        let window = Rect { x: 0.0, y: 33.0, width: 1512.0, height: 895.0 };
+        let kids = vec![
+            node(0.0, 33.0, 1512.0, 895.0), // split group, the full window
+            node(0.0, 33.0, 1512.0, 52.0),  // toolbar
+            node(272.0, 33.0, 380.0, 52.0), // title text, not full width
+        ];
+        assert_eq!(content_top(window, &kids), Some(85.0));
+    }
+
+    /// Spotify, measured: everything drawn inside one group, nothing declared.
+    /// There is no cut to make, and inventing one would frame the wrong thing.
+    #[test]
+    fn leaves_a_window_that_declares_no_furniture_alone() {
+        let window = Rect { x: -1797.0, y: -32.0, width: 1422.0, height: 812.0 };
+        let kids = vec![node(-1797.0, -32.0, 1422.0, 812.0)];
+        assert_eq!(content_top(window, &kids), None);
+    }
+
+    #[test]
+    fn refuses_a_cut_too_small_to_be_worth_it() {
+        let window = Rect { x: 0.0, y: 0.0, width: 800.0, height: 600.0 };
+        assert_eq!(content_top(window, &[node(0.0, 0.0, 800.0, 8.0)]), None);
+    }
+
+    /// More than half the window is not furniture; it is a window that has
+    /// been misread, and the remainder is not what anyone pointed at.
+    #[test]
+    fn refuses_a_cut_that_would_take_most_of_the_window() {
+        let window = Rect { x: 0.0, y: 0.0, width: 800.0, height: 200.0 };
+        let kids = vec![node(0.0, 0.0, 800.0, 60.0), node(0.0, 60.0, 800.0, 60.0)];
+        assert_eq!(content_top(window, &kids), None);
     }
 
     #[test]
