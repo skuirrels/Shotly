@@ -13,11 +13,12 @@
 //! Only where an application refused to speak at all, never where it spoke and
 //! said it has nothing above its contents. That distinction is the whole reason
 //! this is safe to ship. Measured across a desktop of windows, the rule below
-//! is right on Chrome (87pt, the browser chrome exactly), a terminal (33pt, the
-//! tab bar) and Spotify (58pt, its top nav) — and wrong on Excel, where it
-//! lands in the spreadsheet grid instead of under the ribbon. Excel never
-//! reaches it: Excel answers accessibility, and answers correctly. Every window
-//! this rule gets wrong is a window that never asks it.
+//! is right on Chrome (87pt, the browser chrome exactly, on two windows showing
+//! different sites), a terminal (35pt, the tab bar) and Spotify (58pt, its top
+//! nav) — and wrong on Excel, where it lands in the spreadsheet grid instead of
+//! under the ribbon. Excel never reaches it: Excel answers accessibility, and
+//! answers correctly. Every window this rule gets wrong is a window that never
+//! asks it.
 //!
 //! # The rule
 //!
@@ -31,11 +32,13 @@
 //! # What it cannot do
 //!
 //! Guess right every time. A page whose top is a full-width band of its own —
-//! a dark hero image, a coloured site header — reads as one more strip and
-//! cuts below it. The caps exist for that: nothing past 200pt, nothing past
-//! 30% of the window, and the wheel is always there to widen back to the whole
-//! window. An outline that is occasionally too tight is recoverable; this is
-//! why it is a fallback and not the first answer.
+//! a dark hero image, a coloured site header — reads as one more strip, and
+//! left to itself the rule would cut below it. The ceiling is what stops it:
+//! nothing past 130pt, which is more than the tallest browser chrome and less
+//! than where a site's header tends to end. Nothing past 30% of the window
+//! either, and the wheel is always there to widen back to the whole window. An
+//! outline that is occasionally too tight is recoverable; this is why it is a
+//! fallback and not the first answer.
 
 use image::RgbaImage;
 
@@ -58,9 +61,18 @@ const TOGETHER: u32 = 3;
 /// figure `ax::content_top` uses, for the same reason.
 const MIN_CUT: f64 = 16.0;
 
-/// The most, in points and as a fraction of the window. No window stacks more
-/// chrome than the first; a window that appears to has been misread.
-const MAX_CUT: f64 = 200.0;
+/// The most, in points and as a fraction of the window.
+///
+/// Bounded by what a *browser's* chrome can be, not by what any window's
+/// furniture can be, because a browser is the only thing that ever reaches
+/// here — everything else answers accessibility. Measured on Chromium: a tab
+/// strip and a toolbar come to 87pt, and a bookmarks bar adds about 33pt more.
+/// 130 clears the tallest of those with room to spare and still lands above
+/// almost any site's own header, which is the thing this must not eat. It used
+/// to be 200pt, which was generous enough to sail past the browser chrome
+/// entirely and cut below GitHub's navigation instead — measured at 141.5pt on
+/// a 2048×1068 window, where the right answer was 87.
+const MAX_CUT: f64 = 130.0;
 const MAX_FRACTION: f64 = 0.30;
 
 /// How many columns to look at. The boundary spans the window, so it is found
@@ -207,6 +219,30 @@ mod tests {
     fn refuses_a_cut_too_small_to_be_worth_it() {
         let image = window(1600, 2000, &[(20, [60, 60, 62])], [255, 255, 255]);
         assert_eq!(content_top(&image, 2.0), None);
+    }
+
+    /// A browser over a site with a header of its own.
+    ///
+    /// Colours and heights read off a real 2048x1068 Chrome window: tab strip,
+    /// toolbar, the toolbar's white lower edge ending at 87pt, then the site's
+    /// own full-width header band ending at 141.5pt, then the page. Every one
+    /// of those is a step, and taking the last of them cut the site's header
+    /// off — the bug this ceiling exists for. 87pt is the answer, and is where
+    /// Snagit lands on the same window.
+    #[test]
+    fn stops_at_the_browser_and_not_inside_the_page() {
+        let image = window(
+            1600,
+            2000,
+            &[
+                (80, [244, 243, 242]),
+                (80, [239, 237, 237]),
+                (14, [255, 255, 255]),
+                (109, [11, 37, 96]),
+            ],
+            [252, 252, 252],
+        );
+        assert_eq!(content_top(&image, 2.0), Some(87.0));
     }
 
     /// Past 30% of the window it is not furniture any more, whatever it looks

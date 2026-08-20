@@ -504,10 +504,22 @@ That single condition is what separates a toolbar's lower edge from a
 spreadsheet gridline or a row of text, which also cross the whole window but
 leave the same colour on both sides.
 
+**"Inside the top" is the load-bearing half.** A site with a header band of its
+own — GitHub's navigation, an app's coloured title bar — is one more full-width
+strip as far as pixels are concerned, and *last* will happily walk into it. The
+ceiling is what stops that, and it is set by the only population that reaches
+this code: browsers, because everything else answers accessibility. Chromium's
+tab strip and toolbar come to 87pt and a bookmarks bar adds about 33pt, so
+`MAX_CUT` is **130pt** — over the tallest real browser chrome, under where a
+site's header tends to end. It was 200pt until a Chrome window over a GitHub
+pull request cut at 141.5pt, below the repository nav, where the answer was 87.
+Two Chrome windows showing different sites both measure 87pt with the ceiling
+in place. `stops_at_the_browser_and_not_inside_the_page` holds that profile.
+
 **Why it is safe to ship a heuristic.** Measured across a desktop of windows,
-it is right on Chrome (87pt, the browser chrome exactly), a terminal (33pt, the
-tab bar) and Spotify (58pt, its top nav), and wrong on Excel, where it lands in
-the grid instead of under the ribbon. Excel never reaches it — Excel answers
+it is right on Chrome (87pt, the browser chrome exactly), a terminal (the tab
+bar) and Spotify (58pt, its top nav), and wrong on Excel, where it lands in the
+grid instead of under the ribbon. Excel never reaches it — Excel answers
 accessibility, and answers correctly. **Every window the rule gets wrong is a
 window that never asks it**, which is the entire argument for the gate.
 
