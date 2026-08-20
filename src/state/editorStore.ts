@@ -103,6 +103,11 @@ const DEFAULT_STYLE: Style = {
   strokeWidth: 10,
   fontSize: 48,
   fillOpacity: 0,
+  // Square, because a rectangle drawn round a button or a paragraph is a
+  // rectangle. The old fixed 4px was neither one thing nor the other: too
+  // small to read as rounded at @2x, large enough to leave the corners
+  // looking soft where they were meant to be sharp.
+  cornerRadius: 0,
   blurRadius: 12,
   dim: 0.55,
   shadow: true,
@@ -137,6 +142,7 @@ const TRANSIENT_TOOLS: ToolId[] = ["crop"];
 const TOOL_KEY = "shotly.tool";
 const COLOR_KEY = "shotly.color";
 const STROKE_KEY = "shotly.strokeWidth";
+const RADIUS_KEY = "shotly.cornerRadius";
 
 /**
  * The range a stroke width may take.
@@ -149,6 +155,18 @@ const STROKE_KEY = "shotly.strokeWidth";
  */
 export const MIN_STROKE = 1;
 export const MAX_STROKE = 40;
+
+/**
+ * The range a rectangle's corner radius may take, in image pixels.
+ *
+ * Zero is a real value here rather than a floor to guard against — it is the
+ * square corner, and the reason the control has a slider at all. The ceiling
+ * is generous because the radius is clamped again to half the shorter side
+ * when the shape is drawn, so a number too large for a particular box is
+ * already harmless; this only stops a stored one growing without limit.
+ */
+export const MIN_RADIUS = 0;
+export const MAX_RADIUS = 200;
 
 /**
  * Tools that are never remembered between sessions.
@@ -182,21 +200,24 @@ function rememberTool(tool: ToolId): void {
 /**
  * The ink Shotly was last drawing with.
  *
- * Colour and stroke width only. They are the two that get chosen deliberately
+ * Colour, stroke width and corner radius. All three get chosen deliberately
  * and are expected to stay chosen — someone who works in yellow at 4 wants
- * yellow at 4 tomorrow, and having to set both again on every launch is the
- * same papercut as landing in the wrong tool. Nothing else in `Style` is a
- * preference in that sense: `blurRadius` and `dim` belong to one tool each,
- * `fillOpacity` and `shadow` are toggles you flip for a particular shape, and
- * `fontSize` is already remembered per kind, deliberately, in
- * `DEFAULT_CALLOUT_FONT_SIZE`. Persisting those would turn a one-off
- * experiment into the way the app now works.
+ * yellow at 4 tomorrow, and having to set them again on every launch is the
+ * same papercut as landing in the wrong tool. The radius earns its place for
+ * the same reason: rounded or square is a house style, not a decision to
+ * retake for every rectangle. Nothing else in `Style` is a preference in that
+ * sense: `blurRadius` and `dim` belong to one tool each, `fillOpacity` and
+ * `shadow` are toggles you flip for a particular shape, and `fontSize` is
+ * already remembered per kind, deliberately, in `DEFAULT_CALLOUT_FONT_SIZE`.
+ * Persisting those would turn a one-off experiment into the way the app now
+ * works.
  */
 function storedStyle(): Style {
   return {
     ...DEFAULT_STYLE,
     color: readColor(COLOR_KEY, DEFAULT_STYLE.color),
     strokeWidth: readNumber(STROKE_KEY, DEFAULT_STYLE.strokeWidth, MIN_STROKE, MAX_STROKE),
+    cornerRadius: readNumber(RADIUS_KEY, DEFAULT_STYLE.cornerRadius, MIN_RADIUS, MAX_RADIUS),
   };
 }
 
@@ -210,6 +231,7 @@ function storedStyle(): Style {
 function rememberStyle(patch: Partial<Style>): void {
   if (patch.color !== undefined) write(COLOR_KEY, patch.color);
   if (patch.strokeWidth !== undefined) write(STROKE_KEY, String(patch.strokeWidth));
+  if (patch.cornerRadius !== undefined) write(RADIUS_KEY, String(patch.cornerRadius));
 }
 
 interface HistoryEntry {

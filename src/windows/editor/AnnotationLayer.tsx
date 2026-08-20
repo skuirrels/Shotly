@@ -12,6 +12,7 @@ import {
   neonBorderForFont,
   neonPaint,
   neonRadius,
+  rectRadius,
   polygonToPath,
   stepFontSize,
   TEXT_PADDING,
@@ -313,11 +314,7 @@ function Shape({ a, doc, hidden }: { a: Annotation; doc: Doc; hidden: boolean })
           y={b.y}
           width={b.width}
           height={b.height}
-          rx={
-            a.style.neon
-              ? neonRadius(b.width, b.height)
-              : Math.min(4, b.width / 2, b.height / 2)
-          }
+          rx={rectRadius(b, a.style)}
           fill={a.style.fillOpacity > 0 ? a.style.color : "transparent"}
           fillOpacity={a.style.fillOpacity}
           stroke={a.style.color}

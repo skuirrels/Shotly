@@ -5,11 +5,12 @@ import { Popover } from "@/components/ui/Popover";
 import { Tooltip } from "@/components/ui/Tooltip";
 import type { Style } from "@/lib/types";
 import { withAlpha } from "@/lib/shapes";
-import { MAX_STROKE, MIN_STROKE, useEditor } from "@/state/editorStore";
+import { MAX_RADIUS, MAX_STROKE, MIN_RADIUS, MIN_STROKE, useEditor } from "@/state/editorStore";
 import { OverlayPicker } from "./OverlayPicker";
 import {
   FONT_PRESETS,
   NEON_SWATCHES,
+  RADIUS_PRESETS,
   STROKE_PRESETS,
   SWATCHES,
   TOOLS,
@@ -94,6 +95,30 @@ export function Toolbar({ currentPath, onNotify }: Props) {
               <span
                 className="rounded-full bg-current"
                 style={{ width: Math.min(16, 4 + v), height: Math.min(16, 4 + v) }}
+              />
+            )}
+          />
+        )}
+
+        {/* Next to the stroke width, because the two of them are the whole
+            description of a rectangle's outline. */}
+        {controls.radius && (
+          <SizeControl
+            label="Corner radius"
+            value={style.cornerRadius}
+            presets={RADIUS_PRESETS}
+            min={MIN_RADIUS}
+            max={MAX_RADIUS}
+            hint="0 is a square corner."
+            onChange={(cornerRadius) => setStyle({ cornerRadius })}
+            // The chip is the setting: a small square rounded off in step with
+            // the number, so the button shows the corner rather than naming
+            // it. Capped short of half its own side, or every radius past the
+            // fourth preset would draw the same circle.
+            render={(v) => (
+              <span
+                className="size-[15px] border-2 border-current"
+                style={{ borderRadius: Math.min(7, v / 8) }}
               />
             )}
           />
@@ -342,6 +367,7 @@ function SizeControl({
   presets,
   min,
   max,
+  hint,
   onChange,
   render,
 }: {
@@ -350,6 +376,14 @@ function SizeControl({
   presets: number[];
   min: number;
   max: number;
+  /**
+   * What to say along the bottom instead of the `[` / `]` keys.
+   *
+   * Those keys drive one control per tool — see `stepSize` — so a second
+   * numeric control on the same tool has to say something else or it is
+   * advertising a shortcut that adjusts the other one.
+   */
+  hint?: string;
   onChange: (v: number) => void;
   render: (v: number) => React.ReactNode;
 }) {
@@ -404,11 +438,15 @@ function SizeControl({
           className="w-full accent-[var(--color-accent)]"
         />
 
-        <p className="mt-2 flex items-center gap-1.5 text-[11px] text-ink-3">
-          <Kbd shortcut="[" muted />
-          <Kbd shortcut="]" muted />
-          to adjust
-        </p>
+        {hint ? (
+          <p className="mt-2 text-[11px] text-ink-3">{hint}</p>
+        ) : (
+          <p className="mt-2 flex items-center gap-1.5 text-[11px] text-ink-3">
+            <Kbd shortcut="[" muted />
+            <Kbd shortcut="]" muted />
+            to adjust
+          </p>
+        )}
       </div>
     </Popover>
   );

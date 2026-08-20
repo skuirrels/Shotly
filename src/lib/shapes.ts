@@ -314,6 +314,35 @@ export function neonRadius(width: number, height: number): number {
 }
 
 /**
+ * What a rectangle drawn before the radius was adjustable was drawn with.
+ *
+ * Markup written by an older Shotly carries no `cornerRadius`, and reading the
+ * absence as the new default — a square corner — would redraw someone's saved
+ * work as a slightly different shape. Four pixels is what those rectangles
+ * have always had.
+ */
+const LEGACY_RECT_RADIUS = 4;
+
+/**
+ * How round a rectangle's corners are, in image pixels.
+ *
+ * Clamped to half the shorter side: a large radius on a box dragged out thin
+ * would otherwise overlap its own corners and pinch in the middle. Neon
+ * overrides the setting entirely — a lit sign is a lozenge by definition, and
+ * its roundness has to follow the box it is drawn at rather than a number
+ * chosen for a flat shape. See `neonRadius`.
+ *
+ * Both renderers call this, so the exported PNG rounds exactly as the preview
+ * did.
+ */
+export function rectRadius(box: { width: number; height: number }, style: Style): number {
+  const wanted = style.neon
+    ? neonRadius(box.width, box.height)
+    : (style.cornerRadius ?? LEGACY_RECT_RADIUS);
+  return Math.max(0, Math.min(wanted, box.width / 2, box.height / 2));
+}
+
+/**
  * Black or white text, whichever survives on this fill.
  *
  * A callout is a solid colour with words on it, and the palette runs from

@@ -1491,6 +1491,7 @@ function StrokeShape({ stroke, hitArea = false }: { stroke: Stroke; hitArea?: bo
               strokeWidth: width,
               fontSize: 16,
               fillOpacity: 0,
+              cornerRadius: 0,
               blurRadius: 0,
               dim: 0,
               shadow: false,
@@ -1510,7 +1511,10 @@ function StrokeShape({ stroke, hitArea = false }: { stroke: Stroke; hitArea?: bo
   const h = Math.abs(b.y - a.y);
 
   return tool === "rect" ? (
-    <rect x={x} y={y} width={w} height={h} rx={4} fill="none" stroke={paint} strokeWidth={thickness} />
+    // Square, like the editor's — see `DEFAULT_STYLE`. There is no style bar
+    // out here to round it with, and a rectangle drawn on the live screen
+    // should be the same object as one drawn on a capture of it.
+    <rect x={x} y={y} width={w} height={h} fill="none" stroke={paint} strokeWidth={thickness} />
   ) : (
     <ellipse
       cx={x + w / 2}

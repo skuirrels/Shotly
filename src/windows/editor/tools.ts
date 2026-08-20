@@ -91,6 +91,18 @@ export const NEON_SWATCHES = [
 ];
 
 export const STROKE_PRESETS = [2, 4, 6, 10, 16];
+
+/**
+ * Corner radii worth one click, in image pixels.
+ *
+ * 0 is the square corner and leads deliberately: it is the shape most people
+ * want most of the time, and burying it at one end of a slider would make the
+ * plainest rectangle the fiddliest to draw. The rest roughly double, because
+ * roundness is judged by eye and even steps read as barely any change at all
+ * near the top of the range. A Retina capture holds two pixels per point, so
+ * these look about half as round on screen as they read written down.
+ */
+export const RADIUS_PRESETS = [0, 12, 24, 48, 96];
 export const FONT_PRESETS = [16, 20, 24, 32, 48];
 
 /** Which style controls make sense for the current tool or selection. */
@@ -105,6 +117,8 @@ export function styleControlsFor(kind: ToolId | string): {
   units: boolean;
   /** The neon switch — shapes that can be drawn as a lit sign. */
   neon: boolean;
+  /** How round the corners are, which only a rectangle has any. */
+  radius: boolean;
 } {
   const none = {
     stroke: false,
@@ -115,6 +129,7 @@ export function styleControlsFor(kind: ToolId | string): {
     color: false,
     units: false,
     neon: false,
+    radius: false,
   };
 
   switch (kind) {
@@ -135,6 +150,9 @@ export function styleControlsFor(kind: ToolId | string): {
     case "step":
       return { ...none, stroke: true, color: true };
     case "rect":
+      return { ...none, stroke: true, fill: true, color: true, neon: true, radius: true };
+    // No radius: an ellipse is already all corner, and there is nothing on it
+    // for the number to describe.
     case "ellipse":
       return { ...none, stroke: true, fill: true, color: true, neon: true };
     case "arrow":

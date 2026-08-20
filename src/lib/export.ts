@@ -6,6 +6,7 @@ import {
   neonBorderForFont,
   neonPaint,
   neonRadius,
+  rectRadius,
   contrastInk,
   FONT_STACK,
   fontFor,
@@ -383,11 +384,8 @@ function drawAnnotation(
       // A lit edge instead of a cast shadow, matching the preview — see the
       // `neon` branch in `AnnotationLayer`.
       withShadow(ctx, a.style.shadow && !a.style.neon, () => {
-        const r = a.style.neon
-          ? neonRadius(b.width, b.height)
-          : Math.min(4, b.width / 2, b.height / 2);
         ctx.beginPath();
-        ctx.roundRect(b.x, b.y, b.width, b.height, r);
+        ctx.roundRect(b.x, b.y, b.width, b.height, rectRadius(b, a.style));
         if (fillOpacity > 0) {
           ctx.globalAlpha = fillOpacity;
           ctx.fillStyle = color;

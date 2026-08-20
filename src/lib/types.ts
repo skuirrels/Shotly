@@ -190,6 +190,16 @@ export interface Style {
   fontSize: number;
   /** 0 = outline only, which is the default for rect/ellipse. */
   fillOpacity: number;
+  /**
+   * How round a rectangle's corners are, in image pixels. 0 is a square
+   * corner.
+   *
+   * A length rather than a fraction of the box, so that two rectangles drawn
+   * side by side over the same screenshot have corners that match instead of
+   * corners that scale with whatever each one happens to be sized at. Clamped
+   * to half the shorter side where it is drawn — see `rectRadius`.
+   */
+  cornerRadius: number;
   /** Blur/pixelate strength, in image pixels. */
   blurRadius: number;
   /** How far the spotlight darkens everything outside it, 0–1. */

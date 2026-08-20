@@ -203,6 +203,13 @@ DOM-addressable handles) and as **Canvas2D** on export (no canvas tainting, real
 `blur()` filters). Both compute shapes from `lib/shapes.ts`, so the exported PNG
 matches the preview.
 
+A rectangle's corners are the newest thing to live there. `rectRadius` decides
+them for both renderers: it clamps the setting to half the shorter side, hands
+neon its own lozenge radius instead, and reads markup that predates the setting
+as the fixed 4px those rectangles were always drawn with — reading the missing
+field as the new default of 0 would reopen someone's saved work with different
+corners.
+
 ### Capture pipeline
 
 The selection overlay never captures anything itself. On hotkey, Rust freezes

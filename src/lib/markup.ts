@@ -52,8 +52,13 @@ export interface MarkupDoc {
  * with a translucent fill belongs — the same shape in the same place, saying
  * something else. That is a different picture, so it earns the bump like the
  * rest.
+ *
+ * 9 made a rectangle's corner radius a setting. An older build has no branch
+ * for it and would draw every rectangle at the fixed 4px it has always used —
+ * a square box where a rounded one belongs, or the reverse, which is the same
+ * kind of quietly different picture as the rest of this list.
  */
-const VERSION = 8;
+const VERSION = 9;
 
 export function serialize(doc: Omit<MarkupDoc, "version">): string {
   return JSON.stringify({ version: VERSION, ...doc });
