@@ -1180,6 +1180,46 @@ square to the page, which is the most literally different picture on that list.
 `harness/spin.html` has every turnable kind at an angle, with the exporter's
 version of the same shapes beside it.
 
+## Zooming and pushing the canvas around
+
+Two things here are not obvious and both were arrived at the hard way.
+
+**The wheel listener is native, not React's `onWheel`.** React attaches wheel
+handlers *passively* at the root, where `preventDefault` does nothing — so the
+pane would zoom and scroll at the same time, with the WebView zooming itself
+underneath both. `addEventListener("wheel", …, { passive: false })` in an
+effect is the only version that works. A trackpad pinch arrives as a wheel
+event with `ctrlKey` set, in every engine and on every platform, so ⌘ and pinch
+share one path.
+
+**The zoom is read from the store, not from the closure.** A flick of the wheel
+delivers several events inside one frame and React has not re-rendered between
+them, so a `zoom` captured by the effect is the same stale number every time
+and all but one notch is silently lost. Zustand writes synchronously, so
+`useEditor.getState().zoom` is already the value the previous event asked for
+and notches compound. The zoom *rendered on the page* is measured off the stage
+rect rather than remembered, for the same reason.
+
+Keeping the point under the cursor still is a layout effect, and measured
+rather than calculated: it reads the stage rect after the commit and corrects
+`scrollLeft`/`scrollTop` by the difference. That way it is right whether the
+capture is scrolled, centred in a pane bigger than itself, or inset by a
+backdrop frame — none of which it has to know about. It has to be a *layout*
+effect: one tick later and the capture visibly jumps.
+
+The one case it cannot hold is a capture small enough to fit the pane, where
+there is no room to scroll and the content stays centred. That is fine and not
+worth fixing: the whole picture is on screen, so nothing is sliding out of
+view. Anchoring matters exactly when you are zoomed past the edges, and there
+it is exact to a rounding error on the integer scroll offsets.
+
+Space-to-pan is a **capture-phase** handler on the viewport that stops there.
+Anything less and the press also reaches the stage, so letting go leaves a
+rectangle behind wherever the pan ended. The hand cursor is forced onto every
+descendant with `[&_*]:cursor-grab`, because the shapes carry SVG `cursor`
+attributes and the stage carries an inline style, and a descendant rule is the
+only thing that outranks both.
+
 ## Lining shapes up — a pull, and a line that says why
 
 `lib/guides.ts` is pure arithmetic on axis-aligned boxes and knows nothing

@@ -15,6 +15,8 @@ const ORDER: CommandGroup[] = ["Tools", "Edit", "Style", "Arrange", "View", "Cap
  * a shape that already covers the area, and nothing on screen hints at it.
  */
 const GESTURES: { action: string; gesture: string }[] = [
+  { action: "Zoom in and out", gesture: "⌘-scroll, or pinch" },
+  { action: "Push the canvas around", gesture: "Hold space and drag" },
   { action: "Move an annotation", gesture: "Drag it" },
   { action: "Draw through an annotation", gesture: "Alt-drag" },
   { action: "Add to the selection", gesture: "Shift-click" },

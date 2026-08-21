@@ -33,6 +33,7 @@ import {
   IconTrash,
 } from "@/components/icons";
 import { ContextMenu, type MenuEntry } from "@/components/ui/ContextMenu";
+import { isEditingText } from "@/lib/keys/keys";
 import { forgetPixels, preloadPixels, sampleColor, snapToEdge } from "@/lib/pick";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import {
@@ -104,6 +105,32 @@ function fitCallout(a: Annotation): Annotation {
 }
 const PAD = 48;
 
+/**
+ * How fast a wheel notch or a pinch changes the zoom.
+ *
+ * Exponential rather than additive, because zoom is multiplicative: a step
+ * that adds 0.1 is a third of the picture at 0.3 and a rounding error at 8.
+ * The figure gives about 15% per notch of an ordinary mouse wheel, which is
+ * fine enough to land on a number you meant and coarse enough to cross the
+ * range in a flick.
+ */
+const ZOOM_SENSITIVITY = 0.0015;
+
+/** What one line of a `deltaMode: 1` wheel is worth in pixels. */
+const WHEEL_LINE = 16;
+
+/**
+ * WebKit's own pinch event, which `lib.dom` has never had a type for.
+ *
+ * `scale` is cumulative from the start of the gesture — 1 at `gesturestart`,
+ * 1.5 when the fingers are half again as far apart — rather than a step.
+ */
+interface GestureEvent extends UIEvent {
+  scale: number;
+  clientX: number;
+  clientY: number;
+}
+
 interface CanvasProps {
   onNotify?: (text: string) => void;
   /**
@@ -158,6 +185,19 @@ export function Canvas({ onNotify, actions, onScan }: CanvasProps) {
   const pointer = useRef<Point | null>(null);
   /** The alignment lines to draw for the gesture in progress. */
   const [guides, setGuides] = useState<Guide[]>([]);
+  /** Space is down: the canvas is a thing to push around rather than draw on. */
+  const [handOpen, setHandOpen] = useState(false);
+  /** True only while a pan is actually under way, for the closed-hand cursor. */
+  const [panning, setPanning] = useState(false);
+  /** Where a pan started, and where the pane was scrolled to at the time. */
+  const pan = useRef<{ x: number; y: number; left: number; top: number } | null>(null);
+  /**
+   * The point the next zoom has to keep still, if there is one.
+   *
+   * Set by the wheel handler and consumed by the layout effect below, because
+   * the correction can only be worked out once the new size is on the page.
+   */
+  const anchor = useRef<{ doc: Point; client: { x: number; y: number } } | null>(null);
   /** Open right-click menu: where it is, and which shape it was opened on. */
   const [menu, setMenu] = useState<{ at: { x: number; y: number }; id: string | null } | null>(
     null,
@@ -187,6 +227,206 @@ export function Canvas({ onNotify, actions, onScan }: CanvasProps) {
     observer.observe(el);
     return () => observer.disconnect();
   }, [doc]);
+
+  // ------------------------------------------------------- zoom and pan
+
+  /**
+   * ⌘ with the wheel zooms, and so does a trackpad pinch.
+   *
+   * A native listener rather than React's `onWheel`, and that is not a style
+   * choice: React attaches wheel handlers passively at the root, where
+   * `preventDefault` does nothing — so the pane would zoom *and* scroll, and
+   * the WebView would zoom itself underneath both.
+   *
+   * A pinch arrives as a wheel event with `ctrlKey` set, on every platform and
+   * in every engine. It is not a real Control key and there is nothing else it
+   * could mean here, so the two share a path.
+   */
+  useEffect(() => {
+    const el = viewport.current;
+    if (!el || !doc) return;
+
+    const onWheel = (e: WheelEvent) => {
+      if (!e.metaKey && !e.ctrlKey) return;
+      e.preventDefault();
+
+      const r = stage.current?.getBoundingClientRect();
+      if (!r) return;
+
+      // Some mice report their notches in lines rather than pixels, and a
+      // line's worth of `deltaY` is about 3 — which without this would zoom by
+      // half a percent and feel broken.
+      const delta = e.deltaMode === 1 ? e.deltaY * WHEEL_LINE : e.deltaY;
+
+      // The zoom *on the page*, measured rather than remembered. A flick of
+      // the wheel delivers several events inside one frame, and React has not
+      // re-rendered between them — so a value read from this closure would be
+      // the same stale number every time and all but one notch would be lost.
+      const shown = r.width / doc.crop.width;
+      const store = useEditor.getState();
+
+      // Remembered in document coordinates, which is the only frame that does
+      // not move when the zoom changes.
+      anchor.current = {
+        doc: { x: (e.clientX - r.left) / shown, y: (e.clientY - r.top) / shown },
+        client: { x: e.clientX, y: e.clientY },
+      };
+      // The store, on the other hand, *is* current: zustand writes on the
+      // spot, so notches inside one frame compound instead of overwriting.
+      const from = store.fitToWindow ? shown : store.zoom;
+      store.setZoom(from * Math.exp(-delta * ZOOM_SENSITIVITY));
+    };
+
+    /**
+     * A trackpad pinch, the way WebKit reports one.
+     *
+     * Chromium turns a pinch into a wheel event with `ctrlKey` set, which the
+     * handler above already takes. WebKit — and therefore the WebView this app
+     * actually ships in — sends its own `gesturestart` / `gesturechange`
+     * instead, carrying a cumulative `scale` rather than a delta. Without
+     * these, pinching does nothing in the built app while working perfectly in
+     * the harness browser, which is the most misleading way for a gesture to
+     * be broken.
+     *
+     * Not in `lib.dom`, because they are WebKit's alone.
+     */
+    let from = 1;
+
+    const onGestureStart = (raw: Event) => {
+      raw.preventDefault();
+      const e = raw as GestureEvent;
+      const r = stage.current?.getBoundingClientRect();
+      if (!r) return;
+      const shown = r.width / doc.crop.width;
+      anchor.current = {
+        doc: { x: (e.clientX - r.left) / shown, y: (e.clientY - r.top) / shown },
+        client: { x: e.clientX, y: e.clientY },
+      };
+      const store = useEditor.getState();
+      from = store.fitToWindow ? shown : store.zoom;
+    };
+
+    const onGestureChange = (raw: Event) => {
+      raw.preventDefault();
+      const e = raw as GestureEvent;
+      const r = stage.current?.getBoundingClientRect();
+      if (!r) return;
+      // Re-aimed on every step: a pinch drifts across the trackpad, and the
+      // point being magnified should follow the fingers.
+      const shown = r.width / doc.crop.width;
+      anchor.current = {
+        doc: { x: (e.clientX - r.left) / shown, y: (e.clientY - r.top) / shown },
+        client: { x: e.clientX, y: e.clientY },
+      };
+      // `scale` is measured from the start of the gesture, not the last event,
+      // so this multiplies the zoom the pinch began at rather than compounding.
+      useEditor.getState().setZoom(from * e.scale);
+    };
+
+    el.addEventListener("wheel", onWheel, { passive: false });
+    el.addEventListener("gesturestart", onGestureStart);
+    el.addEventListener("gesturechange", onGestureChange);
+    return () => {
+      el.removeEventListener("wheel", onWheel);
+      el.removeEventListener("gesturestart", onGestureStart);
+      el.removeEventListener("gesturechange", onGestureChange);
+    };
+  }, [doc]);
+
+  /**
+   * Put the point that was under the cursor back under the cursor.
+   *
+   * Zooming about the middle of the pane is the thing that makes a canvas feel
+   * like a map you are lost on: you aim at a detail, magnify, and it slides
+   * away. Here the correction is measured off the page rather than calculated,
+   * so it is right whether the capture is scrolled, centred in a pane bigger
+   * than itself, or wearing a frame that insets it.
+   *
+   * A layout effect because it has to land in the same frame as the resize.
+   * One tick later and the capture visibly jumps.
+   */
+  useLayoutEffect(() => {
+    const held = anchor.current;
+    anchor.current = null;
+
+    const el = viewport.current;
+    const r = stage.current?.getBoundingClientRect();
+    if (!held || !el || !r) return;
+
+    el.scrollLeft += r.left + held.doc.x * zoom - held.client.x;
+    el.scrollTop += r.top + held.doc.y * zoom - held.client.y;
+  }, [zoom]);
+
+  /**
+   * Space picks the canvas up.
+   *
+   * Held rather than toggled, which is what every canvas app does and what the
+   * hand cursor promises. `preventDefault` on the way down stops two things:
+   * the pane scrolling a page, and — the one that looks like a bug — the last
+   * button clicked being pressed again, since a focused button treats space as
+   * a click.
+   */
+  useEffect(() => {
+    const down = (e: KeyboardEvent) => {
+      if (e.code !== "Space" || e.repeat) return;
+      if (isEditingText(document.activeElement)) return;
+      e.preventDefault();
+      setHandOpen(true);
+    };
+    const up = (e: KeyboardEvent) => {
+      if (e.code === "Space") setHandOpen(false);
+    };
+    // Switching away with space held would otherwise leave the canvas showing
+    // a hand it will not honour.
+    const clear = () => setHandOpen(false);
+
+    window.addEventListener("keydown", down);
+    window.addEventListener("keyup", up);
+    window.addEventListener("blur", clear);
+    return () => {
+      window.removeEventListener("keydown", down);
+      window.removeEventListener("keyup", up);
+      window.removeEventListener("blur", clear);
+    };
+  }, []);
+
+  /**
+   * Start a pan, before the canvas underneath can start anything else.
+   *
+   * On the capture phase and stopping there: a press with space held must not
+   * also reach the stage, or letting go would leave a rectangle behind
+   * wherever the pan happened to end.
+   */
+  const onViewportPointerDown = (e: React.PointerEvent) => {
+    const el = viewport.current;
+    if (!el) return;
+    // The middle button is the same gesture with the other hand, and is what
+    // people who came from a CAD package or a browser reach for first.
+    if (!handOpen && e.button !== 1) return;
+
+    e.preventDefault();
+    e.stopPropagation();
+    el.setPointerCapture(e.pointerId);
+    pan.current = { x: e.clientX, y: e.clientY, left: el.scrollLeft, top: el.scrollTop };
+    setPanning(true);
+  };
+
+  const onViewportPointerMove = (e: React.PointerEvent) => {
+    const from = pan.current;
+    const el = viewport.current;
+    if (!from || !el) return;
+    // The canvas follows the hand, so the scroll goes the other way.
+    el.scrollLeft = from.left - (e.clientX - from.x);
+    el.scrollTop = from.top - (e.clientY - from.y);
+  };
+
+  // Deliberately not ended by letting go of space: a pan that stopped halfway
+  // because a thumb lifted early would be its own small annoyance.
+  const endPan = () => {
+    if (!pan.current) return;
+    pan.current = null;
+    setPanning(false);
+  };
 
   // The hover cursor has to say which gesture Alt is about to produce — the
   // whole bug being fixed here was a cursor promising a move that never came.
@@ -970,8 +1210,12 @@ export function Canvas({ onNotify, actions, onScan }: CanvasProps) {
   if (!doc) return null;
 
   const editing = annotations.find((a) => a.id === editingId);
+  // The hand outranks every tool's cursor: while space is down the canvas is
+  // not something you can draw on, and saying otherwise would be a lie the
+  // very next click exposes.
+  const hand = panning ? "grabbing" : handOpen ? "grab" : null;
   const cursor =
-    tool === "select" ? "default" : tool === "text" ? "text" : "crosshair";
+    hand ?? (tool === "select" ? "default" : tool === "text" ? "text" : "crosshair");
   const showSwatch = tool === "pick" && swatch;
 
   // The frame wraps the stage rather than being drawn inside it. Every
@@ -985,7 +1229,23 @@ export function Canvas({ onNotify, actions, onScan }: CanvasProps) {
   const bareCanvas = hasBareCanvas(doc);
 
   return (
-    <div ref={viewport} className="relative flex-1 overflow-auto bg-inset">
+    <div
+      ref={viewport}
+      className={clsx(
+        "relative flex-1 overflow-auto bg-inset",
+        // Every shape, handle and grip inside says something about itself with
+        // a cursor of its own, and while the canvas is being pushed around
+        // none of them is true. A descendant rule is the only thing that
+        // outranks an SVG `cursor` attribute and an inline style at once.
+        hand === "grab" && "[&_*]:cursor-grab",
+        hand === "grabbing" && "[&_*]:cursor-grabbing",
+      )}
+      style={{ cursor: hand ?? undefined }}
+      onPointerDownCapture={onViewportPointerDown}
+      onPointerMove={onViewportPointerMove}
+      onPointerUp={endPan}
+      onPointerCancel={endPan}
+    >
       <div className="flex min-h-full min-w-full items-center justify-center" style={{ padding: PAD }}>
         <div
           className={clsx("shrink-0", !frame && "contents")}

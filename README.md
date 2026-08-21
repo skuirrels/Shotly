@@ -221,6 +221,10 @@ A few things worth knowing:
 - **Every tool remembers its own ink.** Yellow for the highlighter doesn't make
   the next arrow yellow. <kbd>⌥⌘C</kbd> and <kbd>⌥⌘V</kbd> copy a whole look —
   colour, weight, fill, corners, glow — from one shape onto another.
+- **⌘-scroll zooms**, on whatever the pointer is over — so you can aim at a
+  detail and magnify it rather than watch it slide off the edge. A trackpad
+  pinch does the same. **Hold space** and drag to push the canvas around once
+  you're in past the edges; the middle mouse button does it too.
 - Drag an annotation to move it, drag a corner to resize, Alt-drag to draw
   *through* a shape that's in the way.
 - Paste an image on top with <kbd>⌘V</kbd> and drag it around — good for
@@ -393,7 +397,8 @@ Hotkeys tab that opens the right pane.
 <kbd>⇧S</kbd> shadow · <kbd>⌘]</kbd> <kbd>⌘[</kbd> forward/backward ·
 <kbd>⏎</kbd> apply crop · <kbd>⌥⌘C</kbd> <kbd>⌥⌘V</kbd> copy/paste style ·
 <kbd>⌘⇧B</kbd> blur anything sensitive · <kbd>⌘=</kbd> <kbd>⌘−</kbd> zoom ·
-<kbd>⌘0</kbd> fit · <kbd>⌘1</kbd> actual size · <kbd>⌘L</kbd> back to library ·
+<kbd>⌘0</kbd> fit · <kbd>⌘1</kbd> actual size · <kbd>⌘</kbd>-scroll zoom ·
+<kbd>space</kbd>-drag pan · <kbd>⌘L</kbd> back to library ·
 <kbd>⌘N</kbd> new blank image · <kbd>⌘⇧V</kbd> new image from the clipboard ·
 <kbd>⌘,</kbd> settings
 

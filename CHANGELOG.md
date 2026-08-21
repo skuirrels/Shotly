@@ -8,6 +8,16 @@ The release notes on GitHub and the "what's new" text the in-app updater shows
 are both taken from this file — see `docs/RELEASING.md`. A version with nothing
 written here cannot be published.
 
+## Unreleased
+
+- **⌘-scroll zooms where you are pointing**, and a trackpad pinch does the same
+  — so you can aim at a detail and magnify it instead of watching it slide off
+  the edge. **Hold space and drag** to push the canvas around once you are
+  zoomed in past the edges, the way Figma and Miro do it. The middle mouse
+  button pans too.
+- The gestures are listed on the shortcut sheet (⌘/), under the pointer
+  gestures that have no key to name them.
+
 ## 0.11.0 — 2026-08-21
 
 - **Blur was never in the file.** It looked right in the editor and came out
