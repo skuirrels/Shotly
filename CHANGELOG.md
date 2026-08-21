@@ -8,6 +8,19 @@ The release notes on GitHub and the "what's new" text the in-app updater shows
 are both taken from this file — see `docs/RELEASING.md`. A version with nothing
 written here cannot be published.
 
+## 0.10.22 — 2026-08-21
+
+- Shapes can be turned. Selections now have a handle on each of the four
+  flat sides as well as the corners, and a green grip above the top edge
+  that rotates whatever is selected — hold Shift to snap to 15°. The frame
+  turns with the shape, so a handle on its top edge still stretches its
+  top edge however far round it has been taken. Both in the editor and on
+  the live annotation layer, where a whole selection turns as one piece.
+- Pressing the annotation hotkey a second time no longer hangs Shotly.
+  Ctrl+Shift+A with the layer already up froze the app outright — no
+  drawing, no menu bar, no tray, force-quit only. It closes the layer, as
+  it always meant to.
+
 ## 0.10.21 — 2026-08-20
 
 - Pointing at a browser frames the page for as long as the app is running.
