@@ -610,6 +610,14 @@ way while building the feature: running `screencapture -g` from a shell raised
 the prompt against the terminal's app, named it, and quoted *its* usage
 description.
 
+Three places carry the switch, and the third one is not redundancy. The
+recording overlay has it because that is the moment the question is being
+asked; Settings has it because that is where switches live; and the **tray**
+has it because the menu bar is the one way in that never shows the overlay —
+*Record Whole Screen* starts the instant it is chosen, so without a tick in
+that menu there is no way to ask for sound on that path at all. All three read
+and write one file, so there is one answer to what the switch means.
+
 Two consequences shape `platform::microphone`. The prompt is raised when the
 switch is turned on, never at the shutter — a permission dialog that arrives a
 second into a recording is a dialog sitting on top of the thing being recorded,

@@ -8,6 +8,15 @@ The release notes on GitHub and the "what's new" text the in-app updater shows
 are both taken from this file — see `docs/RELEASING.md`. A version with nothing
 written here cannot be published.
 
+## Unreleased
+
+- **The microphone switch is in the menu bar too**, as *Record Microphone*
+  under the two recording items. It was previously only on the recording
+  overlay and in Settings → General — which left *Record Whole Screen* with no
+  way to ask for sound at all, since it starts the instant you choose it.
+- If the switch is on but macOS has never been asked for permission, the
+  overlay asks when it opens rather than letting the recording come out silent.
+
 ## 0.13.0 — 2026-08-21
 
 - **Screen recordings can have your voice on them.** There is a microphone

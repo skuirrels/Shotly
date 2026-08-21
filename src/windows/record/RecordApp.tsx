@@ -117,7 +117,19 @@ function Select() {
   const [mic, setMic] = useState<MicrophoneState | null>(null);
 
   useEffect(() => {
-    void recordMicrophone().then(setMic).catch(() => {});
+    void recordMicrophone()
+      .then((state) => {
+        setMic(state);
+        // A switch that is on but was never permitted — the setting outlived a
+        // reinstall, or macOS reset its answer. Ask now, while the overlay is
+        // up and the question is still cheap: at the shutter it would be a
+        // dialog over the thing being recorded, and unasked it would be a take
+        // that comes out silent for no reason anyone could see.
+        if (state.on && state.access === "undecided") {
+          void setRecordMicrophone(true).then(setMic).catch(() => {});
+        }
+      })
+      .catch(() => {});
   }, []);
 
   // While the system dialog is up there is nothing to do but ask again: the

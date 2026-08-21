@@ -116,6 +116,33 @@ fn access_word() -> &'static str {
     }
 }
 
+/// The switch, for anything that is not a webview.
+///
+/// The tray needs it because the menu bar is the one way in that never shows
+/// the overlay: "Record Whole Screen" starts the moment it is chosen, so the
+/// only chance to say "with sound" is before the menu is even open.
+pub fn microphone_on(app: &AppHandle) -> bool {
+    settings(app).microphone
+}
+
+/// Flip it, and ask for permission if that is what turning it on now needs.
+pub fn toggle_microphone(app: &AppHandle) {
+    let on = !settings(app).microphone;
+    if let Err(e) = write_settings(app, Settings { microphone: on }) {
+        eprintln!("[shotly] could not remember the microphone switch: {e}");
+        return;
+    }
+    if on {
+        crate::platform::microphone::request();
+    }
+}
+
+fn write_settings(app: &AppHandle, next: Settings) -> Result<(), String> {
+    let path = store_path(app)?;
+    let raw = serde_json::to_string(&next).map_err(|e| e.to_string())?;
+    std::fs::write(&path, raw).map_err(|e| format!("could not write {path:?}: {e}"))
+}
+
 /// Turn the microphone on or off for the next recording.
 ///
 /// Switching it on is also where permission is asked for, if it has never been
@@ -125,9 +152,7 @@ fn access_word() -> &'static str {
 /// whether it can be honoured.
 #[tauri::command]
 pub fn set_record_microphone(app: AppHandle, on: bool) -> Result<Microphone, String> {
-    let path = store_path(&app)?;
-    let raw = serde_json::to_string(&Settings { microphone: on }).map_err(|e| e.to_string())?;
-    std::fs::write(&path, raw).map_err(|e| format!("could not write {path:?}: {e}"))?;
+    write_settings(&app, Settings { microphone: on })?;
     if on {
         crate::platform::microphone::request();
     }

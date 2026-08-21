@@ -25,7 +25,7 @@ mod video;
 use capture::cli::ScreencaptureCli;
 use commands::{AppState, CaptureMode};
 use std::sync::Mutex;
-use tauri::menu::{AboutMetadata, Menu, MenuItem, MenuItemKind, PredefinedMenuItem};
+use tauri::menu::{AboutMetadata, CheckMenuItem, Menu, MenuItem, MenuItemKind, PredefinedMenuItem};
 use tauri::tray::TrayIconBuilder;
 use tauri::{Manager, WindowEvent};
 
@@ -525,6 +525,19 @@ fn tray_menu(app: &tauri::AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
     )?;
     let record_screen =
         MenuItem::with_id(app, "record-screen", "Record Whole Screen", !recording, None::<&str>)?;
+    // The switch has to be here as well as on the overlay, because the item
+    // above never shows the overlay: "Record Whole Screen" starts the moment it
+    // is chosen, so this is the only place left to say "with sound" first.
+    // Frozen mid-take — the flag is handed to `screencapture` at the shutter
+    // and nothing can add a track to a movie already being written.
+    let record_mic = CheckMenuItem::with_id(
+        app,
+        "record-mic",
+        "Record Microphone",
+        !recording,
+        record::microphone_on(app),
+        None::<&str>,
+    )?;
     let annotate =
         MenuItem::with_id(app, "annotate", "Annotate Screen", true, accel(Action::Annotate))?;
     let stop = MenuItem::with_id(app, "stop-annotate", "Exit Annotation Mode", true, None::<&str>)?;
@@ -558,6 +571,7 @@ fn tray_menu(app: &tauri::AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
         &sep,
         &record,
         &record_screen,
+        &record_mic,
         &sep,
         &annotate,
         &stop,
@@ -660,6 +674,13 @@ fn build_tray(app: &tauri::AppHandle) -> tauri::Result<()> {
                     eprintln!("[shotly] recording failed: {err}");
                     let _ = tauri::Emitter::emit(app, "capture:error", err);
                 }
+            }
+            "record-mic" => {
+                record::toggle_microphone(app);
+                // Rebuilt rather than ticked: the menu is regenerated from the
+                // stored setting everywhere else too, so there is one answer to
+                // what the tick means and it is on disk.
+                refresh_tray(app);
             }
             "record-screen" => {
                 if let Err(err) = record::record_screen(app.clone()) {

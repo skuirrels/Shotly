@@ -83,8 +83,10 @@ appears at the bottom of the display with the elapsed time and the way out —
 **Stop and save**, or **Discard**. The same key stops the recording, and so
 does the menu bar, which says *Stop Recording* while one is running.
 
-**Your voice, if you want it.** The overlay has a microphone switch next to
-*Record the whole screen*, and Settings has the same one — turn it on and the
+**Your voice, if you want it.** The microphone switch is in three places: on
+the recording overlay next to *Record the whole screen*, in the menu bar under
+*Record Microphone* (the only one that works for *Record Whole Screen*, which
+starts the moment you pick it), and in Settings → General. Turn it on and the
 recording picks up whichever input your Mac is set to use, so you can talk over
 what you are showing. macOS asks permission the first time you switch it on.
 The panel shows a microphone while it is being recorded, so a silent take is
