@@ -1180,6 +1180,79 @@ square to the page, which is the most literally different picture on that list.
 `harness/spin.html` has every turnable kind at an angle, with the exporter's
 version of the same shapes beside it.
 
+## Lining shapes up — a pull, and a line that says why
+
+`lib/guides.ts` is pure arithmetic on axis-aligned boxes and knows nothing
+about pointers, React or annotations beyond `spunBoundsOf`. That is deliberate:
+the whole feature is worth a couple of pixels, so the only way to know it is
+right is to assert on numbers, and `guides.test.ts` does.
+
+A gesture hands it one box and gets back `{ dx, dy, guides }`. Three coordinates
+per axis take part — near edge, centre, far edge — for the moving box and for
+every target, where the targets are the other annotations' *spun* bounds plus
+the page itself. Rotation needs no special case anywhere in this file: a turned
+shape snaps by the rectangle it visibly occupies, which is the only rectangle a
+guide could honestly be drawn against.
+
+Two passes, and the second one is not optional. The first finds the smallest
+correction any mark can make; the second re-asks every mark *at the corrected
+position* and keeps all of them that still agree. A shape that lines up with two
+things and admits to one looks like it moved on its own.
+
+Which box gets passed in is the whole of the caller's job, and it differs by
+gesture:
+
+| Gesture | Box handed to the snapper | Why |
+|---|---|---|
+| move | the union of the selection's spun bounds | dragging three shapes lines *the group* up, which is what the marching rectangle looks like it should do |
+| resize | the dragged point alone, and only at `angle === 0` | snapping the box would drag the anchored corner off the spot it is pinned to |
+| create | the corner under the hand | same reason: the other corner is where the drag began |
+
+Modifiers already meant things, so snapping had to fit around them rather than
+take a key of its own. Shift is an axis lock on a move and a square/angle
+constraint on a create — a snap on a locked axis would quietly undo the
+constraint the user is holding down, so it is dropped, guides and all. **⌘
+suspends snapping**, which is the Figma convention and the only free modifier
+left.
+
+Even spacing is the second half, and it only fires on an axis where alignment
+found nothing: both pulling at once lands a shape somewhere it was never
+dragged. It matches against gaps that already exist between neighbours in the
+same row, and skips any target the moving box sits *inside* — the page is one
+of those, and a margin to the capture's edge is not a gap anyone is evening up.
+
+`harness/guides.html` has the shapes arranged to trigger both: a column sharing
+a left edge, and a row already an even 60 apart.
+
+## One tool, one ink
+
+Colour, weight and the rest used to be a single shared setting, so picking
+yellow for a highlight made the next arrow yellow. They are now one slot per
+tool in local storage — `shotly.style.<tool>` — read whole on every tool
+switch and written whole on every change. `sanitize` validates field by field
+so one bad number costs one setting rather than the lot, and a slot that has
+never been written falls back to the old shared keys, so upgrading doesn't
+throw away the ink someone has been working in.
+
+The slot name is the tool id, which for every drawing tool is *also* the
+annotation kind it produces. That coincidence is load-bearing: `slotFor` picks
+the selected shape's kind over the tool in hand, so recolouring a selected
+arrow teaches the arrow tool whatever tool happens to be up, with no lookup
+table. The working style only moves when the change belongs to the tool in
+hand — otherwise one click on a selected shape would follow you into the next
+shape you drew.
+
+`shownStyle` is the other half: every control reads whichever style it is about
+to write, which is the selected shape's own when there is one. The toolbar used
+to show the tool's ink while a shape drawn in something else was selected, so
+every control read as wrong until you touched it.
+
+⌥⌘C / ⌥⌘V carry a whole style from one shape to another, including the parts
+the receiving shape has no use for — an arrow ignores a corner radius, and
+carrying it means the same look still lands on a rectangle later. Two commands
+rather than a mode: a mode needs a place in the toolbar, a cursor, and a way
+out of it.
+
 ## Window level and Spaces — the rule for every overlay
 
 A window created while a full-screen app is in front belongs to the **desktop**

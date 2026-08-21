@@ -5,7 +5,16 @@ import { Popover } from "@/components/ui/Popover";
 import { Tooltip } from "@/components/ui/Tooltip";
 import type { Style } from "@/lib/types";
 import { withAlpha } from "@/lib/shapes";
-import { MAX_RADIUS, MAX_STROKE, MIN_RADIUS, MIN_STROKE, useEditor } from "@/state/editorStore";
+import {
+  MAX_FONT,
+  MAX_RADIUS,
+  MAX_STROKE,
+  MIN_FONT,
+  MIN_RADIUS,
+  MIN_STROKE,
+  shownStyle,
+  useEditor,
+} from "@/state/editorStore";
 import { OverlayPicker } from "./OverlayPicker";
 import {
   FONT_PRESETS,
@@ -33,10 +42,7 @@ interface Props {
 export function Toolbar({ currentPath, onNotify }: Props) {
   const tool = useEditor((s) => s.tool);
   const setTool = useEditor((s) => s.setTool);
-  const style = useEditor((s) => s.style);
   const setStyle = useEditor((s) => s.setStyle);
-  const calloutFontSize = useEditor((s) => s.calloutFontSize);
-  const setCalloutFontSize = useEditor((s) => s.setCalloutFontSize);
   const annotations = useEditor((s) => s.annotations);
   const selectedIds = useEditor((s) => s.selectedIds);
   const retina = useEditor((s) => (s.doc?.scale ?? 1) > 1);
@@ -51,14 +57,10 @@ export function Toolbar({ currentPath, onNotify }: Props) {
   const controls = styleControlsFor(kind);
   const anyControls = Object.values(controls).some(Boolean);
 
-  // The font control drives two different remembered sizes. Reading the one it
-  // is about to write keeps the number in the popover honest — it always shows
-  // the size the next shape of this kind will actually be.
-  const isCallout = kind === "callout";
-  const fontSize = isCallout ? calloutFontSize : style.fontSize;
-  const setFontSize = isCallout
-    ? setCalloutFontSize
-    : (next: number) => setStyle({ fontSize: next });
+  // Every control reads whichever style it is about to write: the selected
+  // shape's own, or — with nothing selected — the ink this tool was last used
+  // with. See `shownStyle`.
+  const style = useEditor(shownStyle);
 
   return (
     <div className="pointer-events-none absolute inset-x-0 bottom-5 z-40 flex justify-center">
@@ -127,11 +129,11 @@ export function Toolbar({ currentPath, onNotify }: Props) {
         {controls.font && (
           <SizeControl
             label="Font size"
-            value={fontSize}
+            value={style.fontSize}
             presets={FONT_PRESETS}
-            min={10}
-            max={120}
-            onChange={setFontSize}
+            min={MIN_FONT}
+            max={MAX_FONT}
+            onChange={(fontSize) => setStyle({ fontSize })}
             render={() => <span className="text-[13px] font-semibold">Aa</span>}
           />
         )}

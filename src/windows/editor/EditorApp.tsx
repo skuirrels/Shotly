@@ -43,7 +43,18 @@ import { overlayFromClipboard } from "@/lib/overlay";
 import { useUpdates } from "@/lib/updater";
 import type { CaptureMode, CaptureResult, Rect, Scan, Trimmed } from "@/lib/types";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
-import { MAX_STROKE, MIN_STROKE, useEditor } from "@/state/editorStore";
+import {
+  MAX_BLUR,
+  MAX_DIM,
+  MAX_FONT,
+  MAX_STROKE,
+  MIN_BLUR,
+  MIN_DIM,
+  MIN_FONT,
+  MIN_STROKE,
+  shownStyle,
+  useEditor,
+} from "@/state/editorStore";
 import { Canvas } from "./Canvas";
 import { CommandPalette } from "./CommandPalette";
 import { EmptyLibrary, PermissionNotice } from "./EmptyState";
@@ -936,20 +947,19 @@ export function EditorApp() {
       const controls = styleControlsFor(kind ?? st.tool);
       const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
 
+      // Whatever the toolbar is showing is what these keys change, and that is
+      // the selected shape's own numbers when there is one — otherwise ] on a
+      // selected 16px label would step the tool's remembered 48 to 50.
+      const from = shownStyle(st);
+
       if (controls.font) {
-        // Callouts remember their text size separately; the keys have to write
-        // whichever slot the popover beside them is reading.
-        if ((kind ?? st.tool) === "callout") {
-          st.setCalloutFontSize(clamp(st.calloutFontSize + delta * 2, 10, 120));
-        } else {
-          st.setStyle({ fontSize: clamp(st.style.fontSize + delta * 2, 10, 120) });
-        }
+        st.setStyle({ fontSize: clamp(from.fontSize + delta * 2, MIN_FONT, MAX_FONT) });
       } else if (controls.blur) {
-        st.setStyle({ blurRadius: clamp(st.style.blurRadius + delta * 2, 2, 60) });
+        st.setStyle({ blurRadius: clamp(from.blurRadius + delta * 2, MIN_BLUR, MAX_BLUR) });
       } else if (controls.dim) {
-        st.setStyle({ dim: clamp(st.style.dim + delta * 0.05, 0.1, 0.95) });
+        st.setStyle({ dim: clamp(from.dim + delta * 0.05, MIN_DIM, MAX_DIM) });
       } else {
-        st.setStyle({ strokeWidth: clamp(st.style.strokeWidth + delta, MIN_STROKE, MAX_STROKE) });
+        st.setStyle({ strokeWidth: clamp(from.strokeWidth + delta, MIN_STROKE, MAX_STROKE) });
       }
     };
 
@@ -1139,7 +1149,7 @@ export function EditorApp() {
         group: "Style",
         shortcut: "F",
         enabled: hasDoc,
-        run: () => s().setStyle({ fillOpacity: s().style.fillOpacity > 0 ? 0 : 0.25 }),
+        run: () => s().setStyle({ fillOpacity: shownStyle(s()).fillOpacity > 0 ? 0 : 0.25 }),
       },
       {
         id: "style.shadow",
@@ -1147,7 +1157,7 @@ export function EditorApp() {
         group: "Style",
         shortcut: "Shift+S",
         enabled: hasDoc,
-        run: () => s().setStyle({ shadow: !s().style.shadow }),
+        run: () => s().setStyle({ shadow: !shownStyle(s()).shadow }),
       },
       {
         id: "style.neon",
@@ -1156,7 +1166,33 @@ export function EditorApp() {
         shortcut: "Shift+N",
         keywords: "glow lit sign bright border callout box label",
         enabled: hasDoc,
-        run: () => s().setStyle({ neon: !s().style.neon }),
+        run: () => s().setStyle({ neon: !shownStyle(s()).neon }),
+      },
+
+      // The format painter, as two commands rather than a mode. A mode would
+      // need somewhere to live in the toolbar, a cursor of its own, and a way
+      // out of it; two keystrokes need none of that and read the same way as
+      // the copy and paste beside them.
+      {
+        id: "style.copy",
+        title: "Copy style",
+        group: "Style",
+        shortcut: "Mod+Alt+C",
+        keywords: "format painter look appearance",
+        enabled: () => s().selectedIds.length > 0,
+        run: () =>
+          notify(s().copyStyle() ? "Style copied" : "Select a shape to copy its style", "ok"),
+      },
+      {
+        id: "style.paste",
+        title: "Paste style",
+        group: "Style",
+        shortcut: "Mod+Alt+V",
+        keywords: "format painter look appearance apply",
+        enabled: () => s().clipboardStyle !== null && s().selectedIds.length > 0,
+        run: () => {
+          if (!s().pasteStyle()) notify("No style copied yet — ⌥⌘C on a shape first", "error");
+        },
       },
 
       // ---------------------------------------------------------- arrange

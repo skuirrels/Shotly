@@ -121,6 +121,21 @@ export const IconEyedropper = (p: SVGProps<SVGSVGElement>) => (
   </Icon>
 );
 
+/**
+ * A brush, for lifting a look off one shape and putting it on another.
+ *
+ * Deliberately unlike the eyedropper beside it in the menu: that one takes a
+ * single colour out of the picture, this one takes everything about how a
+ * shape is drawn.
+ */
+export const IconBrush = (p: SVGProps<SVGSVGElement>) => (
+  <Icon {...p}>
+    <path d="M13.4 2.6 7.9 8.1" />
+    <path d="M9.6 4.8 11.2 6.4" />
+    <path d="M6.9 7.1 8.9 9.1a1.4 1.4 0 0 1 0 2l-1.6 1.6a2.6 2.6 0 0 1-3.7 0l-.6-.6 1.4-1.4" />
+  </Icon>
+);
+
 /** The usual cog: a ring of teeth around a hub. */
 export const IconGear = (p: SVGProps<SVGSVGElement>) => (
   <Icon {...p}>

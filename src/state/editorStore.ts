@@ -141,9 +141,35 @@ const DEFAULT_CANVAS_FILL = "#FFFFFF";
 const TRANSIENT_TOOLS: ToolId[] = ["crop"];
 
 const TOOL_KEY = "shotly.tool";
-const COLOR_KEY = "shotly.color";
-const STROKE_KEY = "shotly.strokeWidth";
-const RADIUS_KEY = "shotly.cornerRadius";
+
+/**
+ * Where each tool's ink is kept, one entry per tool.
+ *
+ * Ink used to be one setting shared by everything, which meant picking yellow
+ * for a highlight made the next arrow yellow — and nobody has ever wanted a
+ * yellow arrow. In practice a person has *a way they draw arrows* and *a way
+ * they highlight*, and those are different decisions that happen to be made
+ * with the same controls.
+ *
+ * The slot name is the tool id, which for every drawing tool is also the
+ * annotation kind it produces. That coincidence is what lets a change made
+ * with a shape selected land in the right slot without a lookup table:
+ * recolouring a selected arrow teaches the arrow tool, whatever tool is
+ * actually in hand.
+ */
+const STYLE_PREFIX = "shotly.style.";
+
+/**
+ * The keys the single shared style used to live in.
+ *
+ * Read once, as the starting point for a slot that has never been written, so
+ * that upgrading doesn't throw away the colour and weight someone has been
+ * working in. Never written again — a slot saves itself the first time it is
+ * changed, and after that these are dead.
+ */
+const LEGACY_COLOR_KEY = "shotly.color";
+const LEGACY_STROKE_KEY = "shotly.strokeWidth";
+const LEGACY_RADIUS_KEY = "shotly.cornerRadius";
 
 /**
  * The range a stroke width may take.
@@ -168,6 +194,107 @@ export const MAX_STROKE = 40;
  */
 export const MIN_RADIUS = 0;
 export const MAX_RADIUS = 200;
+
+/**
+ * The rest of the ranges, for the same reason as the two above.
+ *
+ * These were written twice before this file remembered whole styles: once as
+ * clamps in the `[` / `]` handler and once nowhere at all, because nothing was
+ * ever restored from disk to be validated. Now that a stored style can contain
+ * any of them, the numbers have to live in one place.
+ */
+export const MIN_FONT = 10;
+export const MAX_FONT = 120;
+export const MIN_BLUR = 2;
+export const MAX_BLUR = 60;
+export const MIN_DIM = 0.1;
+export const MAX_DIM = 0.95;
+
+/**
+ * Tools that put something on the page, and so have ink worth remembering.
+ *
+ * The others either take a colour rather than give one (`pick`), read the
+ * image (`grab`), or change the document without drawing on it (`crop`,
+ * `select`). Switching to one of those leaves the current ink alone, so that
+ * cropping and coming back doesn't land you in some other tool's palette.
+ */
+const DRAWING_TOOLS: ToolId[] = TOOL_IDS.filter(
+  (t) => !["select", "pick", "grab", "crop"].includes(t),
+);
+
+/** Where a tool's ink starts out differently from the common default. */
+const SLOT_DEFAULTS: Record<string, Partial<Style>> = {
+  callout: { fontSize: DEFAULT_CALLOUT_FONT_SIZE },
+};
+
+const HEX = /^#(?:[0-9a-f]{3}|[0-9a-f]{6})$/i;
+
+/** A stored number, if it is one and still inside the range the controls use. */
+function number(value: unknown, fallback: number, min: number, max: number): number {
+  return typeof value === "number" && Number.isFinite(value) && value >= min && value <= max
+    ? value
+    : fallback;
+}
+
+const boolean = (value: unknown, fallback: boolean): boolean =>
+  typeof value === "boolean" ? value : fallback;
+
+/**
+ * A remembered style, field by field, with anything unrecognisable discarded.
+ *
+ * Every value is checked rather than trusted, for the reason `lib/prefs`
+ * gives: a stored number from a version whose slider reached further than this
+ * one does would leave the interface somewhere its own controls cannot get it
+ * out of. Falling back per field rather than per style means one bad number
+ * costs one setting instead of all of them.
+ */
+function sanitize(raw: unknown, base: Style): Style {
+  if (typeof raw !== "object" || raw === null) return base;
+  const v = raw as Record<string, unknown>;
+  return {
+    color: typeof v.color === "string" && HEX.test(v.color) ? v.color : base.color,
+    strokeWidth: number(v.strokeWidth, base.strokeWidth, MIN_STROKE, MAX_STROKE),
+    fontSize: number(v.fontSize, base.fontSize, MIN_FONT, MAX_FONT),
+    fillOpacity: number(v.fillOpacity, base.fillOpacity, 0, 1),
+    cornerRadius: number(v.cornerRadius, base.cornerRadius, MIN_RADIUS, MAX_RADIUS),
+    blurRadius: number(v.blurRadius, base.blurRadius, MIN_BLUR, MAX_BLUR),
+    dim: number(v.dim, base.dim, MIN_DIM, MAX_DIM),
+    shadow: boolean(v.shadow, base.shadow),
+    neon: boolean(v.neon, base.neon),
+    measureUnits: v.measureUnits === "px" || v.measureUnits === "pt" ? v.measureUnits : base.measureUnits,
+  };
+}
+
+/** What a slot starts as before anyone has drawn with it. */
+function defaultsFor(slot: string): Style {
+  const base: Style = { ...DEFAULT_STYLE, ...(SLOT_DEFAULTS[slot] ?? {}) };
+  // The old shared settings, if this is the first run since they were split.
+  return sanitize(
+    {
+      color: readColor(LEGACY_COLOR_KEY, base.color),
+      strokeWidth: readNumber(LEGACY_STROKE_KEY, base.strokeWidth, MIN_STROKE, MAX_STROKE),
+      cornerRadius: readNumber(LEGACY_RADIUS_KEY, base.cornerRadius, MIN_RADIUS, MAX_RADIUS),
+    },
+    base,
+  );
+}
+
+/** The ink a tool was last drawing with. See `lib/prefs` on the guarded read. */
+function storedStyle(slot: string): Style {
+  const base = defaultsFor(slot);
+  const saved = readString(STYLE_PREFIX + slot);
+  if (saved === null) return base;
+  try {
+    return sanitize(JSON.parse(saved), base);
+  } catch {
+    return base;
+  }
+}
+
+function rememberStyle(slot: string, style: Style): void {
+  if (!DRAWING_TOOLS.includes(slot as ToolId)) return;
+  write(STYLE_PREFIX + slot, JSON.stringify(style));
+}
 
 /**
  * Tools that are never remembered between sessions.
@@ -199,40 +326,48 @@ function rememberTool(tool: ToolId): void {
 }
 
 /**
- * The ink Shotly was last drawing with.
+ * Which slot a style change belongs in.
  *
- * Colour, stroke width and corner radius. All three get chosen deliberately
- * and are expected to stay chosen — someone who works in yellow at 4 wants
- * yellow at 4 tomorrow, and having to set them again on every launch is the
- * same papercut as landing in the wrong tool. The radius earns its place for
- * the same reason: rounded or square is a house style, not a decision to
- * retake for every rectangle. Nothing else in `Style` is a preference in that
- * sense: `blurRadius` and `dim` belong to one tool each, `fillOpacity` and
- * `shadow` are toggles you flip for a particular shape, and `fontSize` is
- * already remembered per kind, deliberately, in `DEFAULT_CALLOUT_FONT_SIZE`.
- * Persisting those would turn a one-off experiment into the way the app now
- * works.
+ * The selection wins over the tool, because a change made with a shape
+ * selected is a change to *that kind of shape* — the toolbar is already
+ * showing its controls, and remembering it against whatever tool happens to be
+ * in hand would teach the wrong one.
  */
-function storedStyle(): Style {
-  return {
-    ...DEFAULT_STYLE,
-    color: readColor(COLOR_KEY, DEFAULT_STYLE.color),
-    strokeWidth: readNumber(STROKE_KEY, DEFAULT_STYLE.strokeWidth, MIN_STROKE, MAX_STROKE),
-    cornerRadius: readNumber(RADIUS_KEY, DEFAULT_STYLE.cornerRadius, MIN_RADIUS, MAX_RADIUS),
-  };
+function slotFor(s: { annotations: Annotation[]; selectedIds: string[]; tool: ToolId }): string {
+  return selectedShape(s)?.kind ?? s.tool;
+}
+
+function selectedShape(s: { annotations: Annotation[]; selectedIds: string[] }): Annotation | undefined {
+  const first = s.selectedIds[0];
+  return first ? s.annotations.find((a) => a.id === first) : undefined;
 }
 
 /**
- * Remember the sticky half of a style change.
+ * The style the controls should be showing.
  *
- * Takes the patch rather than the merged style so that a change to anything
- * else — flipping a fill on, dimming a spotlight — doesn't rewrite these two
- * with values it was never asked to set.
+ * With a shape selected that is the shape's own look, because that is what the
+ * controls are about to change — the toolbar used to show the tool's ink while
+ * editing a shape drawn in something else, so every control read as wrong until
+ * you touched it.
  */
-function rememberStyle(patch: Partial<Style>): void {
-  if (patch.color !== undefined) write(COLOR_KEY, patch.color);
-  if (patch.strokeWidth !== undefined) write(STROKE_KEY, String(patch.strokeWidth));
-  if (patch.cornerRadius !== undefined) write(RADIUS_KEY, String(patch.cornerRadius));
+export function shownStyle(s: {
+  annotations: Annotation[];
+  selectedIds: string[];
+  style: Style;
+}): Style {
+  return selectedShape(s)?.style ?? s.style;
+}
+
+/**
+ * What a slot is working from, when it isn't the tool in hand.
+ *
+ * The selected shape's own style, not the stored one: the toolbar is showing
+ * that shape's numbers, so a change made there has to be remembered as the
+ * shape now looks rather than as the slot last happened to be saved.
+ */
+function slotStyle(s: { annotations: Annotation[]; selectedIds: string[] }, slot: string): Style {
+  const selected = selectedShape(s);
+  return selected?.kind === slot ? selected.style : storedStyle(slot);
 }
 
 interface HistoryEntry {
@@ -253,9 +388,16 @@ interface EditorState {
   tool: ToolId;
   /** Where the picker hands control back to once a colour has been taken. */
   pickReturn: ToolId;
+  /**
+   * The ink the next shape will be drawn with.
+   *
+   * Whichever slot the current tool reads from — see `STYLE_PREFIX`. Swapped
+   * out from under the toolbar when the tool changes, which is the whole point
+   * of remembering one per tool.
+   */
   style: Style;
-  /** A callout's remembered text size. See `DEFAULT_CALLOUT_FONT_SIZE`. */
-  calloutFontSize: number;
+  /** A style lifted off a shape, waiting to be pasted onto another. */
+  clipboardStyle: Style | null;
   stepCounter: number;
   /** The frame drawn around the capture on export. */
   backdrop: Backdrop;
@@ -277,7 +419,10 @@ interface EditorState {
 
   setTool: (tool: ToolId) => void;
   setStyle: (patch: Partial<Style>) => void;
-  setCalloutFontSize: (fontSize: number) => void;
+  /** Lift the selected shape's look, for `pasteStyle` to put on another. */
+  copyStyle: () => boolean;
+  /** Put the lifted look on everything selected. */
+  pasteStyle: () => boolean;
   setBackdrop: (patch: Partial<Backdrop>) => void;
   /** Resize the exported image. 1 is native; see `Doc.outputScale`. */
   setOutputScale: (scale: number) => void;
@@ -365,8 +510,8 @@ export const useEditor = create<EditorState>((set, get) => ({
   selectedIds: [],
   tool: storedTool(),
   pickReturn: "select",
-  style: storedStyle(),
-  calloutFontSize: DEFAULT_CALLOUT_FONT_SIZE,
+  style: storedStyle(storedTool()),
+  clipboardStyle: null,
   stepCounter: 1,
   backdrop: NO_BACKDROP,
   pendingCrop: null,
@@ -439,19 +584,55 @@ export const useEditor = create<EditorState>((set, get) => ({
       // the new tool's defaults rather than the old shape's properties.
       selectedIds: tool === "select" ? s.selectedIds : [],
       pendingCrop: tool === "crop" ? s.pendingCrop : null,
+      // Picking up a tool picks up the ink it was last used with. Read on
+      // every switch rather than cached: another window of the same app writes
+      // the same slots, and the cost of a miss is drawing in the wrong colour.
+      style: DRAWING_TOOLS.includes(tool) ? storedStyle(tool) : s.style,
     }));
   },
 
-  setStyle: (patch) => {
-    rememberStyle(patch);
-    set((s) => ({ style: { ...s.style, ...patch }, ...restyleSelection(s, patch) }));
+  /**
+   * Change the ink, and remember it where the shape it belongs to will look.
+   *
+   * The working style only moves when the change belongs to the tool in hand.
+   * Recolouring a selected arrow while the rectangle tool is up teaches the
+   * arrow — and leaving the rectangle's own ink alone is what stops that one
+   * click from following you into the next shape you draw.
+   */
+  setStyle: (patch) =>
+    set((s) => {
+      const slot = slotFor(s);
+      const style = { ...(slot === s.tool ? s.style : slotStyle(s, slot)), ...patch };
+      rememberStyle(slot, style);
+      return {
+        ...(slot === s.tool ? { style } : {}),
+        ...restyleSelection(s, patch),
+      };
+    }),
+
+  /**
+   * Lift a look off one shape and put it on another.
+   *
+   * The whole style travels, including the parts the receiving shape has no
+   * use for: an arrow ignores a corner radius, and carrying it means pasting
+   * the same look onto a rectangle later still works. Both halves report
+   * whether they found anything, so the caller can say so rather than leaving
+   * a keystroke that silently did nothing.
+   */
+  copyStyle: () => {
+    const s = get();
+    const first = s.annotations.find((a) => s.selectedIds.includes(a.id));
+    if (!first) return false;
+    set({ clipboardStyle: { ...first.style } });
+    return true;
   },
 
-  // Same gesture, different memory: the size lands on any selected callout, but
-  // is remembered where the next callout will look for it rather than in the
-  // shared style.
-  setCalloutFontSize: (fontSize) =>
-    set((s) => ({ calloutFontSize: fontSize, ...restyleSelection(s, { fontSize }) })),
+  pasteStyle: () => {
+    const s = get();
+    if (!s.clipboardStyle || s.selectedIds.length === 0) return false;
+    set(restyleSelection(s, s.clipboardStyle));
+    return true;
+  },
 
   /**
    * Change the frame.

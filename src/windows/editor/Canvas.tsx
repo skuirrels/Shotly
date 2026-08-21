@@ -17,12 +17,14 @@ import {
   respunBox,
   rotatePoint,
   snapTurn,
+  spunBoundsOf,
   stepRadius,
   unspun,
   unspunBox,
   wrapText,
 } from "@/lib/shapes";
 import {
+  IconBrush,
   IconCopy,
   IconImage,
   IconLayers,
@@ -47,9 +49,19 @@ import {
   isStep,
   movedBy,
 } from "@/lib/types";
+import {
+  type GapGuide,
+  type Guide,
+  NO_SNAP,
+  SNAP_REACH,
+  snapBox,
+  snapPoint,
+  targetsFor,
+  unionOf,
+} from "@/lib/guides";
 import { fitToBox } from "@/lib/overlay";
 import { backdropMetrics, fillById, fillToCss, hasBackdrop } from "@/lib/backdrop";
-import { hasBareCanvas, useEditor } from "@/state/editorStore";
+import { docSize, hasBareCanvas, useEditor } from "@/state/editorStore";
 import { AnnotationLayer, type HandleId } from "./AnnotationLayer";
 
 type Drag =
@@ -144,6 +156,8 @@ export function Canvas({ onNotify, actions, onScan }: CanvasProps) {
   const [grabbing, setGrabbing] = useState<Rect | null>(null);
   /** Last pointer position in document space, for sampling without a move. */
   const pointer = useRef<Point | null>(null);
+  /** The alignment lines to draw for the gesture in progress. */
+  const [guides, setGuides] = useState<Guide[]>([]);
   /** Open right-click menu: where it is, and which shape it was opened on. */
   const [menu, setMenu] = useState<{ at: { x: number; y: number }; id: string | null } | null>(
     null,
@@ -281,6 +295,23 @@ export function Canvas({ onNotify, actions, onScan }: CanvasProps) {
     [doc],
   );
 
+  /**
+   * Everything the shapes being dragged could line up with.
+   *
+   * Rebuilt on every pointer move rather than cached at the start of the drag.
+   * It is a handful of rectangles even on a heavily marked-up capture, and the
+   * cache would have to be invalidated by anything that adds, deletes or
+   * restyles a shape mid-gesture — which is exactly the sort of bookkeeping
+   * that goes wrong quietly.
+   */
+  const snapTargets = useCallback(
+    (moving: Iterable<string>) =>
+      doc
+        ? targetsFor(useEditor.getState().annotations, new Set(moving), docSize(doc))
+        : [],
+    [doc],
+  );
+
   // ------------------------------------------------------------- interactions
 
   const startCreate = (e: React.PointerEvent) => {
@@ -354,9 +385,7 @@ export function Canvas({ onNotify, actions, onScan }: CanvasProps) {
         y: origin.y,
         width: 0,
         height: 0,
-        // A callout keeps its own text size, so it doesn't inherit the one
-        // chosen for text that has to hold its own against the screenshot.
-        style: { ...style, ...(tool === "callout" && { fontSize: store.calloutFontSize }) },
+        style: { ...style },
       });
     } else {
       return;
@@ -540,6 +569,9 @@ export function Canvas({ onNotify, actions, onScan }: CanvasProps) {
       case "create": {
         const target = store.annotations.find((a) => a.id === active.id);
         if (!target) break;
+        // Cleared up front so that letting go of Shift, or taking hold of
+        // Command, drops the lines from the previous move as well as the pull.
+        setGuides([]);
 
         if (isPen(target)) {
           const last = target.points[target.points.length - 1];
@@ -552,6 +584,14 @@ export function Canvas({ onNotify, actions, onScan }: CanvasProps) {
         } else if (isLine(target)) {
           let end = point;
           if (e.shiftKey) end = snapAngle(active.origin, point);
+          // The head is the part being aimed, so it lines up with the document
+          // like any other moving edge — unless Shift is holding it to an
+          // angle, which is a stronger statement about where it should point.
+          else if (!e.metaKey) {
+            const snap = snapPoint(end, snapTargets([active.id]), SNAP_REACH / zoom);
+            end = { x: end.x + snap.dx, y: end.y + snap.dy };
+            setGuides(snap.guides);
+          }
           if (target.kind === "measure" && doc) {
             // Both ends are pulled onto real edges, live, so the number
             // settles on the gap that is actually there rather than on where
@@ -570,6 +610,14 @@ export function Canvas({ onNotify, actions, onScan }: CanvasProps) {
         } else if (isBox(target)) {
           let end = point;
           if (e.shiftKey) end = snapSquare(active.origin, point);
+          else if (!e.metaKey) {
+            // Only the corner under the hand snaps. Snapping the whole box
+            // would move the corner it was started from, which is nailed to
+            // the spot the drag began.
+            const snap = snapPoint(end, snapTargets([active.id]), SNAP_REACH / zoom);
+            end = { x: end.x + snap.dx, y: end.y + snap.dy };
+            setGuides(snap.guides);
+          }
           store.update(active.id, {
             x: Math.min(active.origin.x, end.x),
             y: Math.min(active.origin.y, end.y),
@@ -589,6 +637,26 @@ export function Canvas({ onNotify, actions, onScan }: CanvasProps) {
           if (Math.abs(dx) > Math.abs(dy)) dy = 0;
           else dx = 0;
         }
+
+        // Where the whole selection would land, as one box: dragging three
+        // shapes at once lines *the group* up with the page, which is what the
+        // marching rectangle on screen looks like it should do.
+        const base = unionOf(active.snapshot.map(spunBoundsOf));
+        const snap =
+          base && !e.metaKey
+            ? snapBox(
+                { ...base, x: base.x + dx, y: base.y + dy },
+                snapTargets(active.ids),
+                SNAP_REACH / zoom,
+              )
+            : NO_SNAP;
+        // Shift has already pinned one axis to zero. Letting a snap pull on
+        // that axis would quietly undo the constraint the user is holding down.
+        const lockX = e.shiftKey && dx === 0;
+        const lockY = e.shiftKey && dy === 0;
+        if (!lockX) dx += snap.dx;
+        if (!lockY) dy += snap.dy;
+        setGuides(snap.guides.filter((g) => (g.axis === "x" ? !lockX : !lockY)));
 
         store.replaceAll(
           store.annotations.map((a) => {
@@ -623,13 +691,34 @@ export function Canvas({ onNotify, actions, onScan }: CanvasProps) {
 
         const handle = active.handle;
         const deg = angleOf(original);
+
+        // Only a shape still square to the page can line up with anything: a
+        // turned edge is neither vertical nor horizontal, so there would be no
+        // honest line to draw and nothing for the dragged corner to meet.
+        setGuides([]);
+        let at = point;
+        if (deg === 0 && !e.shiftKey && !e.metaKey) {
+          const snap = snapPoint(point, snapTargets([active.id]), SNAP_REACH / zoom);
+          // A side handle is already holding one axis still, and a pull on
+          // that axis would draw a line the shape never moved to.
+          at = {
+            x: point.x + (holdsWidth(handle) ? 0 : snap.dx),
+            y: point.y + (holdsHeight(handle) ? 0 : snap.dy),
+          };
+          setGuides(
+            snap.guides.filter((g) =>
+              g.axis === "x" ? !holdsWidth(handle) : !holdsHeight(handle),
+            ),
+          );
+        }
+
         // Everything from here happens in unspun space, where the shape is
         // square to the axes again and this is the corner-drag arithmetic it
         // always was. Only the way in and the way back out know about angles.
         const local = boundsOf(original);
         const b = unspunBox(local, deg);
         const anchor = handleAnchor(b, handle);
-        const to = unspun(point, deg);
+        const to = unspun(at, deg);
         // Shift squares the shape, which only means anything on a corner: a
         // side handle is already holding one axis still.
         const corner = !holdsWidth(handle) && !holdsHeight(handle);
@@ -698,6 +787,7 @@ export function Canvas({ onNotify, actions, onScan }: CanvasProps) {
   const onPointerUp = () => {
     const active = drag.current;
     drag.current = null;
+    setGuides([]);
     if (!active) return;
 
     const store = useEditor.getState();
@@ -821,6 +911,20 @@ export function Canvas({ onNotify, actions, onScan }: CanvasProps) {
         shortcut: "Mod+D",
         run: () => store.duplicateSelection(),
       },
+      Boolean(id) && {
+        label: "Copy style",
+        icon: <IconBrush />,
+        shortcut: "Mod+Alt+C",
+        run: () => onNotify?.(store.copyStyle() ? "Style copied" : "Nothing selected"),
+      },
+      Boolean(id) &&
+        store.clipboardStyle !== null && {
+          label: count > 1 ? `Paste style onto ${count}` : "Paste style",
+          icon: <IconBrush />,
+          shortcut: "Mod+Alt+V",
+          run: () => store.pasteStyle(),
+        },
+      Boolean(id) && "separator",
       Boolean(id) && {
         label: "Bring to front",
         icon: <IconLayers />,
@@ -965,6 +1069,8 @@ export function Canvas({ onNotify, actions, onScan }: CanvasProps) {
             onHandlePointerDown={onHandlePointerDown}
           />
 
+          <GuideLayer guides={guides} zoom={zoom} size={doc.crop} />
+
           {pendingCrop && <CropOverlay rect={pendingCrop} doc={doc} zoom={zoom} />}
 
           {/* The text-grab marquee. Deliberately unlike the crop overlay:
@@ -1105,6 +1211,111 @@ function snapSquare(from: Point, to: Point): Point {
   const dy = to.y - from.y;
   const side = Math.max(Math.abs(dx), Math.abs(dy));
   return { x: from.x + Math.sign(dx) * side, y: from.y + Math.sign(dy) * side };
+}
+
+/**
+ * The lines that appear while something is being dragged into line.
+ *
+ * Magenta because every other mark on this canvas is either the user's ink or
+ * the accent the selection chrome is drawn in, and a guide has to be legible
+ * as *not part of the picture* at a glance — including over an annotation
+ * drawn in the accent colour itself.
+ */
+const GUIDE_INK = "#FF2D9E";
+
+function GuideLayer({
+  guides,
+  zoom,
+  size,
+}: {
+  guides: Guide[];
+  zoom: number;
+  size: { width: number; height: number };
+}) {
+  if (guides.length === 0) return null;
+
+  return (
+    <svg
+      className="pointer-events-none absolute top-0 left-0 overflow-visible"
+      width={size.width * zoom}
+      height={size.height * zoom}
+    >
+      {guides.map((g, i) =>
+        g.kind === "align" ? (
+          <line
+            key={i}
+            x1={(g.axis === "x" ? g.at : g.from) * zoom}
+            y1={(g.axis === "x" ? g.from : g.at) * zoom}
+            x2={(g.axis === "x" ? g.at : g.to) * zoom}
+            y2={(g.axis === "x" ? g.to : g.at) * zoom}
+            stroke={GUIDE_INK}
+            strokeWidth={1}
+            // A guide is a statement about a single coordinate, so it has to
+            // land on a single row of pixels rather than being smeared across
+            // two by the half-pixel the zoom happens to leave it on.
+            shapeRendering="crispEdges"
+          />
+        ) : (
+          <GapBar key={i} gap={g} zoom={zoom} />
+        ),
+      )}
+    </svg>
+  );
+}
+
+/** One matched gap: a bar with a tick at each end and its size beside it. */
+function GapBar({ gap, zoom }: { gap: GapGuide; zoom: number }) {
+  const flat = gap.axis === "x";
+  const x1 = (flat ? gap.from : gap.at) * zoom;
+  const y1 = (flat ? gap.at : gap.from) * zoom;
+  const x2 = (flat ? gap.to : gap.at) * zoom;
+  const y2 = (flat ? gap.at : gap.to) * zoom;
+
+  const CAP = 4;
+  const label = String(Math.round(gap.size));
+  const boxWidth = label.length * 6 + 8;
+  // Off the bar rather than on it: the number is what the bar is *for*, and a
+  // label straddling the line hides the thing being measured.
+  const cx = flat ? (x1 + x2) / 2 : x2 + boxWidth / 2 + 6;
+  const cy = flat ? y1 - 9 : (y1 + y2) / 2;
+
+  return (
+    <g>
+      <line x1={x1} y1={y1} x2={x2} y2={y2} stroke={GUIDE_INK} strokeWidth={1} />
+      {[
+        [x1, y1],
+        [x2, y2],
+      ].map(([x, y], i) => (
+        <line
+          key={i}
+          x1={flat ? x : x - CAP}
+          y1={flat ? y - CAP : y}
+          x2={flat ? x : x + CAP}
+          y2={flat ? y + CAP : y}
+          stroke={GUIDE_INK}
+          strokeWidth={1}
+        />
+      ))}
+      <rect
+        x={cx - boxWidth / 2}
+        y={cy - 7}
+        width={boxWidth}
+        height={14}
+        rx={3}
+        fill={GUIDE_INK}
+      />
+      <text
+        x={cx}
+        y={cy + 4}
+        textAnchor="middle"
+        fill="#fff"
+        fontSize={10}
+        fontFamily="ui-monospace, SFMono-Regular, Menlo, monospace"
+      >
+        {label}
+      </text>
+    </g>
+  );
 }
 
 function CropOverlay({ rect, doc, zoom }: { rect: Rect; doc: { crop: Rect }; zoom: number }) {
