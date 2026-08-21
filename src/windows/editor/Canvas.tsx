@@ -4,6 +4,7 @@ import clsx from "clsx";
 import {
   angleFrom,
   calloutLayout,
+  bendTowards,
   CALLOUT_PADDING,
   centreOf,
   contrastInk,
@@ -27,7 +28,10 @@ import {
   IconBrush,
   IconCopy,
   IconImage,
+  IconGroup,
   IconLayers,
+  IconLine,
+  IconLock,
   IconOverlay,
   IconSelect,
   IconTrash,
@@ -39,10 +43,12 @@ import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import {
   type Annotation,
   type BoxKind,
+  type LineAnnotation,
   type Point,
   type Rect,
   angleOf,
   boundsOf,
+  canBend,
   isBox,
   isImage,
   isLine,
@@ -60,15 +66,25 @@ import {
   targetsFor,
   unionOf,
 } from "@/lib/guides";
+import { bondTargetAt } from "@/lib/connect";
 import { fitToBox } from "@/lib/overlay";
 import { backdropMetrics, fillById, fillToCss, hasBackdrop } from "@/lib/backdrop";
-import { docSize, hasBareCanvas, useEditor } from "@/state/editorStore";
+import { docSize, familyOf, hasBareCanvas, useEditor } from "@/state/editorStore";
 import { AnnotationLayer, type HandleId } from "./AnnotationLayer";
 
 type Drag =
   | { kind: "create"; id: string; origin: Point }
   | { kind: "move"; ids: string[]; origin: Point; snapshot: Annotation[] }
-  | { kind: "resize"; id: string; handle: Exclude<HandleId, "rotate">; snapshot: Annotation }
+  | {
+      kind: "resize";
+      id: string;
+      handle: Exclude<HandleId, "rotate" | "bend">;
+      snapshot: Annotation;
+    }
+  // The bend grip works off the line as it stood when the grip was taken: the
+  // bend is measured from the chord, and reading it back off a line that is
+  // already bent would compound every frame into a spiral.
+  | { kind: "bend"; id: string; snapshot: LineAnnotation }
   // `grab` is how far the pointer already led the shape when the grip was
   // taken, so the shape turns with the hand instead of snapping its top edge
   // under it on the first pixel of the drag.
@@ -192,6 +208,10 @@ export function Canvas({ onNotify, actions, onScan }: CanvasProps) {
   const pointer = useRef<Point | null>(null);
   /** The alignment lines to draw for the gesture in progress. */
   const [guides, setGuides] = useState<Guide[]>([]);
+  /** The shape a dragged end is hovering over, lit up while it is offered. */
+  const [bondTo, setBondTo] = useState<string | null>(null);
+  /** The same, for the release to read: state has not committed by then. */
+  const bond = useRef<string | null>(null);
   /** Space is down: the canvas is a thing to push around rather than draw on. */
   const [handOpen, setHandOpen] = useState(false);
   /**
@@ -837,23 +857,30 @@ export function Canvas({ onNotify, actions, onScan }: CanvasProps) {
     // Shift extends the selection; a plain click on an unselected shape
     // replaces it, but on an already-selected one preserves the group so a
     // multi-shape drag isn't broken by the click that starts it.
+    // A group is one thing to click on, so shift adds or removes the whole of
+    // it rather than picking a member out of the middle.
+    const family = familyOf(store.annotations, id);
     const ids = e.shiftKey
       ? already
-        ? store.selectedIds.filter((x) => x !== id)
-        : [...store.selectedIds, id]
+        ? store.selectedIds.filter((x) => !family.includes(x))
+        : [...store.selectedIds, ...family]
       : already
         ? store.selectedIds
-        : [id];
+        : family;
 
     store.select(ids);
-    if (ids.length === 0) return;
+    // Read back rather than trusting `ids`: the store is the one that knows
+    // about groups and locks, and what it settled on is what the drag has to
+    // move. Zustand writes synchronously, so this is already the new list.
+    const moving = useEditor.getState().selectedIds;
+    if (moving.length === 0) return;
 
     store.snapshot();
     drag.current = {
       kind: "move",
-      ids,
+      ids: moving,
       origin: toDoc(e),
-      snapshot: store.annotations.filter((a) => ids.includes(a.id)),
+      snapshot: store.annotations.filter((a) => moving.includes(a.id)),
     };
   };
 
@@ -870,6 +897,20 @@ export function Canvas({ onNotify, actions, onScan }: CanvasProps) {
     if (!target) return;
 
     store.snapshot();
+
+    if (handle === "bend") {
+      if (!isLine(target)) return;
+      drag.current = { kind: "bend", id, snapshot: target };
+      return;
+    }
+
+    // Taking hold of an end unties it first. Otherwise the rerouting would put
+    // it straight back on the shape it is bonded to, every frame, and the end
+    // would refuse to be dragged anywhere at all.
+    if (handle === "start" || handle === "end") {
+      const bond = handle === "start" ? "fromId" : "toId";
+      if (isLine(target) && target[bond]) store.update(id, { [bond]: undefined });
+    }
 
     if (handle === "rotate") {
       const centre = centreOf(boundsOf(target));
@@ -1025,6 +1066,15 @@ export function Canvas({ onNotify, actions, onScan }: CanvasProps) {
         break;
       }
 
+      case "bend": {
+        const raw = bendTowards(active.snapshot, point);
+        // A detent at nothing, so the grip can be dragged back onto the line to
+        // straighten it. Without one there is a band of curves too small to see
+        // and too big to be zero, and the only way out is undo.
+        store.update(active.id, { bend: Math.abs(raw) < 0.02 ? 0 : raw });
+        break;
+      }
+
       case "resize": {
         const original = active.snapshot;
 
@@ -1042,6 +1092,13 @@ export function Canvas({ onNotify, actions, onScan }: CanvasProps) {
             active.id,
             active.handle === "start" ? { x1: end.x, y1: end.y } : { x2: end.x, y2: end.y },
           );
+          // Asked on every move rather than only on the drop, because the
+          // answer is the thing being offered: the shape lights up under the
+          // end while it is still in the air.
+          const other = active.handle === "start" ? original.toId : original.fromId;
+          const over = bondTargetAt(store.annotations, end, active.id);
+          bond.current = over && over.id !== other ? over.id : null;
+          setBondTo(bond.current);
           break;
         }
 
@@ -1184,6 +1241,18 @@ export function Canvas({ onNotify, actions, onScan }: CanvasProps) {
       }
     }
 
+    // An end let go over a shape belongs to that shape from now on. Setting
+    // the bond is all it takes: `rerouted` runs inside the store and puts the
+    // end on the shape's edge before anything renders.
+    if (active.kind === "resize" && (active.handle === "start" || active.handle === "end")) {
+      const tied = bond.current;
+      bond.current = null;
+      setBondTo(null);
+      if (tied) {
+        store.update(active.id, active.handle === "start" ? { fromId: tied } : { toId: tied });
+      }
+    }
+
     // Narrowing a callout rewraps its text, which may now need more height
     // than the drag left it.
     if (active.kind === "resize") {
@@ -1293,6 +1362,56 @@ export function Canvas({ onNotify, actions, onScan }: CanvasProps) {
         shortcut: "Mod+Shift+[",
         run: () => store.reorder("back"),
       },
+      Boolean(id) && "separator",
+      Boolean(id) &&
+        count > 1 && {
+          label: `Group ${count}`,
+          icon: <IconGroup />,
+          shortcut: "Mod+G",
+          run: () => store.group(),
+        },
+      Boolean(id) &&
+        store.annotations.some((a) => store.selectedIds.includes(a.id) && a.group) && {
+          label: "Ungroup",
+          icon: <IconGroup />,
+          shortcut: "Mod+Shift+G",
+          run: () => store.ungroup(),
+        },
+      Boolean(id) && {
+        label: count > 1 ? `Lock ${count}` : "Lock",
+        icon: <IconLock />,
+        shortcut: "Mod+Shift+L",
+        run: () => {
+          store.lock();
+          onNotify?.(count > 1 ? `${count} locked` : "Locked");
+        },
+      },
+      store.annotations.some((a) => a.locked) && {
+        label: "Unlock all",
+        icon: <IconLock />,
+        shortcut: "Mod+Alt+Shift+L",
+        run: () => {
+          const n = store.unlockAll();
+          onNotify?.(n === 1 ? "Unlocked" : `${n} unlocked`);
+        },
+      },
+      // Only offered on something actually bent: on a straight line it would
+      // be a menu item that does nothing, which is worse than no menu item.
+      Boolean(id) &&
+        store.annotations.some(
+          (a) => store.selectedIds.includes(a.id) && canBend(a) && a.bend,
+        ) && {
+          label: "Straighten",
+          icon: <IconLine />,
+          run: () => {
+            store.snapshot();
+            for (const a of store.annotations) {
+              if (store.selectedIds.includes(a.id) && canBend(a) && a.bend) {
+                store.update(a.id, { bend: 0 });
+              }
+            }
+          },
+        },
       Boolean(id) && "separator",
       Boolean(id) && {
         label: count > 1 ? `Delete ${count} annotations` : "Delete",
@@ -1459,6 +1578,7 @@ export function Canvas({ onNotify, actions, onScan }: CanvasProps) {
             zoom={zoom}
             editingId={editingId}
             shapeCursor={altDown && tool !== "select" ? "crosshair" : "move"}
+            bondTo={bondTo}
             onShapePointerDown={onShapePointerDown}
             onHandlePointerDown={onHandlePointerDown}
           />

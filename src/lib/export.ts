@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import {
   arrowPolygon,
+  bendControl,
   calloutBaselines,
   calloutLayout,
   centreOf,
@@ -499,9 +500,15 @@ function drawAnnotation(
         ctx.fillStyle = color;
         ctx.fill();
       } else {
+        const control = bendControl(a);
         ctx.beginPath();
         ctx.moveTo(a.x1, a.y1);
-        ctx.lineTo(a.x2, a.y2);
+        // The same quadratic the preview draws, from the same control point —
+        // sampling it here and curving it there would be two curves that agree
+        // to about a pixel, which is exactly the kind of difference that shows
+        // up on a saved file and nowhere else.
+        if (control) ctx.quadraticCurveTo(control.x, control.y, a.x2, a.y2);
+        else ctx.lineTo(a.x2, a.y2);
         ctx.strokeStyle = color;
         ctx.lineWidth = strokeWidth;
         ctx.lineCap = "round";

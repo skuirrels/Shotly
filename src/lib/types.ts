@@ -230,6 +230,27 @@ interface AnnotationBase {
   id: string;
   style: Style;
   /**
+   * Which group this shape belongs to, if any.
+   *
+   * A shared id rather than a tree: groups here exist so that a callout and
+   * the arrow leaving it can be picked up as one thing, and nesting would buy
+   * a hierarchy nobody drawing on a screenshot has ever wanted at the cost of
+   * every selection becoming a question about depth. Grouping a selection that
+   * already contains groups flattens them into one.
+   */
+  group?: string;
+  /**
+   * Locked: on the page, out of reach.
+   *
+   * A locked shape cannot be selected at all — not by clicking, not by Tab,
+   * not by Select All — which is what makes it useful: a full-width spotlight
+   * or blur is otherwise a hit target covering everything behind it. Since
+   * nothing that changes a shape works without selecting it first, that one
+   * rule keeps locked shapes safe from every edit at once, and Unlock all is
+   * the way back.
+   */
+  locked?: boolean;
+  /**
    * How far the shape is turned, in degrees clockwise about its own centre.
    *
    * Absent on everything drawn before rotation existed, and on everything
@@ -258,6 +279,29 @@ export interface LineAnnotation extends AnnotationBase {
   y1: number;
   x2: number;
   y2: number;
+  /**
+   * How far the line bows out of the straight run between its ends.
+   *
+   * A fraction of the distance between them, so a bent arrow keeps its shape
+   * when it is stretched — dragged longer, it stays the same curve rather than
+   * flattening out. Positive bows to the left of the direction of travel.
+   *
+   * One number rather than a control point, because two renderers have to
+   * agree exactly on the result and a scalar cannot drift: the quadratic's
+   * control point is derived from it in one place, `bendControl`.
+   */
+  bend?: number;
+  /**
+   * The shape this end is tied to, if it is tied to one.
+   *
+   * The coordinates stay authoritative — a connector is a line whose ends are
+   * *kept* on a shape's edge, not a line that has forgotten where it is. That
+   * way every reader of an annotation, from hit-testing to the exporter to a
+   * version of Shotly that has never heard of connectors, still sees an
+   * ordinary line. `rerouted` is what keeps the two in step.
+   */
+  fromId?: string;
+  toId?: string;
 }
 
 export interface StepAnnotation extends AnnotationBase {
@@ -341,6 +385,29 @@ export function isImage(a: Annotation): a is ImageAnnotation {
  */
 export function canRotate(a: Annotation): boolean {
   return isRectangular(a) || isPen(a);
+}
+
+/**
+ * Which lines can be bowed.
+ *
+ * Not `measure`: it reports the distance between its ends, and a curved one
+ * would be a number that no longer matches the thing drawn under it.
+ */
+export function canBend(a: Annotation): a is LineAnnotation {
+  return a.kind === "arrow" || a.kind === "line";
+}
+
+/** How far a line bows; nothing saved before bending does. */
+export const bendOf = (a: Annotation): number => (canBend(a) ? (a.bend ?? 0) : 0);
+
+/**
+ * Which shapes an arrow can be tied to.
+ *
+ * Everything except another line: an arrow tied to an arrow has no edge to sit
+ * on and two ends that would chase each other.
+ */
+export function canBond(a: Annotation): boolean {
+  return !isLine(a);
 }
 
 /** How far a shape is turned; nothing saved before rotation is. */

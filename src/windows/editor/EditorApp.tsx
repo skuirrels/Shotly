@@ -17,7 +17,11 @@ import {
   IconFolder,
   IconGrid,
   IconImage,
+  IconAlign,
+  IconDistribute,
+  IconGroup,
   IconLayers,
+  IconLock,
   IconMeasure,
   IconOverlay,
   IconPen,
@@ -48,6 +52,7 @@ import {
   MAX_BLUR,
   MAX_DIM,
   MAX_FONT,
+  type AlignEdge,
   MAX_STROKE,
   MIN_BLUR,
   MIN_DIM,
@@ -94,6 +99,23 @@ async function downloadsPath(name: string): Promise<string> {
     return name;
   }
 }
+
+
+/**
+ * The six alignments, and the keys Figma and Miro both use for them.
+ *
+ * Borrowed rather than invented: anyone who reaches for these has the muscle
+ * memory already, and a screenshot editor is not the place to teach a new one.
+ * The letters are on `code`, so they survive Alt turning A into å.
+ */
+const ALIGNMENTS: { id: string; title: string; edge: AlignEdge; shortcut: string }[] = [
+  { id: "alignLeft", title: "Align left", edge: "left", shortcut: "Alt+A" },
+  { id: "alignCentre", title: "Align centres", edge: "hcentre", shortcut: "Alt+H" },
+  { id: "alignRight", title: "Align right", edge: "right", shortcut: "Alt+D" },
+  { id: "alignTop", title: "Align top", edge: "top", shortcut: "Alt+W" },
+  { id: "alignMiddle", title: "Align middles", edge: "vcentre", shortcut: "Alt+V" },
+  { id: "alignBottom", title: "Align bottom", edge: "bottom", shortcut: "Alt+S" },
+];
 
 export function EditorApp() {
   const doc = useEditor((s) => s.doc);
@@ -1327,6 +1349,80 @@ export function EditorApp() {
         shortcut: "Mod+Shift+[",
         enabled: hasSelection,
         run: () => s().reorder("back"),
+      },
+      {
+        id: "arrange.group",
+        title: "Group",
+        group: "Arrange",
+        shortcut: "Mod+G",
+        icon: <IconGroup />,
+        enabled: () => s().selectedIds.length > 1,
+        run: () => s().group(),
+      },
+      {
+        id: "arrange.ungroup",
+        title: "Ungroup",
+        group: "Arrange",
+        shortcut: "Mod+Shift+G",
+        icon: <IconGroup />,
+        enabled: () =>
+          s().annotations.some((a) => s().selectedIds.includes(a.id) && a.group !== undefined),
+        run: () => s().ungroup(),
+      },
+      {
+        id: "arrange.lock",
+        title: "Lock",
+        group: "Arrange",
+        shortcut: "Mod+Shift+L",
+        icon: <IconLock />,
+        enabled: hasSelection,
+        run: () => {
+          const count = s().selectedIds.length;
+          s().lock();
+          notify(count > 1 ? `${count} locked` : "Locked", "ok");
+        },
+      },
+      {
+        id: "arrange.unlockAll",
+        title: "Unlock all",
+        group: "Arrange",
+        shortcut: "Mod+Alt+Shift+L",
+        icon: <IconLock />,
+        enabled: () => s().annotations.some((a) => a.locked),
+        run: () => {
+          const count = s().unlockAll();
+          notify(count === 1 ? "Unlocked" : `${count} unlocked`, "ok");
+        },
+      },
+      ...ALIGNMENTS.map(({ id, title, edge, shortcut }): Command => ({
+        id: `arrange.${id}`,
+        title,
+        group: "Arrange",
+        shortcut,
+        icon: <IconAlign />,
+        // Two is the fewest that can be lined up with each other; one shape is
+        // already aligned with itself.
+        enabled: () => s().selectedIds.length > 1,
+        run: () => s().align(edge),
+      })),
+      {
+        id: "arrange.spaceAcross",
+        title: "Distribute horizontally",
+        group: "Arrange",
+        shortcut: "Ctrl+Alt+H",
+        icon: <IconDistribute />,
+        // Three: with two there are no gaps to even out.
+        enabled: () => s().selectedIds.length > 2,
+        run: () => s().distribute("x"),
+      },
+      {
+        id: "arrange.spaceDown",
+        title: "Distribute vertically",
+        group: "Arrange",
+        shortcut: "Ctrl+Alt+V",
+        icon: <IconDistribute />,
+        enabled: () => s().selectedIds.length > 2,
+        run: () => s().distribute("y"),
       },
       {
         id: "arrange.applyCrop",

@@ -62,8 +62,15 @@ export interface MarkupDoc {
  * every one of them square to the page — an arrow pointing somewhere else, a
  * label lying flat across a diagram it was set at a slant to follow. The most
  * literally different picture on this list.
+ *
+ * 11 added bends, bonds, groups and locks. Only the first of those changes the
+ * picture: an older build draws a bowed arrow as a straight one, which is an
+ * arrow that now cuts across whatever it was curved around. The other three
+ * are about handling rather than drawing — an older build shows every shape in
+ * the same place, and only forgets which of them were meant to move together
+ * and which were meant to be left alone.
  */
-const VERSION = 10;
+const VERSION = 11;
 
 export function serialize(doc: Omit<MarkupDoc, "version">): string {
   return JSON.stringify({ version: VERSION, ...doc });

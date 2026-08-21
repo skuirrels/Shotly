@@ -4,8 +4,8 @@
  * as a shape that looks one way on screen and another in the saved PNG.
  */
 import { expect, test } from "vitest";
-import { rectRadius } from "./shapes";
-import type { Style } from "./types";
+import { arrowPolygon, bendTowards, lineMiddle, linePath, rectRadius } from "./shapes";
+import type { LineAnnotation, Style } from "./types";
 
 const style = (patch: Partial<Style>): Style =>
   ({
@@ -49,4 +49,54 @@ test("a rectangle from an older payload keeps the corners it was drawn with", ()
   const old = style({});
   delete (old as Partial<Style>).cornerRadius;
   expect(rectRadius(box, old)).toBe(4);
+});
+
+// ------------------------------------------------------------------- bend
+
+/**
+ * A bent line is one number — how far it bows out of the run between its ends
+ * — and both renderers have to turn that number into the same curve. The
+ * straight case matters most: thousands of saved arrows are straight, and the
+ * bend must not have moved any of them.
+ */
+const line = (patch: Partial<LineAnnotation> = {}): LineAnnotation => ({
+  id: "l",
+  kind: "arrow",
+  x1: 0,
+  y1: 0,
+  x2: 400,
+  y2: 0,
+  style: style({}),
+  ...patch,
+});
+
+test("a straight arrow is the same seven points it always was", () => {
+  expect(arrowPolygon(line())).toHaveLength(7);
+  expect(arrowPolygon(line({ bend: 0 }))).toEqual(arrowPolygon(line()));
+});
+
+test("the middle of a bowed line sits its bend off the straight run", () => {
+  // 0.25 of a 400px run is 100px, and the perpendicular is to the left of the
+  // direction of travel — which for a line drawn rightwards is downwards.
+  const at = lineMiddle(line({ bend: 0.25 }));
+  expect(at.x).toBeCloseTo(200, 6);
+  expect(at.y).toBeCloseTo(100, 6);
+});
+
+test("dragging the grip somewhere asks for the bend that puts it there", () => {
+  const a = line();
+  const bend = bendTowards(a, { x: 200, y: 100 });
+  expect(bend).toBeCloseTo(0.25, 6);
+  expect(lineMiddle({ ...a, bend }).y).toBeCloseTo(100, 6);
+});
+
+test("a bowed arrow still comes to a point exactly where it was aimed", () => {
+  const points = arrowPolygon(line({ bend: 0.4, x2: 300, y2: 200 }));
+  expect(points).toContainEqual({ x: 300, y: 200 });
+});
+
+test("a measurement never bows, whatever it is carrying", () => {
+  const straight = linePath({ ...line({ kind: "measure" }), bend: 0.5 } as LineAnnotation);
+  expect(straight).toContain(" L ");
+  expect(linePath(line({ bend: 0.5 }))).toContain(" Q ");
 });

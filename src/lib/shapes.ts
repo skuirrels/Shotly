@@ -1,4 +1,4 @@
-import { type Annotation, angleOf, boundsOf } from "./types";
+import { type Annotation, angleOf, boundsOf, canBend } from "./types";
 import type { LineAnnotation, Point, Rect, StepAnnotation, Style } from "./types";
 
 /**
@@ -39,7 +39,82 @@ const ARROW_WEIGHT = 2.2;
  * screenshot wants a constant weight the eye can follow back to where it
  * started. Only the head flares.
  */
+/**
+ * How many pieces a bowed line is chopped into when it needs an outline.
+ *
+ * Only the arrow needs this: a stroked line is handed to both renderers as a
+ * real quadratic, which they draw identically. An arrow is a filled outline
+ * offset either side of its path, and there is no exact quadratic for the
+ * offset of a quadratic — so it is walked instead. 48 is past the point where
+ * more makes any visible difference at the zooms the editor allows.
+ */
+const CURVE_STEPS = 48;
+
+/**
+ * The control point of the quadratic a bent line follows, or null if straight.
+ *
+ * Twice the offset the bend asks for: a quadratic runs halfway between its
+ * chord and its control point, so a control pushed out by 2d puts the *curve*
+ * out by d — and d is what the handle was dragged to.
+ */
+export function bendControl(a: LineAnnotation): Point | null {
+  const bend = canBend(a) ? (a.bend ?? 0) : 0;
+  if (!bend) return null;
+  const dx = a.x2 - a.x1;
+  const dy = a.y2 - a.y1;
+  const len = Math.hypot(dx, dy);
+  if (len < 1e-6) return null;
+  const h = 2 * bend * len;
+  // Perpendicular, to the left of the direction of travel.
+  return {
+    x: (a.x1 + a.x2) / 2 - (dy / len) * h,
+    y: (a.y1 + a.y2) / 2 + (dx / len) * h,
+  };
+}
+
+/** A point on the line's path, `t` from 0 at the tail to 1 at the head. */
+export function pointOnLine(a: LineAnnotation, t: number): Point {
+  const c = bendControl(a);
+  if (!c) return { x: a.x1 + (a.x2 - a.x1) * t, y: a.y1 + (a.y2 - a.y1) * t };
+  const u = 1 - t;
+  return {
+    x: u * u * a.x1 + 2 * u * t * c.x + t * t * a.x2,
+    y: u * u * a.y1 + 2 * u * t * c.y + t * t * a.y2,
+  };
+}
+
+/** Where the bend grip sits: the middle of the path, bowed or not. */
+export const lineMiddle = (a: LineAnnotation): Point => pointOnLine(a, 0.5);
+
+/**
+ * What bend would put the middle of the line under this point.
+ *
+ * The inverse of `bendControl`, and the whole of what the bend grip does: the
+ * middle of the curve sits exactly `bend × length` off the chord, so the
+ * answer is the grip's own distance from the chord over that length.
+ */
+export function bendTowards(a: LineAnnotation, at: Point): number {
+  const dx = a.x2 - a.x1;
+  const dy = a.y2 - a.y1;
+  const len = Math.hypot(dx, dy);
+  if (len < 1e-6) return 0;
+  const mx = (a.x1 + a.x2) / 2;
+  const my = (a.y1 + a.y2) / 2;
+  return ((at.x - mx) * -dy + (at.y - my) * dx) / (len * len);
+}
+
+/** The line itself, as a path both renderers draw the same way. */
+export function linePath(a: LineAnnotation): string {
+  const c = bendControl(a);
+  const head = `M ${a.x1.toFixed(2)} ${a.y1.toFixed(2)}`;
+  return c
+    ? `${head} Q ${c.x.toFixed(2)} ${c.y.toFixed(2)} ${a.x2.toFixed(2)} ${a.y2.toFixed(2)}`
+    : `${head} L ${a.x2.toFixed(2)} ${a.y2.toFixed(2)}`;
+}
+
 export function arrowPolygon(a: LineAnnotation): Point[] {
+  if (bendControl(a)) return bowedArrow(a);
+
   const sw = a.style.strokeWidth * ARROW_WEIGHT;
   const dx = a.x2 - a.x1;
   const dy = a.y2 - a.y1;
@@ -68,6 +143,66 @@ export function arrowPolygon(a: LineAnnotation): Point[] {
     { x: bx - px * headHalf, y: by - py * headHalf },
     { x: bx - px * shaftHalf, y: by - py * shaftHalf },
     { x: a.x1 - px * shaftHalf, y: a.y1 - py * shaftHalf },
+  ];
+}
+
+/**
+ * The same arrow, walked along its curve.
+ *
+ * Kept apart from the straight one rather than made general: a straight arrow
+ * is seven points of exact arithmetic that thousands of saved captures already
+ * depend on, and rebuilding it out of 48 samples would move every one of them
+ * by a fraction of a pixel for no gain at all. A bend is the only thing that
+ * needs the walk.
+ *
+ * The shaft is the path offset either side; the head is squared to the
+ * *tangent where the head begins*, not to the chord, so a hard bend still ends
+ * in an arrow pointing where the line is actually going.
+ */
+function bowedArrow(a: LineAnnotation): Point[] {
+  const sw = a.style.strokeWidth * ARROW_WEIGHT;
+  const shaftHalf = sw * 0.55;
+  const headHalf = sw * 1.5;
+
+  const path: Point[] = [];
+  for (let i = 0; i <= CURVE_STEPS; i++) path.push(pointOnLine(a, i / CURVE_STEPS));
+
+  // Walked rather than solved: the arc length of a quadratic has no useful
+  // closed form, and the head has to start a fixed distance back from the tip.
+  const run: number[] = [0];
+  for (let i = 1; i < path.length; i++) {
+    run.push(run[i - 1] + Math.hypot(path[i].x - path[i - 1].x, path[i].y - path[i - 1].y));
+  }
+  const total = run[run.length - 1] || 1;
+  const headLen = Math.min(sw * 3.6, total * 0.6);
+  const baseAt = total - headLen;
+
+  let cut = path.length - 1;
+  while (cut > 0 && run[cut] > baseAt) cut--;
+
+  const tangent = (i: number): Point => {
+    const from = path[Math.max(0, i - 1)];
+    const to = path[Math.min(path.length - 1, i + 1)];
+    const len = Math.hypot(to.x - from.x, to.y - from.y) || 1;
+    return { x: (to.x - from.x) / len, y: (to.y - from.y) / len };
+  };
+
+  const left: Point[] = [];
+  const right: Point[] = [];
+  for (let i = 0; i <= cut; i++) {
+    const t = tangent(i);
+    left.push({ x: path[i].x - t.y * shaftHalf, y: path[i].y + t.x * shaftHalf });
+    right.push({ x: path[i].x + t.y * shaftHalf, y: path[i].y - t.x * shaftHalf });
+  }
+
+  const base = path[cut];
+  const bt = tangent(cut);
+  return [
+    ...left,
+    { x: base.x - bt.y * headHalf, y: base.y + bt.x * headHalf },
+    { x: a.x2, y: a.y2 },
+    { x: base.x + bt.y * headHalf, y: base.y - bt.x * headHalf },
+    ...right.reverse(),
   ];
 }
 

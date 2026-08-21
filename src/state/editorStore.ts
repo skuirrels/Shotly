@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import { type Backdrop, DEFAULT_BACKDROP, NO_BACKDROP } from "@/lib/backdrop";
+import { rerouted } from "@/lib/connect";
 import { parse as parseMarkup } from "@/lib/markup";
 import { spunBoundsOf } from "@/lib/shapes";
 import { type OverlaySource, placeOverlay } from "@/lib/overlay";
@@ -450,6 +451,13 @@ interface EditorState {
   deleteSelection: () => void;
   duplicateSelection: () => void;
 
+  group: () => void;
+  ungroup: () => void;
+  lock: () => void;
+  unlockAll: () => number;
+  align: (edge: AlignEdge) => void;
+  distribute: (axis: "x" | "y") => void;
+
   select: (ids: string[]) => void;
   toggleSelect: (id: string) => void;
   selectAll: () => void;
@@ -464,6 +472,35 @@ interface EditorState {
 
   nextStepLabel: () => number;
 }
+
+/**
+ * Everything that comes up with these: a group is picked up whole.
+ *
+ * Applied inside `select` rather than at each of the half-dozen places that
+ * choose a selection — clicking, shift-clicking, Tab, Select All, the marquee
+ * — because a group that came apart in one of them would be a group nobody
+ * could trust. Removing works the same way in reverse: whatever is not in the
+ * list stays out, and only the mates of what *is* there are added.
+ */
+function withGroups(annotations: Annotation[], ids: string[]): string[] {
+  const groups = new Set(
+    annotations.filter((a) => ids.includes(a.id) && a.group).map((a) => a.group),
+  );
+  if (groups.size === 0) return ids;
+  const out = new Set(ids);
+  for (const a of annotations) if (a.group && groups.has(a.group)) out.add(a.id);
+  return [...out];
+}
+
+/** The ids a click on this shape should take, its group included. */
+export function familyOf(annotations: Annotation[], id: string): string[] {
+  const target = annotations.find((a) => a.id === id);
+  if (!target?.group) return [id];
+  return annotations.filter((a) => a.group === target.group).map((a) => a.id);
+}
+
+/** Which edge or middle an alignment lines up. */
+export type AlignEdge = "left" | "hcentre" | "right" | "top" | "vcentre" | "bottom";
 
 function snapshotOf(s: EditorState): HistoryEntry {
   return {
@@ -811,17 +848,22 @@ export const useEditor = create<EditorState>((set, get) => ({
       };
     }),
 
+  // `rerouted` on each of these rather than on a few: an end tied to a shape
+  // has to keep up with every way that shape can move, and the list of those
+  // is only ever going to get longer. It costs nothing when nothing is tied.
   update: (id, patch) =>
     set((s) => ({
-      annotations: s.annotations.map((a) => (a.id === id ? ({ ...a, ...patch } as Annotation) : a)),
+      annotations: rerouted(
+        s.annotations.map((a) => (a.id === id ? ({ ...a, ...patch } as Annotation) : a)),
+      ),
       dirty: true,
     })),
 
-  replaceAll: (annotations) => set({ annotations, dirty: true }),
+  replaceAll: (annotations) => set({ annotations: rerouted(annotations), dirty: true }),
 
   remove: (ids) =>
     set((s) => ({
-      annotations: s.annotations.filter((a) => !ids.includes(a.id)),
+      annotations: rerouted(s.annotations.filter((a) => !ids.includes(a.id))),
       selectedIds: s.selectedIds.filter((id) => !ids.includes(id)),
       dirty: true,
     })),
@@ -840,10 +882,22 @@ export const useEditor = create<EditorState>((set, get) => ({
 
       // Offset the copies so they're visibly distinct from the originals.
       const OFFSET = 16;
-      const copies = chosen.map((a) => ({
-        ...movedBy(a, OFFSET, OFFSET),
-        id: crypto.randomUUID(),
-      }));
+      // Ids are remapped rather than kept: a copied arrow tied to a copied box
+      // should point at *its* box, and a copied group should be a group of its
+      // own or the two would move together for the rest of the document's life.
+      const fresh = new Map(chosen.map((a) => [a.id, crypto.randomUUID()]));
+      const groups = new Map(
+        [...new Set(chosen.map((a) => a.group).filter(Boolean))].map((g) => [g, crypto.randomUUID()]),
+      );
+      const copies = chosen.map((a) => {
+        const copy = { ...movedBy(a, OFFSET, OFFSET), id: fresh.get(a.id)! } as Annotation;
+        if (copy.group) copy.group = groups.get(copy.group);
+        if (isLine(copy)) {
+          if (copy.fromId) copy.fromId = fresh.get(copy.fromId) ?? copy.fromId;
+          if (copy.toId) copy.toId = fresh.get(copy.toId) ?? copy.toId;
+        }
+        return copy;
+      });
 
       return {
         past: [...s.past, snapshotOf(s)].slice(-HISTORY_LIMIT),
@@ -854,26 +908,222 @@ export const useEditor = create<EditorState>((set, get) => ({
       };
     }),
 
-  select: (ids) => set({ selectedIds: ids }),
+  /**
+   * Make several shapes into one thing to pick up.
+   *
+   * Flattens whatever was grouped before: a selection spanning two groups
+   * becomes one group, not a group of groups. See `AnnotationBase.group` for
+   * why there is no tree here.
+   */
+  group: () =>
+    set((s) => {
+      if (s.selectedIds.length < 2) return {};
+      const group = crypto.randomUUID();
+      return {
+        past: [...s.past, snapshotOf(s)].slice(-HISTORY_LIMIT),
+        future: [],
+        annotations: s.annotations.map((a) =>
+          s.selectedIds.includes(a.id) ? { ...a, group } : a,
+        ),
+        dirty: true,
+      };
+    }),
 
-  toggleSelect: (id) =>
+  ungroup: () =>
+    set((s) => {
+      const grouped = s.annotations.filter((a) => s.selectedIds.includes(a.id) && a.group);
+      if (grouped.length === 0) return {};
+      return {
+        past: [...s.past, snapshotOf(s)].slice(-HISTORY_LIMIT),
+        future: [],
+        annotations: s.annotations.map((a) => {
+          if (!s.selectedIds.includes(a.id) || !a.group) return a;
+          const { group: _was, ...rest } = a;
+          return rest as Annotation;
+        }),
+        dirty: true,
+      };
+    }),
+
+  /**
+   * Put the selection out of reach, and let go of it.
+   *
+   * Deselecting is the point rather than a side effect: a locked shape is one
+   * that cannot be selected, so leaving it selected would leave every command
+   * on the menu still pointed at it.
+   */
+  lock: () =>
+    set((s) => {
+      if (s.selectedIds.length === 0) return {};
+      return {
+        past: [...s.past, snapshotOf(s)].slice(-HISTORY_LIMIT),
+        future: [],
+        annotations: s.annotations.map((a) =>
+          s.selectedIds.includes(a.id) ? { ...a, locked: true } : a,
+        ),
+        selectedIds: [],
+        dirty: true,
+      };
+    }),
+
+  /** The way back. Answers how many there were, for something to say. */
+  unlockAll: () => {
+    const locked = get().annotations.filter((a) => a.locked);
+    if (locked.length === 0) return 0;
     set((s) => ({
-      selectedIds: s.selectedIds.includes(id)
-        ? s.selectedIds.filter((x) => x !== id)
-        : [...s.selectedIds, id],
+      past: [...s.past, snapshotOf(s)].slice(-HISTORY_LIMIT),
+        future: [],
+      annotations: s.annotations.map((a) => {
+        if (!a.locked) return a;
+        const { locked: _was, ...rest } = a;
+        return rest as Annotation;
+      }),
+      selectedIds: locked.map((a) => a.id),
+      dirty: true,
+    }));
+    return locked.length;
+  },
+
+  /**
+   * Line the selection up on one edge, or through one middle.
+   *
+   * On *spun* bounds, so a turned shape lines up by the box you can see rather
+   * than by the untilted rectangle underneath it — the second would look
+   * plainly wrong at any angle that matters.
+   */
+  align: (edge) =>
+    set((s) => {
+      const boxes = new Map(
+        s.annotations.filter((a) => s.selectedIds.includes(a.id)).map((a) => [a.id, spunBoundsOf(a)]),
+      );
+      if (boxes.size < 2) return {};
+      const all = [...boxes.values()];
+      const left = Math.min(...all.map((b) => b.x));
+      const right = Math.max(...all.map((b) => b.x + b.width));
+      const top = Math.min(...all.map((b) => b.y));
+      const bottom = Math.max(...all.map((b) => b.y + b.height));
+
+      const shift = (b: Rect): [number, number] => {
+        switch (edge) {
+          case "left":
+            return [left - b.x, 0];
+          case "right":
+            return [right - (b.x + b.width), 0];
+          case "hcentre":
+            return [(left + right) / 2 - (b.x + b.width / 2), 0];
+          case "top":
+            return [0, top - b.y];
+          case "bottom":
+            return [0, bottom - (b.y + b.height)];
+          case "vcentre":
+            return [0, (top + bottom) / 2 - (b.y + b.height / 2)];
+        }
+      };
+
+      return {
+        past: [...s.past, snapshotOf(s)].slice(-HISTORY_LIMIT),
+        future: [],
+        annotations: rerouted(
+          s.annotations.map((a) => {
+            const b = boxes.get(a.id);
+            if (!b) return a;
+            const [dx, dy] = shift(b);
+            return dx || dy ? movedBy(a, dx, dy) : a;
+          }),
+        ),
+        dirty: true,
+      };
+    }),
+
+  /**
+   * Even gaps, not even centres.
+   *
+   * Three shapes of different widths spaced by their centres leave gaps that
+   * visibly differ, which is the thing anyone reaching for this was trying to
+   * fix. The two at the ends stay put and define the run.
+   */
+  distribute: (axis) =>
+    set((s) => {
+      const chosen = s.annotations
+        .filter((a) => s.selectedIds.includes(a.id))
+        .map((a) => ({ id: a.id, box: spunBoundsOf(a) }));
+      if (chosen.length < 3) return {};
+
+      const start = (b: Rect) => (axis === "x" ? b.x : b.y);
+      const size = (b: Rect) => (axis === "x" ? b.width : b.height);
+      chosen.sort((p, q) => start(p.box) - start(q.box));
+
+      const first = chosen[0].box;
+      const last = chosen[chosen.length - 1].box;
+      const span = start(last) + size(last) - start(first);
+      const used = chosen.reduce((n, c) => n + size(c.box), 0);
+      const gap = (span - used) / (chosen.length - 1);
+
+      const moves = new Map<string, number>();
+      let at = start(first);
+      for (const c of chosen) {
+        moves.set(c.id, at - start(c.box));
+        at += size(c.box) + gap;
+      }
+
+      return {
+        past: [...s.past, snapshotOf(s)].slice(-HISTORY_LIMIT),
+        future: [],
+        annotations: rerouted(
+          s.annotations.map((a) => {
+            const d = moves.get(a.id);
+            if (!d) return a;
+            return axis === "x" ? movedBy(a, d, 0) : movedBy(a, 0, d);
+          }),
+        ),
+        dirty: true,
+      };
+    }),
+
+  /**
+   * The one door every selection comes through.
+   *
+   * Two rules live here so that nothing else has to remember them: a group
+   * comes up whole, and a locked shape does not come up at all.
+   */
+  select: (ids) =>
+    set((s) => ({
+      selectedIds: withGroups(
+        s.annotations,
+        ids.filter((id) => !s.annotations.find((a) => a.id === id)?.locked),
+      ),
     })),
 
-  selectAll: () => set((s) => ({ selectedIds: s.annotations.map((a) => a.id), tool: "select" })),
+  toggleSelect: (id) => {
+    const { selectedIds, select } = get();
+    select(
+      selectedIds.includes(id) ? selectedIds.filter((x) => x !== id) : [...selectedIds, id],
+    );
+  },
+
+  selectAll: () =>
+    set((s) => ({
+      selectedIds: s.annotations.filter((a) => !a.locked).map((a) => a.id),
+      tool: "select",
+    })),
   clearSelection: () => set({ selectedIds: [] }),
 
   /** Tab / Shift-Tab cycling through annotations in z-order. */
   selectNext: (delta) =>
     set((s) => {
-      if (s.annotations.length === 0) return {};
-      const current = s.annotations.findIndex((a) => a.id === s.selectedIds[0]);
       const len = s.annotations.length;
-      const next = current === -1 ? (delta > 0 ? 0 : len - 1) : (current + delta + len) % len;
-      return { selectedIds: [s.annotations[next].id], tool: "select" };
+      if (len === 0) return {};
+      const current = s.annotations.findIndex((a) => a.id === s.selectedIds[0]);
+      // Walk on past anything locked rather than landing on it and stopping:
+      // Tab is the one way to reach a shape without clicking it, and a locked
+      // shape is exactly what should not be reachable.
+      let at = current === -1 ? (delta > 0 ? -1 : 0) : current;
+      for (let step = 0; step < len; step++) {
+        at = (at + delta + len) % len;
+        const next = s.annotations[at];
+        if (!next.locked) return { selectedIds: withGroups(s.annotations, [next.id]), tool: "select" };
+      }
+      return {};
     }),
 
   nudge: (dx, dy) =>
@@ -881,8 +1131,8 @@ export const useEditor = create<EditorState>((set, get) => ({
       if (s.selectedIds.length === 0) return {};
       return {
         dirty: true,
-        annotations: s.annotations.map((a) =>
-          s.selectedIds.includes(a.id) ? movedBy(a, dx, dy) : a,
+        annotations: rerouted(
+          s.annotations.map((a) => (s.selectedIds.includes(a.id) ? movedBy(a, dx, dy) : a)),
         ),
       };
     }),
@@ -940,6 +1190,9 @@ export const useEditor = create<EditorState>((set, get) => ({
           );
         })
         .map((a) => movedBy(a, -rect.x, -rect.y));
+      // A crop can drop the shape an arrow was tied to; rerouting is what
+      // turns that back into an ordinary arrow rather than a dangling bond.
+      const kept = rerouted(shifted);
 
       // `rect` arrives in document space, so compose it onto the existing crop
       // to get back to source-image coordinates.
@@ -953,7 +1206,7 @@ export const useEditor = create<EditorState>((set, get) => ({
       return {
         past: [...s.past, snapshotOf(s)].slice(-HISTORY_LIMIT),
         future: [],
-        annotations: shifted,
+        annotations: kept,
         doc: { ...s.doc, crop },
         pendingCrop: null,
         tool: "select",

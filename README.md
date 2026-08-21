@@ -225,6 +225,17 @@ A few things worth knowing:
   detail and magnify it rather than watch it slide off the edge. A trackpad
   pinch does the same. **Hold space** and drag to push the canvas around once
   you're in past the edges; the middle mouse button does it too.
+- **Arrows bend, and they stick.** Drag the grip in the middle of an arrow to
+  bow it around whatever is in the way. Drop either end on a shape and it ties
+  itself there: move the shape afterwards and the arrow follows, still pointing
+  at it. Drag the end off again to let go.
+- **Group** with <kbd>⌘G</kbd> so a callout and its arrow move as one thing,
+  and **lock** with <kbd>⇧⌘L</kbd> so the full-width spotlight you finished
+  with stops catching every click. <kbd>⌥⇧⌘L</kbd> gives them all back.
+- **Line things up**: <kbd>⌥A</kbd> <kbd>⌥D</kbd> <kbd>⌥W</kbd> <kbd>⌥S</kbd>
+  for the edges, <kbd>⌥H</kbd> and <kbd>⌥V</kbd> for the middles, and
+  <kbd>⌃⌥H</kbd> / <kbd>⌃⌥V</kbd> to even out the gaps in a row of three or
+  more — the same keys Figma uses.
 - Drag an annotation to move it, drag a corner to resize, Alt-drag to draw
   *through* a shape that's in the way.
 - Paste an image on top with <kbd>⌘V</kbd> and drag it around — good for

@@ -8,6 +8,23 @@ The release notes on GitHub and the "what's new" text the in-app updater shows
 are both taken from this file — see `docs/RELEASING.md`. A version with nothing
 written here cannot be published.
 
+## Unreleased
+
+- **Arrows bend.** Drag the grip in the middle of an arrow or line to bow it
+  around whatever is in the way, and drag it back onto the line to straighten
+  it. Curved arrows export exactly as they look on screen.
+- **Arrows stick to what they point at.** Drop either end on a shape and it
+  ties itself there — move, resize or line up that shape afterwards and the
+  arrow follows it, still pointing. Drag the end off again to let go.
+- **Group** several annotations with ⌘G so they move as one, and **ungroup**
+  with ⇧⌘G. Clicking any member picks up the whole group.
+- **Lock** with ⇧⌘L: a locked annotation cannot be selected, so the full-width
+  spotlight or blur you finished with stops catching every click aimed at
+  something behind it. ⌥⇧⌘L unlocks everything again.
+- **Align and distribute** a multiple selection — ⌥A ⌥D ⌥W ⌥S for the edges,
+  ⌥H and ⌥V for the middles, ⌃⌥H and ⌃⌥V to even out the gaps in a row of
+  three or more. The same keys Figma and Miro use.
+
 ## 0.11.3 — 2026-08-21
 
 - **Space and drag now moves the canvas, at any zoom.** Panning was scrolling a

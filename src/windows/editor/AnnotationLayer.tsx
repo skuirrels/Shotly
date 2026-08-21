@@ -1,6 +1,9 @@
 import { Fragment } from "react";
 import {
   arrowPolygon,
+  lineMiddle,
+  linePath,
+  spunBoundsOf,
   calloutBaselines,
   calloutLayout,
   centreOf,
@@ -24,7 +27,16 @@ import {
   stepFontSize,
   TEXT_PADDING,
 } from "@/lib/shapes";
-import { type Annotation, angleOf, boundsOf, canRotate, isLine, isPen, isStep } from "@/lib/types";
+import {
+  type Annotation,
+  angleOf,
+  boundsOf,
+  canBend,
+  canRotate,
+  isLine,
+  isPen,
+  isStep,
+} from "@/lib/types";
 import type { Doc } from "@/state/editorStore";
 
 interface Props {
@@ -37,6 +49,8 @@ interface Props {
   shapeCursor: "move" | "crosshair";
   onShapePointerDown: (e: React.PointerEvent, id: string) => void;
   onHandlePointerDown: (e: React.PointerEvent, id: string, handle: HandleId) => void;
+  /** The shape an end being dragged right now would tie itself to, if any. */
+  bondTo?: string | null;
 }
 
 /**
@@ -46,7 +60,7 @@ interface Props {
  * which is what a line has instead; `rotate` is the grip that floats above the
  * top edge.
  */
-export type HandleId = HandleName | "start" | "end" | "rotate";
+export type HandleId = HandleName | "start" | "end" | "rotate" | "bend";
 
 /**
  * How far above the box the rotate grip sits, in on-screen pixels.
@@ -72,6 +86,7 @@ export function AnnotationLayer({
   shapeCursor,
   onShapePointerDown,
   onHandlePointerDown,
+  bondTo,
 }: Props) {
   const { width, height } = doc.crop;
   const blurs = annotations.filter((a) => a.kind === "blur");
@@ -131,11 +146,41 @@ export function AnnotationLayer({
           // `spinsItself`.
           transform={spinsItself(a) ? undefined : spinTransform(angleOf(a), centreOf(boundsOf(a)))}
           onPointerDown={(e) => onShapePointerDown(e, a.id)}
+          // A locked shape is scenery: the press goes straight through it to
+          // whatever is underneath, which is the whole reason to lock the big
+          // spotlight that was covering everything.
+          pointerEvents={a.locked ? "none" : undefined}
           style={{ cursor: shapeCursor }}
         >
           <Shape a={a} doc={doc} hidden={editingId === a.id} />
         </g>
       ))}
+
+      {/* What an end being dragged is about to tie itself to. Drawn as the
+          shape's own outline rather than a badge: the question in the hand is
+          "this one?", and lighting up the answer is the shortest way to say
+          yes. */}
+      {annotations
+        .filter((a) => a.id === bondTo)
+        .map((a) => {
+          const b = spunBoundsOf(a);
+          const pad = 4 / zoom;
+          return (
+            <rect
+              key={`bond-${a.id}`}
+              x={b.x - pad}
+              y={b.y - pad}
+              width={b.width + pad * 2}
+              height={b.height + pad * 2}
+              rx={pad}
+              fill="var(--color-accent)"
+              fillOpacity={0.12}
+              stroke="var(--color-accent)"
+              strokeWidth={2 / zoom}
+              pointerEvents="none"
+            />
+          );
+        })}
 
       {/* Selection chrome sits above every shape so it is never occluded. */}
       {annotations
@@ -252,11 +297,9 @@ function Shape({ a, doc, hidden }: { a: Annotation; doc: Doc; hidden: boolean })
         <>
           <path d={polygonToPath(arrowPolygon(a))} fill={a.style.color} filter={shadow} />
           {/* Invisible fat stroke so thin arrows are still easy to grab. */}
-          <line
-            x1={a.x1}
-            y1={a.y1}
-            x2={a.x2}
-            y2={a.y2}
+          <path
+            d={linePath(a)}
+            fill="none"
             stroke="transparent"
             strokeWidth={Math.max(14, a.style.strokeWidth * 2)}
           />
@@ -265,21 +308,17 @@ function Shape({ a, doc, hidden }: { a: Annotation; doc: Doc; hidden: boolean })
     }
     return (
       <>
-        <line
-          x1={a.x1}
-          y1={a.y1}
-          x2={a.x2}
-          y2={a.y2}
+        <path
+          d={linePath(a)}
+          fill="none"
           stroke={a.style.color}
           strokeWidth={a.style.strokeWidth}
           strokeLinecap="round"
           filter={shadow}
         />
-        <line
-          x1={a.x1}
-          y1={a.y1}
-          x2={a.x2}
-          y2={a.y2}
+        <path
+          d={linePath(a)}
+          fill="none"
           stroke="transparent"
           strokeWidth={Math.max(14, a.style.strokeWidth * 2)}
         />
@@ -558,18 +597,29 @@ function SelectionChrome({
   const px = (n: number) => n / zoom;
 
   if (isLine(a)) {
+    const middle = lineMiddle(a);
     return (
       <g>
-        <line
-          x1={a.x1}
-          y1={a.y1}
-          x2={a.x2}
-          y2={a.y2}
+        <path
+          d={linePath(a)}
+          fill="none"
           stroke="var(--color-accent)"
           strokeWidth={px(1)}
           strokeDasharray={`${px(4)} ${px(3)}`}
           pointerEvents="none"
         />
+        {/* Hollow, and only on the lines that can take a curve. A grip that
+            looks like the two on the ends would read as a third end. */}
+        {canBend(a) && (
+          <Handle
+            x={middle.x}
+            y={middle.y}
+            zoom={zoom}
+            fill="var(--color-surface)"
+            cursor="grab"
+            onDown={(e) => onHandlePointerDown(e, a.id, "bend")}
+          />
+        )}
         <Handle x={a.x1} y={a.y1} zoom={zoom} onDown={(e) => onHandlePointerDown(e, a.id, "start")} />
         <Handle x={a.x2} y={a.y2} zoom={zoom} onDown={(e) => onHandlePointerDown(e, a.id, "end")} />
       </g>

@@ -400,6 +400,45 @@ export const IconLayers = (p: SVGProps<SVGSVGElement>) => (
   </Icon>
 );
 
+/** Four corner marks around nothing: several things treated as one. */
+export const IconGroup = (p: SVGProps<SVGSVGElement>) => (
+  <Icon {...p}>
+    <path d="M2 5V2h3M11 2h3v3M14 11v3h-3M5 14H2v-3" />
+    <path d="M6 6h4v4H6z" />
+  </Icon>
+);
+
+export const IconLock = (p: SVGProps<SVGSVGElement>) => (
+  <Icon {...p}>
+    <path d="M3.5 7h9v7h-9z" />
+    <path d="M5.5 7V4.5a2.5 2.5 0 0 1 5 0V7" />
+  </Icon>
+);
+
+/** The same padlock with its shackle swung open. */
+export const IconUnlock = (p: SVGProps<SVGSVGElement>) => (
+  <Icon {...p}>
+    <path d="M3.5 7h9v7h-9z" />
+    <path d="M5.5 7V4.5a2.5 2.5 0 0 1 5 0" />
+  </Icon>
+);
+
+/** A rule with two bars against it. */
+export const IconAlign = (p: SVGProps<SVGSVGElement>) => (
+  <Icon {...p}>
+    <path d="M2.5 2v12" />
+    <path d="M4.5 4.5h8M4.5 10h5" />
+  </Icon>
+);
+
+/** Three bars with the gaps between them made equal. */
+export const IconDistribute = (p: SVGProps<SVGSVGElement>) => (
+  <Icon {...p}>
+    <path d="M2.5 2v12M13.5 2v12" />
+    <path d="M8 4.5v7" />
+  </Icon>
+);
+
 export const IconClose = (p: SVGProps<SVGSVGElement>) => (
   <Icon {...p}>
     <path d="m4 4 8 8M12 4l-8 8" />

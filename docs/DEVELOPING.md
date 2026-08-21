@@ -1277,6 +1277,73 @@ descendant with `[&_*]:cursor-grab`, because the shapes carry SVG `cursor`
 attributes and the stage carries an inline style, and a descendant rule is the
 only thing that outranks both.
 
+## Groups, locks, and the one door a selection comes through
+
+Both features are one rule each, and both rules live inside `select` in the
+store rather than at the half-dozen places that choose a selection — clicking,
+shift-clicking, Tab, Select All, the context menu. A group that came apart in
+one of them would be a group nobody could trust.
+
+**A group is a shared id**, not a tree. `AnnotationBase.group` is a string;
+grouping a selection that already spans groups flattens them into one. Nesting
+would buy a hierarchy nobody drawing on a screenshot has ever asked for, at the
+price of every click becoming a question about depth. `familyOf` is what the
+canvas asks when a shape is pressed, and shift-click adds or removes a whole
+family rather than picking a member out of the middle.
+
+**A locked shape is one that cannot be selected.** That is the whole of it:
+nothing in the editor changes a shape without selecting it first, so a single
+rule in one place keeps locked shapes safe from every edit at once — including
+the ones added next year. The SVG layer gives them `pointer-events: none`, so a
+press goes through to whatever is underneath, which is the entire reason to
+lock the spotlight that was covering everything. Locking deselects on purpose,
+and `Unlock all` is the way back.
+
+Aligning is `align` and `distribute`, on **spun** bounds so a turned shape
+lines up by the box you can see. Distribution evens out the *gaps* rather than
+the centres — three boxes of different widths spaced by their centres leave
+gaps that visibly differ, which is the thing anyone reaching for the command
+was trying to fix. The keys are Figma's (⌥A ⌥D ⌥W ⌥S, ⌥H ⌥V, ⌃⌥H ⌃⌥V) because
+anyone who wants them already has the muscle memory, and they are bound by
+`code` so they survive ⌥ turning A into å.
+
+## Arrows that bend, and arrows that stick
+
+Two features that sound related and share almost no code.
+
+**The bend is one number.** `LineAnnotation.bend` is how far the line bows out
+of the straight run between its ends, as a fraction of the distance between
+them — so a bent arrow dragged longer keeps its shape instead of flattening.
+One scalar rather than a stored control point, because two renderers have to
+agree exactly and a scalar cannot drift: `bendControl` derives the quadratic in
+one place, and the SVG preview and the Canvas2D exporter both draw *that*
+quadratic — `Q` and `quadraticCurveTo` are the same curve. Sampling one and
+curving the other would agree to about a pixel, which is exactly the kind of
+difference that only shows up on a saved file.
+
+The arrow is the exception, because a filled outline offset either side of a
+quadratic is not itself a quadratic. `bowedArrow` walks it in 48 steps. Note
+what it does *not* do: the straight case is still the original seven points of
+exact arithmetic, kept separate rather than made a special case of the walk,
+because thousands of saved captures depend on it and rebuilding it out of
+samples would move every one of them for no gain. `shapes.test.ts` pins that.
+
+**A connector is a line whose ends are kept on a shape's edge** — not a line
+that has forgotten where it is. `fromId`/`toId` name the shapes; the
+coordinates stay authoritative and stay true. This is the whole design, and the
+alternative is worth stating: resolving the ends at draw time would mean every
+renderer needed the rest of the document to know where one arrow was, and
+`boundsOf` would stop being a function of its argument. Instead `rerouted` runs
+inside the store after anything that can move a shape, and the coordinates
+catch up. Hit-testing, the exporter, the markup format and a build of Shotly
+that has never heard of connectors all keep working unchanged.
+
+Two details that are easy to get wrong. Taking hold of an end **unties it
+first**, or the rerouting puts it straight back every frame and the end cannot
+be dragged anywhere at all. And a bond whose shape has been deleted is dropped
+rather than remembered, so an undo that brings a different shape back cannot
+inherit it.
+
 ## Lining shapes up — a pull, and a line that says why
 
 `lib/guides.ts` is pure arithmetic on axis-aligned boxes and knows nothing
