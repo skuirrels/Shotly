@@ -8,6 +8,19 @@ The release notes on GitHub and the "what's new" text the in-app updater shows
 are both taken from this file — see `docs/RELEASING.md`. A version with nothing
 written here cannot be published.
 
+## Unreleased
+
+- **Space and drag now moves the canvas, at any zoom.** Panning was scrolling a
+  pane that had been sized to fit the picture exactly, so at most zoom levels
+  there was nowhere to scroll to and the gesture did nothing whatsoever. There
+  is now room around the capture on every side — it can be pushed about
+  wherever it is, the way it can in Figma or Miro — and the pane no longer
+  wears scrollbars to say so.
+- **Holding space no longer scrolls the pane out from under you.** Held down, a
+  key repeats, and the repeats were still carrying their own default action.
+- A capture opens in the middle of the pane and stays there through a window
+  resize.
+
 ## 0.11.2 — 2026-08-21
 
 - **The canvas can be pushed all the way to its own edges.** Zoomed in past the

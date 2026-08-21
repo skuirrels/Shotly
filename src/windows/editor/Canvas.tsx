@@ -172,6 +172,13 @@ export function Canvas({ onNotify, actions, onScan }: CanvasProps) {
   const drag = useRef<Drag | null>(null);
 
   const [fitZoom, setFitZoom] = useState(1);
+  /**
+   * How much empty room to leave around the capture.
+   *
+   * Half a pane on each side, so there is always somewhere to push the canvas
+   * to — see the padding on the stage's parent for what that buys.
+   */
+  const [room, setRoom] = useState({ x: PAD, y: PAD });
   const [editingId, setEditingId] = useState<string | null>(null);
   /** The last press on any shape, for the hand-rolled double-press above. */
   const lastShapePress = useRef<{ id: string; at: number } | null>(null);
@@ -187,6 +194,15 @@ export function Canvas({ onNotify, actions, onScan }: CanvasProps) {
   const [guides, setGuides] = useState<Guide[]>([]);
   /** Space is down: the canvas is a thing to push around rather than draw on. */
   const [handOpen, setHandOpen] = useState(false);
+  /**
+   * The same thing again, for the press to read.
+   *
+   * State is what the cursor is drawn from; this is what decides whether a
+   * press starts a pan. They are set together and only ever disagree for the
+   * moment between the key arriving and React committing the render — which is
+   * exactly the moment a fast hand presses the button in.
+   */
+  const hasHand = useRef(false);
   /** True only while a pan is actually under way, for the closed-hand cursor. */
   const [panning, setPanning] = useState(false);
   /** Where a pan started, and where the pane was scrolled to at the time. */
@@ -222,6 +238,10 @@ export function Canvas({ onNotify, actions, onScan }: CanvasProps) {
       );
       // Never upscale on fit: a small capture blown up looks like a mistake.
       setFitZoom(Math.max(0.05, Math.min(scale, 1)));
+      setRoom({
+        x: Math.max(PAD, Math.round(available.width / 2)),
+        y: Math.max(PAD, Math.round(available.height / 2)),
+      });
     };
 
     recompute();
@@ -367,6 +387,45 @@ export function Canvas({ onNotify, actions, onScan }: CanvasProps) {
   }, [zoom]);
 
   /**
+   * Put the capture in the middle of the pane.
+   *
+   * With room left on every side the scroll area is always bigger than the
+   * pane, so where a capture sits is now a choice rather than a given — left
+   * alone, a scroll container starts at its top-left corner, which here is the
+   * corner of a lot of empty space.
+   */
+  const centre = useCallback(() => {
+    const el = viewport.current;
+    const box = stage.current;
+    if (!el || !box) return;
+    el.scrollLeft = box.offsetLeft + box.offsetWidth / 2 - el.clientWidth / 2;
+    el.scrollTop = box.offsetTop + box.offsetHeight / 2 - el.clientHeight / 2;
+  }, []);
+
+  // A capture opens in the middle of the pane.
+  useLayoutEffect(centre, [doc?.id, centre]);
+
+  /**
+   * Fit means the whole picture, centred — and it has to stay that way through
+   * a window resize, a refit, and the several commits a capture takes to
+   * settle at its final size.
+   *
+   * Watching the stage rather than reacting to the numbers that feed it: the
+   * size on the page is the thing that has to be centred, and it is the last
+   * of them to be true. Only while fitting — a zoom you drove yourself has an
+   * anchor of its own, and dragging the picture back to the middle afterwards
+   * would undo it.
+   */
+  useLayoutEffect(() => {
+    const box = stage.current;
+    if (!box || !fitToWindow) return;
+    centre();
+    const observer = new ResizeObserver(centre);
+    observer.observe(box);
+    return () => observer.disconnect();
+  }, [fitToWindow, doc?.id, centre]);
+
+  /**
    * Where the middle of the pane is, in the capture's own coordinates.
    *
    * Recorded after every commit — and after the correction above, so what it
@@ -396,17 +455,29 @@ export function Canvas({ onNotify, actions, onScan }: CanvasProps) {
    */
   useEffect(() => {
     const down = (e: KeyboardEvent) => {
-      if (e.code !== "Space" || e.repeat) return;
+      if (e.code !== "Space") return;
       if (isEditingText(document.activeElement)) return;
+      // Before the repeat guard, not after it. Holding space down does not send
+      // one keydown, it sends a stream of them, and every single one carries
+      // the same default action — so letting the repeats through unprevented
+      // was the pane scrolling itself a page at a time under a hand that was
+      // trying to drag it.
       e.preventDefault();
+      if (e.repeat) return;
+      hasHand.current = true;
       setHandOpen(true);
     };
     const up = (e: KeyboardEvent) => {
-      if (e.code === "Space") setHandOpen(false);
+      if (e.code !== "Space") return;
+      hasHand.current = false;
+      setHandOpen(false);
     };
     // Switching away with space held would otherwise leave the canvas showing
     // a hand it will not honour.
-    const clear = () => setHandOpen(false);
+    const clear = () => {
+      hasHand.current = false;
+      setHandOpen(false);
+    };
 
     // On the way down, not on the way back up. A window listener in the bubble
     // phase is the *last* thing a key reaches, and anything that claims a chord
@@ -435,7 +506,7 @@ export function Canvas({ onNotify, actions, onScan }: CanvasProps) {
     if (!el) return;
     // The middle button is the same gesture with the other hand, and is what
     // people who came from a CAD package or a browser reach for first.
-    if (!handOpen && e.button !== 1) return;
+    if (!hasHand.current && e.button !== 1) return;
 
     e.preventDefault();
     e.stopPropagation();
@@ -1278,6 +1349,10 @@ export function Canvas({ onNotify, actions, onScan }: CanvasProps) {
       ref={viewport}
       className={clsx(
         "relative flex-1 overflow-auto bg-inset",
+        // No bars. The room around the capture means this pane always has
+        // somewhere to scroll to, and a scrollbar on a picture that plainly
+        // fits reads as something being wrong.
+        "[scrollbar-width:none] [&::-webkit-scrollbar]:hidden",
         // Every shape, handle and grip inside says something about itself with
         // a cursor of its own, and while the canvas is being pushed around
         // none of them is true. A descendant rule is the only thing that
@@ -1299,7 +1374,12 @@ export function Canvas({ onNotify, actions, onScan }: CanvasProps) {
           to the start once it does not. */}
       <div
         className="flex min-h-full min-w-full items-center-safe justify-center-safe"
-        style={{ padding: PAD }}
+        // Content-box on purpose: the app is border-box everywhere, and under
+        // that rule padding this big eats the element instead of surrounding
+        // it — `min-width: 100%` and 554px of padding a side leave a content
+        // box of nothing, so the capture overflows one way and there is room
+        // on two sides of it rather than four.
+        style={{ boxSizing: "content-box", padding: `${room.y}px ${room.x}px` }}
       >
         <div
           className={clsx("shrink-0", !frame && "contents")}

@@ -1234,13 +1234,45 @@ centre it while it fits and pin it to the start once it does not. Anything
 inside a scroll container wants the safe variants; the plain ones are a trap
 that only springs on content larger than its pane.
 
+**The canvas has room around it, and that is what makes the gesture do
+anything.** Panning here is scrolling a pane, so with the capture sized exactly
+to fit there is nothing to scroll and holding space did nothing at all — which
+is what "space to move does not work" turned out to mean the first two times it
+was reported. Half a pane of room on every side, recomputed by the same
+observer that recomputes the fit, means the picture can always be pushed
+somewhere, at any zoom, the way it can in Figma. Two traps came with it:
+
+- The room is **`box-sizing: content-box`**, against the app's border-box
+  default. Under border-box, `min-width: 100%` with 554px of padding a side
+  leaves a content box of nothing, the capture overflows one way only, and the
+  room ends up on two sides instead of four — measured as a maximum scroll of
+  exactly `scrollWidth - clientWidth` on one axis and a picture that would not
+  centre.
+- The pane is now *always* scrollable, so the scrollbars are hidden. A bar on a
+  picture that plainly fits reads as something being wrong.
+
+Centring is done by **watching the stage with a `ResizeObserver`**, not by
+reacting to the numbers that feed it. A capture takes several commits to reach
+its final size — fit is measured from the pane, applied as a zoom, and laid out
+— and the size on the page is the last of them to be true. Only while fitting:
+a zoom you drove yourself has an anchor of its own.
+
 Space-to-pan is a **capture-phase** handler on the viewport that stops there.
 Anything less and the press also reaches the stage, so letting go leaves a
 rectangle behind wherever the pan ended. The key itself is claimed on the
 capture phase too: a `keydown` listener on the window in the *bubble* phase is
 the last thing an event reaches, and `useKeymap` stops every chord it owns dead
 on the way down. The hand is a mode rather than a shortcut, so it is taken
-where nothing can have swallowed it yet. The hand cursor is forced onto every
+where nothing can have swallowed it yet.
+
+Two details of *holding* a key, both of which only bite on a real keyboard and
+neither of which a scripted key press can reproduce. `preventDefault` goes
+**before** the `e.repeat` guard: held down, space does not send one keydown but
+a stream of them, and each one carries the same default action, so skipping the
+repeats let the pane page itself downwards under a hand trying to drag it. And
+whether a press starts a pan is read from a **ref**, not from the state the
+cursor is drawn from: the two only disagree between the key arriving and React
+committing, which is exactly the moment a fast hand puts the button down. The hand cursor is forced onto every
 descendant with `[&_*]:cursor-grab`, because the shapes carry SVG `cursor`
 attributes and the stage carries an inline style, and a descendant rule is the
 only thing that outranks both.
