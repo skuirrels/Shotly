@@ -8,7 +8,7 @@ The release notes on GitHub and the "what's new" text the in-app updater shows
 are both taken from this file — see `docs/RELEASING.md`. A version with nothing
 written here cannot be published.
 
-## Unreleased
+## 0.13.1 — 2026-08-21
 
 - **The microphone switch is in the menu bar too**, as *Record Microphone*
   under the two recording items. It was previously only on the recording
