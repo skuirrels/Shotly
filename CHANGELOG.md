@@ -8,7 +8,7 @@ The release notes on GitHub and the "what's new" text the in-app updater shows
 are both taken from this file — see `docs/RELEASING.md`. A version with nothing
 written here cannot be published.
 
-## Unreleased
+## 0.11.0 — 2026-08-21
 
 - **Blur was never in the file.** It looked right in the editor and came out
   completely sharp in every capture you saved, exported or copied — the whole
