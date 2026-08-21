@@ -40,6 +40,8 @@ export function CommandPalette({ commands, onClose }: Props) {
   const [query, setQuery] = useState("");
   const [active, setActive] = useState(0);
   const listRef = useRef<HTMLDivElement>(null);
+  /** The search box, so focus can be insisted on rather than merely asked for. */
+  const box = useRef<HTMLInputElement>(null);
 
   const results = useMemo(() => {
     const candidates = commands.filter((c) => !c.hidden && (!c.enabled || c.enabled()));
@@ -59,6 +61,40 @@ export function CommandPalette({ commands, onClose }: Props) {
       ?.querySelector(`[data-index="${active}"]`)
       ?.scrollIntoView({ block: "nearest" });
   }, [active]);
+
+  /**
+   * Escape, from wherever the keyboard happens to be pointed.
+   *
+   * The rest of the palette's keys ride on the input, which is right while
+   * anyone is typing into it — but Escape is the way out of a thing that has
+   * gone wrong, and "the input lost focus" is one of the ways it goes wrong.
+   * Bound to the window so it works when the input is not listening, and on
+   * the capture phase so nothing underneath answers it first.
+   */
+  useEffect(() => {
+    const onEscape = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      e.preventDefault();
+      e.stopPropagation();
+      onClose();
+    };
+    window.addEventListener("keydown", onEscape, { capture: true });
+    return () => window.removeEventListener("keydown", onEscape, { capture: true });
+  }, [onClose]);
+
+  /**
+   * And keep the keyboard pointed at it.
+   *
+   * `autoFocus` fires once, as the input is created, and loses races with
+   * anything that moves focus in the same frame — the window coming forward,
+   * a view swapping underneath. This asks again on the next frame, which is
+   * the difference between a palette you can type into and one that only
+   * looks open.
+   */
+  useEffect(() => {
+    const at = requestAnimationFrame(() => box.current?.focus());
+    return () => cancelAnimationFrame(at);
+  }, []);
 
   const run = (cmd: Command | undefined) => {
     if (!cmd) return;
@@ -95,6 +131,7 @@ export function CommandPalette({ commands, onClose }: Props) {
         aria-label="Command palette"
       >
         <input
+          ref={box}
           autoFocus
           value={query}
           placeholder="Search commands…"

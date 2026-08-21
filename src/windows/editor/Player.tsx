@@ -15,6 +15,7 @@ import {
 import { IconButton } from "@/components/ui/IconButton";
 import { Popover } from "@/components/ui/Popover";
 import { Tooltip } from "@/components/ui/Tooltip";
+import { isEditingText } from "@/lib/keys/keys";
 import * as ipc from "@/lib/ipc";
 import type { Trimmed, TrimMode, TrimPrecision } from "@/lib/types";
 import { formatDuration } from "./format";
@@ -57,6 +58,15 @@ interface Props {
   /** Leave the player — Escape, ⌘W, or the Library tab. */
   onClose: () => void;
   /**
+   * Whether the transport keys are live.
+   *
+   * False while a modal is up. The handler below listens on the window and on
+   * the capture phase, so it hears everything typed anywhere in the app —
+   * which meant a space typed into the command palette's search box also
+   * started the movie playing behind it.
+   */
+  keys?: boolean;
+  /**
    * A trim landed in the library as a new recording.
    *
    * The player does not switch to it itself: the editor owns which movie is
@@ -83,7 +93,15 @@ const RATES = [0.5, 1, 1.25, 1.5, 2] as const;
  * nothing else; a recording kept anywhere else will fail to load, which is what
  * the fallback below is for.
  */
-export function Player({ movie, startAt = 0, onLeave, onClose, onTrimmed, onError }: Props) {
+export function Player({
+  movie,
+  startAt = 0,
+  onLeave,
+  onClose,
+  onTrimmed,
+  onError,
+  keys = true,
+}: Props) {
   const video = useRef<HTMLVideoElement>(null);
   const [playing, setPlaying] = useState(false);
   const [time, setTime] = useState(0);
@@ -261,7 +279,10 @@ export function Player({ movie, startAt = 0, onLeave, onClose, onTrimmed, onErro
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const el = video.current;
-      if (!el || e.isComposing) return;
+      if (!el || e.isComposing || !keys) return;
+      // Anything being typed into belongs to whatever is being typed into: the
+      // trim fields here, the palette's search box over the top of them.
+      if (isEditingText(e.target)) return;
 
       const handled = () => {
         e.preventDefault();
@@ -334,7 +355,7 @@ export function Player({ movie, startAt = 0, onLeave, onClose, onTrimmed, onErro
 
     window.addEventListener("keydown", onKey, { capture: true });
     return () => window.removeEventListener("keydown", onKey, { capture: true });
-  }, [onClose, range, seek, toggle]);
+  }, [keys, onClose, range, seek, toggle]);
 
   // Playback rate is a property, not an attribute — React can't set it.
   useEffect(() => {

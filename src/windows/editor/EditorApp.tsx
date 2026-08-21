@@ -1846,6 +1846,10 @@ export function EditorApp() {
             onClose={() => showView("library")}
             onTrimmed={onTrimmed}
             onError={reportError}
+            // The same rule the editor's own map follows: a modal owns the
+            // keyboard while it is up, and the player listens on the window so
+            // it would otherwise hear every key typed into one.
+            keys={!palette && !sheet && !settings}
           />
         ) : (
           // Clicking anywhere that isn't a capture clears the selection, the

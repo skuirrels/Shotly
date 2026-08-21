@@ -10,6 +10,13 @@ written here cannot be published.
 
 ## Unreleased
 
+- **A movie no longer answers keys typed into something else.** With the
+  command palette open over a recording, a space typed into its search box also
+  started the movie playing behind it. The player's keys now stand down while a
+  modal is up, and never answer for a field being typed into.
+- The command palette takes Escape from wherever the keyboard is pointed, and
+  insists on focus rather than asking for it once — so it cannot end up open
+  and unable to hear anything.
 - **Opening a recording no longer switches off every keyboard shortcut.** ⌘K,
   ⇧⌘R, ⌘, and the rest kept working right up until you double-clicked a movie,
   and then did nothing until you closed it again. The player still owns space,
