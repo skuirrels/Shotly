@@ -25,7 +25,12 @@ key.
 
 Shotly lives in the menu bar. Closing its window puts it away rather than
 quitting it, so the capture keys keep working. **Settings → General** has
-*Open Shotly at login*, which starts it in the menu bar with no window.
+*Open Shotly at login*, which starts it in the menu bar with no window — and
+*Show the shot in the corner instead of opening the editor*, for when most of
+what you capture gets pasted somewhere rather than marked up. The shot slides
+into the corner, waits a few seconds and goes; click it to edit it, drag it
+straight into another app, or ignore it. It is saved to your Shotly folder
+either way.
 
 It updates itself: it checks shortly after launch and every six hours, installs
 quietly in the background, and offers you a relaunch when it's ready. **Check
@@ -199,6 +204,23 @@ A few things worth knowing:
   call it); the **pt/px** switch beside the colour changes that.
 - **Everything stays editable.** Reopen a capture Shotly saved and the arrows
   and text are still there to move, recolour or delete.
+- **Blur really removes it.** A saved capture keeps the original picture inside
+  it so the shapes stay movable — but not underneath a blur, where the pixels
+  are destroyed before the file is written. The blur is still a shape you can
+  move or delete; what it was covering has gone.
+- <kbd>⌘⇧B</kbd> **finds the things that shouldn't be in the shot** and blurs
+  them: email addresses, API keys, bearer tokens, card numbers, IP addresses,
+  and anything next to the word "password". It reads the parts you've cropped
+  away too, because those still travel inside the file. It is a first pass, not
+  a promise — <kbd>⌘Z</kbd> if it was too keen, and the blur tool is still
+  there for what it missed.
+- **Shapes line themselves up.** Drag one near the edge or centre of another —
+  or of the capture — and it snaps, with a line showing what it caught. Drop it
+  an even distance into a row of others and a pair of bars says the gaps match.
+  Hold <kbd>⌘</kbd> to place something exactly where your hand put it.
+- **Every tool remembers its own ink.** Yellow for the highlighter doesn't make
+  the next arrow yellow. <kbd>⌥⌘C</kbd> and <kbd>⌥⌘V</kbd> copy a whole look —
+  colour, weight, fill, corners, glow — from one shape onto another.
 - Drag an annotation to move it, drag a corner to resize, Alt-drag to draw
   *through* a shape that's in the way.
 - Paste an image on top with <kbd>⌘V</kbd> and drag it around — good for
@@ -284,6 +306,17 @@ year and month down the side. Double-click to open one, or right-click for Copy,
 Pin, Show in Finder and Move to Trash. Trashing goes through Finder, so it's
 recoverable.
 
+**Search looks inside the pictures.** Every filename is a date, which makes a
+folder of four hundred screenshots unsearchable — so Shotly reads the words in
+each one, once, quietly in the background, and <kbd>⌘F</kbd> matches those too.
+Type "connection refused" and you get the shot with the error in it. It uses the
+same recognition as the <kbd>G</kbd> tool: nothing is uploaded, and the words
+are kept in Shotly's own settings folder rather than in yours.
+
+**Drag one out.** Press a capture in the grid or the rail, drag, and drop it on
+Slack, Mail, or a Finder window — several at once if several are selected. It is
+always a copy; nothing can drag a capture out of your library.
+
 ### Saving and sharing
 
 | | |
@@ -358,7 +391,8 @@ Hotkeys tab that opens the right pane.
 <kbd>⌫</kbd> delete · <kbd>⌘A</kbd> select all · <kbd>⇥</kbd> next annotation ·
 <kbd>[</kbd> <kbd>]</kbd> smaller/larger · <kbd>F</kbd> fill ·
 <kbd>⇧S</kbd> shadow · <kbd>⌘]</kbd> <kbd>⌘[</kbd> forward/backward ·
-<kbd>⏎</kbd> apply crop · <kbd>⌘=</kbd> <kbd>⌘−</kbd> zoom ·
+<kbd>⏎</kbd> apply crop · <kbd>⌥⌘C</kbd> <kbd>⌥⌘V</kbd> copy/paste style ·
+<kbd>⌘⇧B</kbd> blur anything sensitive · <kbd>⌘=</kbd> <kbd>⌘−</kbd> zoom ·
 <kbd>⌘0</kbd> fit · <kbd>⌘1</kbd> actual size · <kbd>⌘L</kbd> back to library ·
 <kbd>⌘N</kbd> new blank image · <kbd>⌘⇧V</kbd> new image from the clipboard ·
 <kbd>⌘,</kbd> settings

@@ -1253,6 +1253,100 @@ carrying it means the same look still lands on a rectangle later. Two commands
 rather than a mode: a mode needs a place in the toolbar, a cursor, and a way
 out of it.
 
+## A blur has to be a redaction
+
+`markup.rs` tucks the **unannotated original** into every saved PNG, which is
+what makes a capture re-editable and is also, on its own, a hole: a screenshot
+with an API key blurred out was shipping the key, one undo away from anybody
+with Shotly. `renderRedactedOriginal` closes it. Before the original is
+embedded, the editor redraws it at natural size with every blur burnt in, and
+*that* is what goes in the file.
+
+Three things about it are deliberate:
+
+* **Only `blur`.** Highlight and spotlight are emphasis, and the shape is still
+  a shape — movable, resizable, deletable. What changes is that moving it
+  reveals blurred pixels rather than the secret.
+* **Natural size, not the document.** The crop and the output scale are both
+  undoable view settings; the embedded picture is the one that goes on disk. So
+  the blurs are shifted by the crop origin on the way in.
+* **Null when nothing is blurred**, so an ordinary save costs no second encode.
+
+⌘⇧B is the other half: one pass of the recogniser that is already there for the
+text grab, with `looksSensitive` (`lib/redact.ts`) deciding which lines to
+cover. It runs over the whole **file**, not the visible document, so a line
+cropped out of view is blurred too — otherwise the crop is simply the other way
+the secret gets out. `redact.test.ts` has as many cases for prose, version
+numbers and timestamps staying clear as it does for secrets being caught: a
+pass that blurs half an ordinary screenshot gets switched off, and a switched-
+off pass catches nothing.
+
+What is *not* covered, and should be said plainly: cropping alone is still
+non-destructive, so a capture cropped to hide something still carries it. That
+is the documented behaviour of the crop and changing it would break the promise
+the rest of the editor makes.
+
+## Searching what the pictures say
+
+`textindex.rs` reads every still once and keeps the words in
+`app_config_dir/text-index.json`, keyed on modification time. Not in
+`~/Documents/Shotly`, which is the user's folder and syncs; not inside the
+files, which would rewrite captures nobody touched and put a copy of everything
+a screenshot says into a file about to be emailed.
+
+The reading is batched — four at a time, paced, saved before each batch
+returns — because recognition is around a quarter of a second a picture and a
+first run over a big library is minutes. Stopping halfway costs nothing. The
+library pane drives it, since the library is where searching happens, and shows
+what it is doing **only while a search is active and the index is incomplete**:
+a permanent progress bar for work nobody asked for is noise, but a search that
+silently cannot see half the library is a lie.
+
+The grid narrows on the filename immediately and widens as the index answers.
+That order matters — a search that showed nothing until a round trip finished
+would feel broken at exactly the moment it was being useful.
+
+## Dragging a capture out of the window
+
+HTML drag-and-drop can hand another *web page* a file; the pasteboard it writes
+is not the one AppKit reads when the drop lands on Slack. So `platform::dragout`
+starts a real `NSDraggingSession` on the window's content view, with the file's
+URL as the pasteboard item — which is what Finder does.
+
+Two details are not obvious. The **event** it wants is the mouse event that
+started the drag, and by the time a command has crossed the IPC boundary the
+current event may be anything; one is synthesised at the pointer's position in
+the window, which is honest, because the front end really has just recognised a
+drag. And the **source** object answering `sourceOperationMaskForDraggingContext`
+is made once and never released: AppKit keeps only a weak reference, and a
+source freed mid-drag is a crash in somebody else's process. It offers `Copy`
+and never `Move`, so a drop can never take a capture away.
+
+`lib/dragout.ts` is the other half, and everything in it is about the events
+stopping: once the native session starts, the web view sees no move and no
+release, and the click that would have followed never arrives. State is reset
+at the moment the drag is handed over, not on a `pointerup` that may never come.
+
+## The corner a capture lands in
+
+`shelf.rs` is the alternative to opening the whole editor for a screenshot that
+is going to be pasted somewhere and forgotten. **Off by default**, in
+Settings → General: it changes what the capture key *does*, and that is not a
+habit to rearrange under anyone.
+
+It is the only path that files a capture from Rust. Every other one hands the
+frame to the editor, which saves it on arrival — and that cannot work here,
+because the whole point is that the editor is never shown, and *a webview in a
+hidden window runs no JavaScript*. The editor would take the capture and
+quietly never file it.
+
+`deliver_capture` is the seam, and it is separate from `deliver` on purpose:
+the shelf only makes sense for something the user just photographed. Opening a
+file, combining several, or capturing from the window picker already has the
+editor in front and in charge. Any failure falls through to `deliver` — a
+capture that could not be put in the corner must never be a capture that
+vanished.
+
 ## Window level and Spaces — the rule for every overlay
 
 A window created while a full-screen app is in front belongs to the **desktop**
@@ -1270,6 +1364,7 @@ display?**
 |---|---|---|
 | `snap` outline | No — `ignore_cursor_events` throughout, clicks come from a CGEventTap | `elevate_overlay_window`: screen-saver level, all Spaces |
 | recording panel | Only its own 232 points | `elevate_overlay_window` |
+| capture shelf | Only its own corner, and never focused | `elevate_overlay_window` |
 | recording selection | Yes, full screen | `show_on_every_space`: Space membership only |
 | `scroll` selection + HUD | Yes, full screen | `show_on_every_space` |
 | `annotate` layer | Yes, full screen | `follow_active_space` — moves to the active Space |

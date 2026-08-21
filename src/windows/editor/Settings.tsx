@@ -154,16 +154,28 @@ function Hotkeys({ onRecording }: { onRecording: (active: boolean) => void }) {
 /**
  * The things that are neither a key nor a folder.
  *
- * One switch today. It has a tab of its own rather than being tacked onto
- * another because "open at login" is not a hotkey and is not a backup, and a
- * setting filed under the wrong heading is a setting nobody finds.
+ * Its own tab rather than being tacked onto another: "open at login" is not a
+ * hotkey and is not a backup, and a setting filed under the wrong heading is a
+ * setting nobody finds.
  */
 function General() {
   const [atLogin, setAtLogin] = useState<boolean | null>(null);
+  const [shelf, setShelf] = useState<boolean | null>(null);
   const [note, setNote] = useState<string | null>(null);
 
   useEffect(() => {
     void ipc.launchAtLogin().then(setAtLogin).catch(() => setAtLogin(false));
+    void ipc.shelfEnabled().then(setShelf).catch(() => setShelf(false));
+  }, []);
+
+  const toggleShelf = useCallback(async (next: boolean) => {
+    setShelf(next);
+    try {
+      await ipc.setShelfEnabled(next);
+    } catch (e) {
+      setShelf(!next);
+      setNote(String(e));
+    }
   }, []);
 
   const toggle = useCallback(async (next: boolean) => {
@@ -198,6 +210,30 @@ function General() {
           <span className="mt-0.5 block text-[11.5px] leading-relaxed text-ink-3">
             It starts in the menu bar with no window, so the capture keys work from the moment you
             log in.
+          </span>
+        </span>
+      </label>
+
+      <h3 className="mt-5 mb-1 text-[11px] font-semibold tracking-wider text-ink-4 uppercase">
+        After a capture
+      </h3>
+
+      <label className="flex cursor-pointer items-start gap-3 rounded-xl border border-line bg-surface p-3">
+        <input
+          type="checkbox"
+          checked={shelf ?? false}
+          disabled={shelf === null}
+          onChange={(e) => void toggleShelf(e.target.checked)}
+          className="mt-0.5 size-4 accent-[var(--color-accent)]"
+        />
+        <span className="min-w-0">
+          <span className="block text-[12.5px] font-medium text-ink">
+            Show the shot in the corner instead of opening the editor
+          </span>
+          <span className="mt-0.5 block text-[11.5px] leading-relaxed text-ink-3">
+            It waits a few seconds and goes. Click it to edit, drag it straight into another app,
+            or ignore it — it is saved to your Shotly folder either way. Best when most of what you
+            capture gets pasted somewhere rather than marked up.
           </span>
         </span>
       </label>

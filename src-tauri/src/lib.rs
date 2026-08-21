@@ -14,6 +14,7 @@ mod media;
 mod record;
 mod scroll;
 mod share;
+mod shelf;
 mod snap;
 mod textindex;
 mod platform;
@@ -290,6 +291,10 @@ pub fn run() {
             pin::pin_png,
             pin::pin_close,
             pin::pin_close_all,
+            shelf::shelf_enabled,
+            shelf::set_shelf_enabled,
+            shelf::shelf_close,
+            shelf::shelf_edit,
             record::record_begin,
             record::record_ready,
             record::record_beat,

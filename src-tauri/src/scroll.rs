@@ -1350,7 +1350,7 @@ fn run_session(
             // The overlay window is closed by our caller; deliver brings the
             // editor forward with the stitched page in it.
             close(app);
-            if let Err(err) = crate::commands::deliver(app, frame) {
+            if let Err(err) = crate::commands::deliver_capture(app, frame) {
                 eprintln!("[shotly] could not open the stitched capture: {err}");
                 crate::commands::reveal_after_capture(app);
             }

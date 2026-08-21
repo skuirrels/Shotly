@@ -257,6 +257,13 @@ export function EditorApp() {
       notify(describe(event.payload), "error"),
     );
 
+    // A capture that went to the corner instead of to the editor was filed by
+    // Rust, so nothing here knows about it. Without this the library grid —
+    // very likely on screen behind the shot that just landed — would go on
+    // showing the shelf's capture as missing until something else refreshed it,
+    // which looks exactly like a capture that was not saved.
+    const libraryUnlisten = listen("library:changed", () => setLibraryKey((k) => k + 1));
+
     // The hotkey and the tray both ask for window capture through Rust, which
     // brings this window forward and hands the choosing back to us.
     const pickUnlisten = listen("editor:pick-window", () => setPicking((n) => n + 1));
@@ -301,6 +308,7 @@ export function EditorApp() {
     return () => {
       void openUnlisten.then((fn) => fn());
       void errorUnlisten.then((fn) => fn());
+      void libraryUnlisten.then((fn) => fn());
       void pickUnlisten.then((fn) => fn());
       void settingsUnlisten.then((fn) => fn());
       void recordedUnlisten.then((fn) => fn());

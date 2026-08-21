@@ -1095,7 +1095,7 @@ fn finish(app: &AppHandle, aim: Aim) {
 
     match capture(app, &aim) {
         Ok(frame) => {
-            if let Err(err) = commands::deliver(app, frame) {
+            if let Err(err) = commands::deliver_capture(app, frame) {
                 eprintln!("[snap] could not open the capture: {err}");
                 commands::reveal_after_capture(app);
             }

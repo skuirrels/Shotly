@@ -161,6 +161,17 @@ export const textIndexReset = () => invoke<void>("text_index_reset");
 export const dragOut = (paths: string[]) => invoke<void>("drag_out", { paths });
 
 /**
+ * Does a fresh capture land in the corner instead of opening the editor?
+ *
+ * Off unless someone has said otherwise: it changes what the capture key does,
+ * and that is not a habit to rearrange under anybody. See
+ * `src-tauri/src/shelf.rs`.
+ */
+export const shelfEnabled = () => invoke<boolean>("shelf_enabled");
+export const setShelfEnabled = (enabled: boolean) =>
+  invoke<void>("set_shelf_enabled", { enabled });
+
+/**
  * Hand a file to whatever the system opens it with.
  *
  * Recordings, in practice: a movie has nothing to annotate, so the library

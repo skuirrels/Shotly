@@ -8,6 +8,39 @@ The release notes on GitHub and the "what's new" text the in-app updater shows
 are both taken from this file — see `docs/RELEASING.md`. A version with nothing
 written here cannot be published.
 
+## Unreleased
+
+- **Blurring something now really removes it.** A capture saved by Shotly
+  carries the original picture inside it so the annotations stay editable —
+  which meant a screenshot with a password blurred out was still carrying the
+  password, one undo away from anyone who opened it in Shotly. The copy inside
+  the file now has the blurred parts destroyed. The blur is still a shape you
+  can move, resize and delete; what is underneath it has gone.
+- **⌘⇧B blurs anything sensitive it can find** — email addresses, API keys,
+  bearer tokens, card numbers, IP addresses, and anything sitting next to the
+  word "password". It reads the whole capture, including parts you have cropped
+  out of view, since those travel inside the file too. One ⌘Z if it was too
+  keen.
+- **Search now looks inside your captures.** Shotly reads the words in every
+  screenshot once, quietly in the background, so ⌘F finds the shot with the
+  error message in it rather than only matching filenames — which are all
+  dates. Nothing is uploaded; the reading is the same one macOS does for the
+  text grab tool.
+- **Drag a capture out of the window.** Press a thumbnail in the library or the
+  rail, drag, and drop it on Slack, Mail, or a Finder window. Several at once if
+  several are selected.
+- **Annotations line themselves up.** Dragging one now pulls it onto the edges
+  and centres of the other annotations and of the capture itself, with a line
+  showing what it caught — and a pair of matched bars when you drop it an even
+  distance into a row of others. Hold ⌘ to place something freely.
+- **Each tool remembers its own ink.** Choosing yellow for the highlighter no
+  longer makes the next arrow yellow. ⌥⌘C and ⌥⌘V copy a whole look — colour,
+  weight, fill, corners, glow — from one shape onto another.
+- **A shot can land in the corner instead of opening the editor**, the way
+  macOS's own screenshots do: click it to edit, drag it straight into another
+  app, or ignore it and it goes. It is saved to your Shotly folder either way.
+  Off until you turn it on, in Settings → General.
+
 ## 0.10.22 — 2026-08-21
 
 - Shapes can be turned. Selections now have a handle on each of the four

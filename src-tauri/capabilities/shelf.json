@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "shelf",
+  "description": "Capabilities for the corner a fresh capture lands in. It closes itself when its few seconds are up, and otherwise only invokes app commands — no geometry, no clipboard of its own, since copying goes through Rust reading the file.",
+  "windows": ["shelf-*"],
+  "permissions": ["core:default", "core:window:allow-close"]
+}

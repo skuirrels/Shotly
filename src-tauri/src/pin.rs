@@ -90,7 +90,7 @@ fn fit(app: &AppHandle, width: f64, height: f64) -> (f64, f64) {
 /// Hand-rolled rather than pulling in a crate for it: the set of characters
 /// that matter in a macOS path is small, and spaces are the only one that
 /// turns up in practice — every capture Shotly files has three of them.
-fn urlencoding(raw: &str) -> String {
+pub fn urlencoding(raw: &str) -> String {
     let mut out = String::with_capacity(raw.len());
     for byte in raw.bytes() {
         match byte {

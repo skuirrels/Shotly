@@ -13,12 +13,13 @@ export default defineConfig({
   build: {
     rollupOptions: {
       input: {
-        // The editor, the live screen-annotation layer, the pins, the
-        // scrolling-capture overlay, the screen recorder, and the
-        // window-capture outline.
+        // The editor, the live screen-annotation layer, the pins, the corner
+        // a fresh capture lands in, the scrolling-capture overlay, the screen
+        // recorder, and the window-capture outline.
         index: resolve(__dirname, "index.html"),
         annotate: resolve(__dirname, "annotate.html"),
         pin: resolve(__dirname, "pin.html"),
+        shelf: resolve(__dirname, "shelf.html"),
         record: resolve(__dirname, "record.html"),
         scroll: resolve(__dirname, "scroll.html"),
         snap: resolve(__dirname, "snap.html"),

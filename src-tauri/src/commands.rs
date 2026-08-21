@@ -200,7 +200,7 @@ pub fn start_capture(app: &AppHandle, mode: CaptureMode) -> CmdResult<()> {
 
         match outcome {
             Ok(Some(frame)) => {
-                if let Err(err) = deliver(&handle, frame) {
+                if let Err(err) = deliver_capture(&handle, frame) {
                     eprintln!("[shotly] could not open the capture: {err}");
                     reveal_editor(&handle);
                 }
@@ -300,11 +300,36 @@ pub fn capture_fullscreen(app: AppHandle, display_id: Option<u32>) -> CmdResult<
         .unwrap_or(0);
 
     let frame = frames.get(idx).cloned().ok_or("display not found")?;
-    deliver(&app, frame)
+    deliver_capture(&app, frame)
 }
 
 pub(crate) fn deliver(app: &AppHandle, frame: Frame) -> CmdResult<CaptureResult> {
     deliver_with(app, frame, None)
+}
+
+/// A brand-new capture, which may go to the corner instead of to the editor.
+///
+/// The one difference from `deliver`: this is the arrival of something the
+/// user just photographed, and that is the only moment the shelf makes sense.
+/// Opening a file, combining several, or capturing from the picker already has
+/// the editor in front and in charge.
+///
+/// Falls back to the editor if shelving fails for any reason at all. A capture
+/// that could not be put in the corner must never be a capture that vanished.
+pub(crate) fn deliver_capture(app: &AppHandle, frame: Frame) -> CmdResult<CaptureResult> {
+    if crate::shelf::shelf_enabled(app.clone()) {
+        match crate::shelf::place(app, &frame) {
+            Ok(_) => {
+                // The editor was hidden to keep it out of the shot, and is not
+                // coming back up — so the hide has to be settled here or the
+                // next capture would think it is still owed a reveal.
+                *app.state::<AppState>().hid_editor.lock().unwrap() = false;
+                return Ok(CaptureResult { frame, id: now_ms(), markup: None });
+            }
+            Err(err) => eprintln!("[shotly] could not shelve the capture, opening it instead: {err}"),
+        }
+    }
+    deliver(app, frame)
 }
 
 fn deliver_with(app: &AppHandle, frame: Frame, markup: Option<String>) -> CmdResult<CaptureResult> {
