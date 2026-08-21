@@ -8,7 +8,7 @@ The release notes on GitHub and the "what's new" text the in-app updater shows
 are both taken from this file — see `docs/RELEASING.md`. A version with nothing
 written here cannot be published.
 
-## Unreleased
+## 0.11.2 — 2026-08-21
 
 - **The canvas can be pushed all the way to its own edges.** Zoomed in past the
   pane, the left-hand side of a capture could not be reached at all: the view
