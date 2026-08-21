@@ -6,7 +6,7 @@
  * asserted here is one that must not change on macOS when it does.
  */
 import { afterEach, describe, expect, test, vi } from "vitest";
-import { formatShortcut, matchesChord, parseShortcut } from "./keys";
+import { formatShortcut, matchesChord, needsMod, parseShortcut } from "./keys";
 
 /** The fields of a KeyboardEvent that the matcher consults. */
 function press(init: {
@@ -160,4 +160,17 @@ describe("on Windows", () => {
     expect(keys.parseShortcut("[").code).toBe("BracketLeft");
     expect(keys.parseShortcut("Escape").key).toBe("Escape");
   });
+});
+
+
+test("a shortcut knows whether it needs the command key", () => {
+  expect(needsMod("Mod+K")).toBe(true);
+  expect(needsMod("Mod+Shift+R")).toBe(true);
+  // The ones a view can claim for itself: nothing but the key.
+  expect(needsMod("Space")).toBe(false);
+  expect(needsMod("V")).toBe(false);
+  expect(needsMod("Left")).toBe(false);
+  // Alt alone is not ⌘, however modified it looks.
+  expect(needsMod("Alt+A")).toBe(false);
+  expect(needsMod("Ctrl+Alt+H")).toBe(false);
 });

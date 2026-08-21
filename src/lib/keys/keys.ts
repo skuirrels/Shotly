@@ -192,6 +192,18 @@ const WINDOWS_NAMES: Record<string, string> = {
 };
 
 /**
+ * Does this shortcut need ⌘?
+ *
+ * The question a view asks when it takes the keyboard for itself: the player
+ * claims the bare keys — space, the arrows, a handful of letters — and leaves
+ * everything with ⌘ on it to the app, which is the same division macOS makes
+ * between a view's keys and the menu bar's.
+ */
+export function needsMod(spec: string): boolean {
+  return parseShortcut(spec).mod;
+}
+
+/**
  * Is the user typing into a field right now?
  *
  * Bare-letter shortcuts (V for select, A for arrow) must not fire while an

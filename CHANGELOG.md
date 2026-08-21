@@ -8,6 +8,13 @@ The release notes on GitHub and the "what's new" text the in-app updater shows
 are both taken from this file — see `docs/RELEASING.md`. A version with nothing
 written here cannot be published.
 
+## Unreleased
+
+- **Opening a recording no longer switches off every keyboard shortcut.** ⌘K,
+  ⇧⌘R, ⌘, and the rest kept working right up until you double-clicked a movie,
+  and then did nothing until you closed it again. The player still owns space,
+  the arrows and its own letters — it is only the ⌘ shortcuts that come back.
+
 ## 0.13.1 — 2026-08-21
 
 - **The microphone switch is in the menu bar too**, as *Record Microphone*

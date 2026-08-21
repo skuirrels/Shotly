@@ -727,15 +727,21 @@ Everything else is in the component:
 
 * The library's poster frame is the `poster` attribute, so the first frame is
   on screen before the movie has decoded anything.
-* The mute button only appears when `audioTracks` is non-empty. Shotly's own
-  recordings are silent — `screencapture -v` without `-g` — and a mute button
-  for silence is a control that does nothing.
-* **The editor's keymap is switched off in this view** (`useKeymap(commands,
-  … && activeView !== "player")`) and the player binds its own keys. Space,
-  the arrows and Home/End all mean something in both maps; leaving both live
-  meant an arrow seeking the movie *and* nudging an annotation in the pane
-  behind it. Escape, ⌘W and ⌘L leave the player, which is why they are in its
-  handler too — nothing else is listening.
+* The mute button only appears when `audioTracks` is non-empty — a mute button
+  for silence is a control that does nothing. Shotly's own recordings only have
+  a track when the microphone switch was on for them, so the button comes and
+  goes by itself and needs to know nothing about that switch.
+* **The editor's keymap keeps its ⌘ shortcuts here and gives up the rest.**
+  Space, the arrows and Home/End mean something in both maps, and leaving both
+  live meant an arrow seeking the movie *and* nudging an annotation in the pane
+  behind it. But the fix for that used to be switching the whole map off, which
+  was much too much: opening a recording quietly killed ⌘K, ⇧⌘R, ⌘, and every
+  other shortcut in the app until the movie was closed again. The division is
+  the one the player's own handler already makes — it returns early on anything
+  with ⌘ on it — and the one macOS makes between a view's keys and the menu
+  bar's. Two exceptions, ⌘W and ⌘L, are answered by the player itself and are
+  filtered out by name; without that they would close the movie and the
+  document under it in one keystroke.
 * `harness/player.html` runs the whole pane in a browser against a generated
   test clip. What it cannot reach is the asset protocol, which is exactly the
   half that the two config lines above govern — check that in the app.

@@ -37,6 +37,7 @@ import {
 } from "@/components/icons";
 import { useKeymap } from "@/lib/keys/useKeymap";
 import { isEditingText } from "@/lib/keys/keys";
+import { needsMod } from "@/lib/keys/keys";
 import type { Command } from "@/lib/keys/types";
 import { renderRedactedOriginal, renderToPng } from "@/lib/export";
 import { type Sensitive, describeFindings, looksSensitive } from "@/lib/redact";
@@ -108,6 +109,9 @@ async function downloadsPath(name: string): Promise<string> {
  * memory already, and a screenshot editor is not the place to teach a new one.
  * The letters are on `code`, so they survive Alt turning A into å.
  */
+/** The two the movie player answers for itself; both mean "leave this". */
+const PLAYER_ANSWERS = ["Mod+W", "Mod+L"];
+
 const ALIGNMENTS: { id: string; title: string; edge: AlignEdge; shortcut: string }[] = [
   { id: "alignLeft", title: "Align left", edge: "left", shortcut: "Alt+A" },
   { id: "alignCentre", title: "Align centres", edge: "hcentre", shortcut: "Alt+H" },
@@ -1754,11 +1758,40 @@ export function EditorApp() {
   const activeView: View =
     view === "player" ? (movie ? "player" : "library") : doc ? view : "library";
 
-  // Modals own the keyboard while they're up — and so does the player, which
-  // binds Space, the arrows and the rest of a transport for itself. Leaving
-  // the editor's map live underneath would mean an arrow key both seeking the
-  // movie and nudging an annotation in the pane behind it.
-  useKeymap(commands, !palette && !sheet && !settings && activeView !== "player");
+  /**
+   * What the keyboard still does while a movie is open.
+   *
+   * The player claims the bare keys — space, the arrows, a handful of letters —
+   * and ignores anything with ⌘ on it, which is the same division macOS makes
+   * between a view's keys and the menu bar's. So the editor's map keeps its ⌘
+   * shortcuts and gives up the rest, rather than standing down entirely: it did
+   * the latter for a while, and the cost was that opening a recording quietly
+   * killed ⌘K, ⇧⌘R, ⌘, and every other shortcut in the app until you closed it.
+   *
+   * The two exceptions are the two the player answers itself: ⌘W and ⌘L both
+   * mean "leave this", and letting the editor act on them as well would close
+   * the movie and the document under it in one keystroke.
+   */
+  const playing = activeView === "player";
+  const bound = useMemo(
+    () =>
+      playing
+        ? commands
+            .filter(
+              (c) => c.shortcut && needsMod(c.shortcut) && !PLAYER_ANSWERS.includes(c.shortcut),
+            )
+            // Trimmed rather than dropped: ⌘/ has a bare `?` beside it, and
+            // losing the whole command over its alternate would cost the
+            // shortcut sheet for the sake of a key nobody pressed.
+            .map((c) =>
+              c.altShortcut && !needsMod(c.altShortcut) ? { ...c, altShortcut: undefined } : c,
+            )
+        : commands,
+    [commands, playing],
+  );
+
+  // Modals own the keyboard outright while they're up.
+  useKeymap(bound, !palette && !sheet && !settings);
 
   return (
     <div className="flex h-full flex-col bg-canvas">
