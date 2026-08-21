@@ -3,11 +3,23 @@
 //! `screencapture -v` does the recording. That is the same binary the stills
 //! go through, and the reasons are the same ones `capture::cli` gives — correct
 //! colour, Retina backing stores and multi-display geometry, none of which we
-//! have to get right ourselves — plus one that matters more here: it needs no
-//! permission Shotly does not already hold, where a ScreenCaptureKit pipeline
-//! would mean owning an `AVAssetWriter`, a frame clock and every codec
-//! decision. What it costs is control. There is no pause, no audio worth
-//! having, and the only way to stop it is a signal.
+//! have to get right ourselves — plus one that matters more here: it needs
+//! almost no permission Shotly does not already hold, where a ScreenCaptureKit
+//! pipeline would mean owning an `AVAssetWriter`, a frame clock and every codec
+//! decision. What it costs is control. There is no pause, and the only way to
+//! stop it is a signal.
+//!
+//! # Sound
+//!
+//! `-g` puts the default input device on the movie's audio track, which is the
+//! microphone and nothing else. The sound the Mac is *playing* is not on offer
+//! from this binary at any price; that is a ScreenCaptureKit pipeline, and the
+//! paragraph above is why there isn't one. So the switch says "microphone",
+//! not "audio", and `docs/DEVELOPING.md` says why in more detail.
+//!
+//! The one permission Shotly does not already hold is the one this brings, and
+//! it is asked for at the switch rather than at the shutter — see
+//! `platform::microphone`.
 //!
 //! Stopping is worth spelling out. `screencapture -v` writes the movie's index
 //! when it is interrupted, so `SIGINT` is the *normal* way to end a recording —
@@ -56,6 +68,71 @@ const READY_GRACE: Duration = Duration::from_secs(3);
 /// long recording of a busy screen takes a beat. The alternative to waiting is
 /// an unplayable file.
 const FINALISE_GRACE: Duration = Duration::from_secs(20);
+
+/// What the user has asked for, kept between runs.
+#[derive(serde::Serialize, serde::Deserialize, Default, Clone, Copy)]
+struct Settings {
+    /// Record the microphone alongside the picture.
+    microphone: bool,
+}
+
+fn store_path(app: &AppHandle) -> Result<PathBuf, String> {
+    let dir = app
+        .path()
+        .app_config_dir()
+        .map_err(|e| format!("no config directory: {e}"))?;
+    std::fs::create_dir_all(&dir).map_err(|e| format!("could not create {dir:?}: {e}"))?;
+    Ok(dir.join("record.json"))
+}
+
+fn settings(app: &AppHandle) -> Settings {
+    store_path(app)
+        .ok()
+        .and_then(|p| std::fs::read_to_string(p).ok())
+        .and_then(|raw| serde_json::from_str(&raw).ok())
+        .unwrap_or_default()
+}
+
+/// What the switch should show: what was asked for, and what macOS will allow.
+#[derive(Serialize)]
+pub struct Microphone {
+    /// The switch itself.
+    on: bool,
+    /// `"granted"`, `"denied"` or `"undecided"`.
+    access: &'static str,
+}
+
+#[tauri::command]
+pub fn record_microphone(app: AppHandle) -> Microphone {
+    Microphone { on: settings(&app).microphone, access: access_word() }
+}
+
+fn access_word() -> &'static str {
+    use crate::platform::microphone::Access;
+    match crate::platform::microphone::access() {
+        Access::Granted => "granted",
+        Access::Denied => "denied",
+        Access::Undecided => "undecided",
+    }
+}
+
+/// Turn the microphone on or off for the next recording.
+///
+/// Switching it on is also where permission is asked for, if it has never been
+/// asked: the alternative is a system dialog arriving on top of the thing being
+/// recorded, a second after the clock starts. The switch stays on either way —
+/// it is what the user wants — and the caller reads the access back to find out
+/// whether it can be honoured.
+#[tauri::command]
+pub fn set_record_microphone(app: AppHandle, on: bool) -> Result<Microphone, String> {
+    let path = store_path(&app)?;
+    let raw = serde_json::to_string(&Settings { microphone: on }).map_err(|e| e.to_string())?;
+    std::fs::write(&path, raw).map_err(|e| format!("could not write {path:?}: {e}"))?;
+    if on {
+        crate::platform::microphone::request();
+    }
+    Ok(Microphone { on, access: access_word() })
+}
 
 #[derive(Default)]
 pub struct RecordState {
@@ -136,6 +213,8 @@ impl RecordState {
 
 struct Session {
     child: Child,
+    /// Whether this recording is picking up the microphone.
+    microphone: bool,
     /// Where `screencapture` is writing, in the scratch directory.
     path: PathBuf,
     started: Instant,
@@ -151,6 +230,12 @@ pub struct Running {
     /// Seconds elapsed. The page counts its own seconds between polls; this is
     /// what it starts from, so a slow start cannot leave the clock behind.
     seconds: u64,
+    /// Whether sound is actually being recorded — asked for *and* allowed.
+    ///
+    /// What is happening rather than what was wanted: the panel is the only
+    /// thing on screen during a recording, so a microphone shown there has to
+    /// mean the movie will have one.
+    microphone: bool,
 }
 
 /// One window the selection can snap to, in the overlay page's coordinates.
@@ -388,16 +473,22 @@ fn start(app: &AppHandle, target: &[&str], what: String) -> Result<(), String> {
     // the first second of a recording is the one people watch.
     shrink_to_hud(app)?;
 
-    let child = crate::platform::recorder::start(&target, &path)?;
+    // Asked for *and* allowed. A recording that quietly has no sound is worse
+    // than one that plainly has none: the switch is on screen, so if it cannot
+    // be honoured the panel has to stop claiming it.
+    let microphone = settings(app).microphone
+        && crate::platform::microphone::access() == crate::platform::microphone::Access::Granted;
+
+    let child = crate::platform::recorder::start(&target, &path, microphone)?;
 
     let started = Instant::now();
     {
         let state = app.state::<RecordState>();
         *state.session.lock().unwrap() =
-            Some(Session { child, path, started, what: what.clone() });
+            Some(Session { child, path, started, what: what.clone(), microphone });
     }
 
-    let _ = app.emit_to(LABEL, "record:running", Running { what, seconds: 0 });
+    let _ = app.emit_to(LABEL, "record:running", Running { what, seconds: 0, microphone });
     crate::refresh_tray(app);
     Ok(())
 }
@@ -482,6 +573,7 @@ pub fn record_running(app: AppHandle) -> Option<Running> {
     session.as_ref().map(|s| Running {
         what: s.what.clone(),
         seconds: s.started.elapsed().as_secs(),
+        microphone: s.microphone,
     })
 }
 

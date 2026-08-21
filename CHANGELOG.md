@@ -8,6 +8,18 @@ The release notes on GitHub and the "what's new" text the in-app updater shows
 are both taken from this file — see `docs/RELEASING.md`. A version with nothing
 written here cannot be published.
 
+## Unreleased
+
+- **Screen recordings can have your voice on them.** There is a microphone
+  switch on the recording overlay, next to *Record the whole screen*, and the
+  same one in Settings. Turn it on and the recording picks up whichever input
+  your Mac is set to use; macOS asks permission the first time. While a
+  recording is running the panel shows a microphone, and only when sound is
+  really being recorded — if permission is missing it says so rather than
+  handing you a silent take.
+- It records the microphone, not the sound your Mac is playing. That one needs
+  a different recorder than the one Shotly uses, and Settings says so.
+
 ## 0.12.1 — 2026-08-21
 
 - **Reveal in Finder has a shortcut that works.** It was on ⇧⌘R, which

@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Merged into the bundle's own Info.plist by the Tauri bundler.
+
+  One key, and it is not decoration: macOS refuses microphone access outright
+  to an app that has not said what it wants it for, and the sentence below is
+  what it shows in the dialog. `screencapture -g` opens the microphone in a
+  child process, but the system holds *Shotly* responsible for it — so the
+  explanation has to live here rather than anywhere nearer the recording.
+-->
+<plist version="1.0">
+<dict>
+  <key>NSMicrophoneUsageDescription</key>
+  <string>Shotly records your microphone alongside the screen when you turn the microphone on for a recording.</string>
+</dict>
+</plist>

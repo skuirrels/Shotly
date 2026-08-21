@@ -307,6 +307,8 @@ pub fn run() {
             record::record_stop,
             record::record_cancel,
             record::record_running,
+            record::record_microphone,
+            record::set_record_microphone,
             trim::video_trim,
             trim::video_sync_points,
             hotkeys::hotkeys_list,

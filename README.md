@@ -83,6 +83,14 @@ appears at the bottom of the display with the elapsed time and the way out —
 **Stop and save**, or **Discard**. The same key stops the recording, and so
 does the menu bar, which says *Stop Recording* while one is running.
 
+**Your voice, if you want it.** The overlay has a microphone switch next to
+*Record the whole screen*, and Settings has the same one — turn it on and the
+recording picks up whichever input your Mac is set to use, so you can talk over
+what you are showing. macOS asks permission the first time you switch it on.
+The panel shows a microphone while it is being recorded, so a silent take is
+never a surprise. What it cannot do is record the sound your Mac is *playing* —
+that needs a different recorder than the one Shotly uses.
+
 The movie lands in your Shotly folder as an ordinary `.mov` — no editor, no
 export step, nothing to convert — and appears in the library alongside your
 captures, with a still from the recording and its running time. Picking a window

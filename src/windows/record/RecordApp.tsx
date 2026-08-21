@@ -1,7 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import clsx from "clsx";
 import { SelectionOverlay, type Box } from "@/components/SelectionOverlay";
+import { IconMic, IconMicOff } from "@/components/icons";
+import { type MicrophoneState, recordMicrophone, setRecordMicrophone } from "@/lib/ipc";
 
 /**
  * The screen-recording window, in its two lives.
@@ -37,7 +40,11 @@ interface Pickable extends Box {
 interface Running {
   what: string;
   seconds: number;
+  microphone: boolean;
 }
+
+/** Where macOS keeps the switch this app cannot flick for you. */
+const MIC_SETTINGS = "System Settings › Privacy & Security › Microphone";
 
 export function RecordApp() {
   const [phase, setPhase] = useState<"select" | "hud">("select");
@@ -98,6 +105,42 @@ function Select() {
       .catch(() => {});
   }, []);
 
+  /**
+   * The microphone switch, and what the system makes of it.
+   *
+   * It lives on the overlay rather than only in Settings because this is the
+   * moment the question is being asked — the recording is one click away, and
+   * "did I leave the microphone on" is not a question anyone wants to answer
+   * by going somewhere else. Settings has the same switch for the times the
+   * overlay is not involved.
+   */
+  const [mic, setMic] = useState<MicrophoneState | null>(null);
+
+  useEffect(() => {
+    void recordMicrophone().then(setMic).catch(() => {});
+  }, []);
+
+  // While the system dialog is up there is nothing to do but ask again: the
+  // answer arrives on AVFoundation's own queue, whenever the person gets to it.
+  useEffect(() => {
+    if (!mic?.on || mic.access !== "undecided") return;
+    const tick = window.setInterval(() => {
+      void recordMicrophone().then(setMic).catch(() => {});
+    }, 700);
+    return () => window.clearInterval(tick);
+  }, [mic?.on, mic?.access]);
+
+  const toggleMic = useCallback(() => {
+    const next = !(mic?.on ?? false);
+    // Moved before the round trip, like every other switch in the app: this one
+    // may raise a permission dialog, and a control that waits for *that* would
+    // sit there looking broken for as long as the dialog is up.
+    setMic((was) => ({ on: next, access: was?.access ?? "undecided" }));
+    void setRecordMicrophone(next)
+      .then(setMic)
+      .catch(() => setMic((was) => (was ? { ...was, on: !next } : was)));
+  }, [mic?.on]);
+
   const choose = useCallback(
     async (box: Box, windowIndex: number | null) => {
       try {
@@ -131,15 +174,41 @@ function Select() {
       windows={windows}
       minEdge={MIN_EDGE}
       title="Click a window, or drag out an area to record"
-      hint={error ?? "Esc cancels · the recording is saved to your Shotly folder"}
+      hint={
+        error ??
+        (mic?.on && mic.access === "denied"
+          ? `Shotly has no microphone access — turn it on in ${MIC_SETTINGS}`
+          : "Esc cancels · the recording is saved to your Shotly folder")
+      }
       extra={
-        <button
-          type="button"
-          onClick={() => void invoke("record_screen").catch((e) => setError(String(e)))}
-          className="rounded-lg bg-white/15 px-3 py-1.5 text-[12px] font-medium text-white hover:bg-white/25"
-        >
-          Record the whole screen
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() => void invoke("record_screen").catch((e) => setError(String(e)))}
+            className="rounded-lg bg-white/15 px-3 py-1.5 text-[12px] font-medium text-white hover:bg-white/25"
+          >
+            Record the whole screen
+          </button>
+          <button
+            type="button"
+            aria-pressed={mic?.on ?? false}
+            onClick={toggleMic}
+            title={
+              mic?.on
+                ? "The microphone is recorded with the picture"
+                : "The recording will have no sound"
+            }
+            className={clsx(
+              "flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-[12px] font-medium",
+              mic?.on
+                ? "bg-danger text-white hover:brightness-110"
+                : "bg-white/15 text-white hover:bg-white/25",
+            )}
+          >
+            {mic?.on ? <IconMic /> : <IconMicOff />}
+            {mic?.on ? "Microphone on" : "Microphone off"}
+          </button>
+        </div>
       }
       onChoose={({ box, window }) => void choose(box, window)}
       onCancel={cancel}
@@ -152,6 +221,7 @@ function Select() {
 function Panel() {
   const [what, setWhat] = useState("Recording");
   const [seconds, setSeconds] = useState(0);
+  const [microphone, setMicrophone] = useState(false);
   const [stopping, setStopping] = useState(false);
   /** Where the clock started, so it cannot drift with the interval. */
   const origin = useRef<{ at: number; from: number }>({ at: Date.now(), from: 0 });
@@ -160,6 +230,7 @@ function Panel() {
     const adopt = (r: Running | null) => {
       if (!r) return;
       setWhat(r.what);
+      setMicrophone(r.microphone);
       origin.current = { at: Date.now(), from: r.seconds };
       setSeconds(r.seconds);
     };
@@ -206,7 +277,15 @@ function Panel() {
       <div className="pointer-events-none flex items-center gap-2">
         <span className="size-2.5 shrink-0 animate-pulse rounded-full bg-danger" />
         <span className="font-mono text-[15px] font-semibold text-ink tabular-nums">{clock}</span>
-        <span className="ml-auto max-w-[120px] truncate text-[11px] text-ink-4">{what}</span>
+        {/* Shown only when sound is really being recorded. Rust decides that,
+            because wanting the microphone and being allowed it are two
+            different things and this is the only thing on screen to say so. */}
+        {microphone && (
+          <span className="shrink-0 text-danger" title="The microphone is being recorded">
+            <IconMic />
+          </span>
+        )}
+        <span className="ml-auto max-w-[110px] truncate text-[11px] text-ink-4">{what}</span>
       </div>
 
       <div className="flex gap-1.5">

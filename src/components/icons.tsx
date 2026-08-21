@@ -439,6 +439,25 @@ export const IconDistribute = (p: SVGProps<SVGSVGElement>) => (
   </Icon>
 );
 
+/** A capsule on a stand: the microphone, as every recorder draws it. */
+export const IconMic = (p: SVGProps<SVGSVGElement>) => (
+  <Icon {...p}>
+    <rect x="6" y="1.6" width="4" height="8" rx="2" />
+    <path d="M3.6 7.6a4.4 4.4 0 0 0 8.8 0" />
+    <path d="M8 12v2.4" />
+  </Icon>
+);
+
+/** The same microphone, struck through. */
+export const IconMicOff = (p: SVGProps<SVGSVGElement>) => (
+  <Icon {...p}>
+    <rect x="6" y="1.6" width="4" height="8" rx="2" />
+    <path d="M3.6 7.6a4.4 4.4 0 0 0 8.8 0" />
+    <path d="M8 12v2.4" />
+    <path d="m2.6 2.6 10.8 10.8" />
+  </Icon>
+);
+
 export const IconClose = (p: SVGProps<SVGSVGElement>) => (
   <Icon {...p}>
     <path d="m4 4 8 8M12 4l-8 8" />

@@ -172,6 +172,22 @@ export const setShelfEnabled = (enabled: boolean) =>
   invoke<void>("set_shelf_enabled", { enabled });
 
 /**
+ * The microphone switch for screen recordings, and what macOS makes of it.
+ *
+ * `access` is the system's answer, not ours: a switch that is on while access
+ * is `"denied"` is a recording that will come out silent, and both halves have
+ * to be on screen for that to be sayable. See `src-tauri/src/record.rs`.
+ */
+export interface MicrophoneState {
+  on: boolean;
+  access: "granted" | "denied" | "undecided";
+}
+
+export const recordMicrophone = () => invoke<MicrophoneState>("record_microphone");
+export const setRecordMicrophone = (on: boolean) =>
+  invoke<MicrophoneState>("set_record_microphone", { on });
+
+/**
  * Hand a file to whatever the system opens it with.
  *
  * Recordings, in practice: a movie has nothing to annotate, so the library

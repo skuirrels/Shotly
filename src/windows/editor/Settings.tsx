@@ -11,6 +11,7 @@ import {
 } from "@/components/icons";
 import { IconButton } from "@/components/ui/IconButton";
 import * as ipc from "@/lib/ipc";
+import type { MicrophoneState } from "@/lib/ipc";
 import type { BackupSettings, BackupTarget, ShareProvider } from "@/lib/types";
 import { GlobalHotkeys } from "./GlobalHotkeys";
 
@@ -161,11 +162,27 @@ function Hotkeys({ onRecording }: { onRecording: (active: boolean) => void }) {
 function General() {
   const [atLogin, setAtLogin] = useState<boolean | null>(null);
   const [shelf, setShelf] = useState<boolean | null>(null);
+  const [mic, setMic] = useState<MicrophoneState | null>(null);
   const [note, setNote] = useState<string | null>(null);
 
   useEffect(() => {
     void ipc.launchAtLogin().then(setAtLogin).catch(() => setAtLogin(false));
     void ipc.shelfEnabled().then(setShelf).catch(() => setShelf(false));
+    void ipc.recordMicrophone().then(setMic).catch(() => {});
+  }, []);
+
+  const toggleMic = useCallback(async (next: boolean) => {
+    setNote(null);
+    setMic((was) => ({ on: next, access: was?.access ?? "undecided" }));
+    try {
+      // Answers with what macOS thinks, which is why this one is worth
+      // awaiting: turning the switch on is also the moment permission is
+      // asked for, and the reply says whether there is anything more to do.
+      setMic(await ipc.setRecordMicrophone(next));
+    } catch (e) {
+      setMic((was) => (was ? { ...was, on: !next } : was));
+      setNote(String(e));
+    }
   }, []);
 
   const toggleShelf = useCallback(async (next: boolean) => {
@@ -235,6 +252,37 @@ function General() {
             or ignore it — it is saved to your Shotly folder either way. Best when most of what you
             capture gets pasted somewhere rather than marked up.
           </span>
+        </span>
+      </label>
+
+      <h3 className="mt-5 mb-1 text-[11px] font-semibold tracking-wider text-ink-4 uppercase">
+        Screen recording
+      </h3>
+
+      <label className="flex cursor-pointer items-start gap-3 rounded-xl border border-line bg-surface p-3">
+        <input
+          type="checkbox"
+          checked={mic?.on ?? false}
+          disabled={mic === null}
+          onChange={(e) => void toggleMic(e.target.checked)}
+          className="mt-0.5 size-4 accent-[var(--color-accent)]"
+        />
+        <span className="min-w-0">
+          <span className="block text-[12.5px] font-medium text-ink">
+            Record the microphone with the picture
+          </span>
+          <span className="mt-0.5 block text-[11.5px] leading-relaxed text-ink-3">
+            Your voice over what you are showing, from whichever input the Mac is set to use. Not
+            the sound the Mac is <em>playing</em> — that needs a different recorder than the one
+            Shotly uses. The same switch is on the recording overlay, so it can be changed on the
+            way in.
+          </span>
+          {mic?.on && mic.access === "denied" && (
+            <span className="mt-1.5 block text-[11.5px] leading-relaxed text-danger">
+              macOS is not letting Shotly listen. Turn it on in System Settings › Privacy &amp;
+              Security › Microphone, or the recording will come out silent.
+            </span>
+          )}
         </span>
       </label>
 

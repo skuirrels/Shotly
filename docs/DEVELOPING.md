@@ -592,7 +592,36 @@ one flag each: `-R x,y,w,h` for an area, `-l <windowid>` for a window (it
 follows the window and excludes anything in front of it), `-D <n>` for a
 display.
 
-Three things about it are worth knowing before changing any of it.
+Four things about it are worth knowing before changing any of it.
+
+**Sound is one flag and one permission.** `-g` puts the default input device
+on the movie's audio track, which is the microphone and only the microphone —
+what the Mac is *playing* is not on offer from this binary at any price, and
+getting it means the owned ScreenCaptureKit pipeline the paragraph above exists
+to avoid. So every string in the UI says "microphone" rather than "audio", and
+Settings says outright what is not included. That is a promise the code can
+keep; "record audio" is not.
+
+The permission is the interesting half. `screencapture` is a child process, but
+macOS attributes its microphone access to whoever is *responsible* for it —
+Shotly — which is why `NSMicrophoneUsageDescription` lives in Shotly's
+`Info.plist` and not anywhere nearer the recording. This was confirmed the hard
+way while building the feature: running `screencapture -g` from a shell raised
+the prompt against the terminal's app, named it, and quoted *its* usage
+description.
+
+Two consequences shape `platform::microphone`. The prompt is raised when the
+switch is turned on, never at the shutter — a permission dialog that arrives a
+second into a recording is a dialog sitting on top of the thing being recorded,
+to be answered while the clock runs. And `start()` re-checks access rather than
+trusting the switch: wanting the microphone and being allowed it are different
+facts, so the panel's microphone glyph reflects what is actually being recorded.
+A recording that is quietly silent is worse than one that plainly has no sound.
+
+Whether `-g` reaches the command line is asserted in `platform/macos/recorder.rs`
+rather than tested by hand: it is decided three layers up, it decides whether a
+recording has sound at all, and the only way to see it on a running child is to
+read another process's argv.
 
 **SIGINT is how a recording ends, not how it is aborted.** `screencapture`
 catches it and writes the movie's index; a `SIGKILL` leaves a file with frames
