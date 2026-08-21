@@ -17,8 +17,9 @@ import {
 import { ContextMenu, type MenuEntry } from "@/components/ui/ContextMenu";
 import { Kbd } from "@/components/ui/Kbd";
 import { Tooltip } from "@/components/ui/Tooltip";
+import { useDragOut } from "@/lib/dragout";
 import * as ipc from "@/lib/ipc";
-import type { LibraryItem } from "@/lib/types";
+import type { LibraryItem, TextIndexProgress } from "@/lib/types";
 import { type Scope, groupByDate, inScope, scopeExists } from "./dates";
 import { formatDuration, formatSize, formatWhen } from "./format";
 import { LibraryFilter } from "./LibraryFilter";
@@ -117,19 +118,95 @@ export function Library({
   const groups = useMemo(() => groupByDate(items ?? []), [items]);
 
   /**
-   * What the grid shows: the date scope first, then the search text.
+   * Captures whose *pixels* match the search, from the text index.
+   *
+   * Asked for separately from the name filter below and unioned with it,
+   * because the two answer different questions and neither is a superset: the
+   * filename carries the date, and the picture carries everything else. See
+   * `src-tauri/src/textindex.rs`.
+   *
+   * Debounced, and deliberately not awaited by the filter — the grid narrows
+   * on the name immediately and then widens as the index answers, which is the
+   * right way round. A search that showed nothing until a round trip finished
+   * would feel broken at exactly the moment it is being useful.
+   */
+  const [textHits, setTextHits] = useState<Set<string> | null>(null);
+
+  useEffect(() => {
+    const needle = query.trim();
+    // One letter matches half a library and is never what anyone meant.
+    if (needle.length < 2) {
+      setTextHits(null);
+      return;
+    }
+    let live = true;
+    const timer = setTimeout(() => {
+      void ipc
+        .searchText(needle)
+        .then((paths) => live && setTextHits(new Set(paths)))
+        .catch(() => live && setTextHits(null));
+    }, 160);
+    return () => {
+      live = false;
+      clearTimeout(timer);
+    };
+  }, [query]);
+
+  /**
+   * Reading the library, a few captures at a time, in the background.
+   *
+   * Batched and paced rather than done in one pass: recognition is a quarter
+   * of a second a picture, so a first run over a big library is minutes, and
+   * the point is that nobody should be able to tell it is happening. Each
+   * batch is saved before it returns, so stopping halfway — by quitting, or by
+   * this effect being torn down — costs nothing.
+   */
+  const [reading, setReading] = useState<TextIndexProgress | null>(null);
+
+  useEffect(() => {
+    let live = true;
+    const run = async () => {
+      while (live) {
+        let progress: TextIndexProgress;
+        try {
+          progress = await ipc.textIndexStep(4);
+        } catch {
+          return;
+        }
+        if (!live) return;
+        const done = progress.indexed >= progress.total;
+        setReading(done ? null : progress);
+        if (done) return;
+        await new Promise((resolve) => setTimeout(resolve, 400));
+      }
+    };
+    // Let the grid draw and its thumbnails land first. Nothing here is urgent,
+    // and competing with the first paint is the one way to be noticed.
+    const start = setTimeout(run, 1500);
+    return () => {
+      live = false;
+      clearTimeout(start);
+    };
+  }, [items]);
+
+  /**
+   * What the grid shows: the date scope first, then the search.
    *
    * The text is matched against the filename, which for Shotly's own captures
    * carries the date — so "08-15" finds a day, and the tree is left to handle
-   * the coarser question of which month you were in.
+   * the coarser question of which month you were in. A capture whose *picture*
+   * says the word counts too.
    */
   const visible = useMemo(() => {
     const needle = query.trim().toLowerCase();
     return (items ?? []).filter(
       (item) =>
-        inScope(item, scope) && (needle === "" || item.name.toLowerCase().includes(needle)),
+        inScope(item, scope) &&
+        (needle === "" ||
+          item.name.toLowerCase().includes(needle) ||
+          textHits?.has(item.path) === true),
     );
-  }, [items, scope, query]);
+  }, [items, scope, query, textHits]);
 
   /** Path to item, so the menu can ask what kind of thing it is acting on. */
   const byPath = useMemo(
@@ -233,6 +310,22 @@ export function Library({
    * right-click needed to reach the menu would have thrown the selection away
    * before the menu could act on it.
    */
+  /**
+   * What a drag out of the grid carries.
+   *
+   * The same rule as the menu above: a card already in the selection drags the
+   * whole selection, one outside drags only itself. A capture whose bytes are
+   * still in the cloud is left behind — there is no file on this disk to hand
+   * anyone, and touching it would mean downloading it without being asked.
+   */
+  const dragPaths = useCallback(
+    (item: LibraryItem) => {
+      const chosen = selected.includes(item.path) ? selected : [item.path];
+      return chosen.filter((path) => !byPath.get(path)?.cloud);
+    },
+    [selected, byPath],
+  );
+
   const openMenu = (item: LibraryItem, at: { x: number; y: number }) => {
     const inSelection = selected.includes(item.path);
     if (!inSelection) {
@@ -393,7 +486,8 @@ export function Library({
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
                 placeholder="Search"
-                aria-label="Search captures by name"
+                title="Searches the names and the words inside the pictures"
+                aria-label="Search captures by name or by the text in them"
                 className="h-7 w-full rounded-lg border border-line bg-surface pr-9 pl-7 text-[12px] text-ink placeholder:text-ink-4 focus:border-accent focus:outline-none"
               />
               {/* The key that reaches the field, shown on the field itself —
@@ -420,9 +514,21 @@ export function Library({
           </div>
         </header>
 
+        {/* Why a search might be missing something, said only while it could
+            actually be missing something. The reading happens on every launch
+            and is silent the rest of the time — a permanent progress bar for
+            work nobody asked for is noise, but a search that quietly cannot
+            see half the library yet is a lie. */}
+        {reading !== null && query.trim().length >= 2 && (
+          <p className="mb-2.5 flex items-center gap-1.5 text-[11px] text-ink-4">
+            <span className="size-1.5 animate-pulse rounded-full bg-accent" />
+            Still reading what your captures say — {reading.indexed} of {reading.total} so far.
+          </p>
+        )}
+
         {visible.length === 0 ? (
           <p className="rounded-xl border border-dashed border-line py-10 text-center text-[12px] text-ink-4">
-            No captures match.
+            Nothing matches — in a name or in a picture.
             <button
               type="button"
               onClick={clearFilters}
@@ -439,6 +545,7 @@ export function Library({
                 item={item}
                 selected={selected.includes(item.path)}
                 onChoose={choose}
+                onDrag={dragPaths}
                 onOpen={onOpen}
                 onPlay={onPlay}
                 onTrash={trash}
@@ -460,6 +567,7 @@ function LibraryCard({
   item,
   selected,
   onChoose,
+  onDrag,
   onOpen,
   onPlay,
   onTrash,
@@ -468,12 +576,15 @@ function LibraryCard({
   item: LibraryItem;
   selected: boolean;
   onChoose: (item: LibraryItem, modifiers: { meta: boolean; shift: boolean }) => void;
+  /** The files a drag off this card should carry. See `dragPaths`. */
+  onDrag: (item: LibraryItem) => string[];
   onOpen: (path: string) => void;
   onPlay: (item: LibraryItem) => void;
   onTrash: (item: LibraryItem) => void;
   onMenu: (item: LibraryItem, at: { x: number; y: number }) => void;
 }) {
   const { url: thumb, failed } = useThumbnail(item.path, item.modified, item.cloud);
+  const drag = useDragOut(useCallback(() => onDrag(item), [onDrag, item]));
   // Double-click means "open this" whichever kind it is; a still goes to the
   // editor and a recording to the player, and neither leaves the app.
   const open = () => (item.video ? onPlay(item) : onOpen(item.path));
@@ -495,6 +606,7 @@ function LibraryCard({
         aria-pressed={selected}
         onClick={(e) => onChoose(item, { meta: e.metaKey, shift: e.shiftKey })}
         onDoubleClick={open}
+        {...drag}
         onKeyDown={(e) => {
           if (e.key === "Enter") {
             e.preventDefault();

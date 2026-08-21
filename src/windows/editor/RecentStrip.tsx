@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import clsx from "clsx";
 import { IconChevronDown, IconCopy, IconFolder, IconImage, IconTrash } from "@/components/icons";
 import { ContextMenu, type MenuEntry } from "@/components/ui/ContextMenu";
+import { useDragOut } from "@/lib/dragout";
 import * as ipc from "@/lib/ipc";
 import type { LibraryItem } from "@/lib/types";
 import { formatWhen } from "./format";
@@ -187,7 +188,14 @@ export function RecentStrip({
    * menu for the whole selection, one outside it takes over the selection
    * first. Without that rule the right-click needed to reach the menu would
    * throw away the very selection the menu is there to act on.
+   *
+   * A drag off a row follows the same rule, which is what `dragPaths` is.
    */
+  const dragPaths = useCallback(
+    (item: LibraryItem) => (selected.includes(item.path) ? selected : [item.path]),
+    [selected],
+  );
+
   const openMenu = (item: LibraryItem, at: { x: number; y: number }) => {
     const inSelection = selected.includes(item.path);
     if (!inSelection) {
@@ -251,6 +259,7 @@ export function RecentStrip({
               active={item.path === currentPath}
               selected={selected.includes(item.path)}
               onChoose={choose}
+              onDrag={dragPaths}
               onOpen={onOpen}
               onMenu={openMenu}
             />
@@ -271,6 +280,7 @@ function RecentRow({
   active,
   selected,
   onChoose,
+  onDrag,
   onOpen,
   onMenu,
 }: {
@@ -280,10 +290,13 @@ function RecentRow({
   /** Picked for a bulk action, which is a different thing from being open. */
   selected: boolean;
   onChoose: (item: LibraryItem, modifiers: { meta: boolean; shift: boolean }) => void;
+  /** The files a drag off this row should carry. See `dragPaths`. */
+  onDrag: (item: LibraryItem) => string[];
   onOpen: (path: string) => void;
   onMenu: (item: LibraryItem, at: { x: number; y: number }) => void;
 }) {
   const { url, failed } = useThumbnail(item.path, item.modified, item.cloud);
+  const drag = useDragOut(useCallback(() => onDrag(item), [onDrag, item]));
   const row = useRef<HTMLButtonElement>(null);
 
   // Follow the document: opening a capture from anywhere else — ⌘O, a fresh
@@ -304,6 +317,7 @@ function RecentRow({
         // it again is a no-op — but leaving this here means an impatient
         // double-click is never swallowed.
         onDoubleClick={() => onOpen(item.path)}
+        {...drag}
         onContextMenu={(e) => {
           e.preventDefault();
           onMenu(item, { x: e.clientX, y: e.clientY });

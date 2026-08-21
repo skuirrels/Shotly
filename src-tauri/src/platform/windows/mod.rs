@@ -6,6 +6,7 @@
 
 pub mod chrome;
 pub mod clock;
+pub mod dragout;
 pub mod editor;
 pub mod paths;
 pub mod pointer;

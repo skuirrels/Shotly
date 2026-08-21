@@ -436,11 +436,24 @@ export interface HotkeyBinding {
 
 // ------------------------------------------------------------ recognition
 
+/**
+ * Where something sits in the picture, as fractions of its width and height.
+ * Top-left origin. Mirrors `NormRect` in `src-tauri/src/ocr.rs`.
+ */
+export interface NormRect {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
 /** Mirrors `TextLine` in `src-tauri/src/ocr.rs`. */
 export interface TextLine {
   text: string;
   /** 0 to 1, as Vision reports it. */
   confidence: number;
+  /** Where the line is, for anything that wants to draw over it. */
+  rect?: NormRect;
 }
 
 /** A QR code or barcode found in the same pass. Mirrors `Code` in `ocr.rs`. */
@@ -454,6 +467,15 @@ export interface CodePayload {
 export interface Scan {
   lines: TextLine[];
   codes: CodePayload[];
+}
+
+/**
+ * How far through the library the text reader has got. Mirrors `Progress` in
+ * `src-tauri/src/textindex.rs`.
+ */
+export interface TextIndexProgress {
+  indexed: number;
+  total: number;
 }
 
 // ---------------------------------------------------------------- backup

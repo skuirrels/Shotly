@@ -22,6 +22,21 @@ pub struct Region {
     pub height: u32,
 }
 
+/// Where something sits in the picture, as fractions of its width and height.
+///
+/// Top-left origin, like every other rectangle in this app. Vision reports its
+/// own boxes bottom-left, and that flip is done once, at the recogniser, so
+/// nothing above this file has to know about it — the same reason `crop_to_png`
+/// crops rather than passing a region of interest down.
+#[derive(Debug, Serialize, Clone, Copy)]
+#[serde(rename_all = "camelCase")]
+pub struct NormRect {
+    pub x: f32,
+    pub y: f32,
+    pub width: f32,
+    pub height: f32,
+}
+
 /// One run of text, and how sure Vision is about it.
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -29,6 +44,11 @@ pub struct TextLine {
     pub text: String,
     /// 0 to 1. Shown so a doubtful line can be eyed rather than trusted.
     pub confidence: f32,
+    /// Where the line is, for anything that wants to draw over it — the
+    /// automatic redaction, in practice. Absent where the recogniser gives no
+    /// box.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rect: Option<NormRect>,
 }
 
 /// A QR code, barcode or similar, and what it had written in it.

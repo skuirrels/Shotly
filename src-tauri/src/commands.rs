@@ -85,7 +85,9 @@ pub struct CaptureResult {
     pub markup: Option<String>,
 }
 
-type CmdResult<T> = Result<T, String>;
+/// Every command's result. `pub(crate)` because the modules that grew out of
+/// this one — the text index, the share flow — return the same shape.
+pub(crate) type CmdResult<T> = Result<T, String>;
 
 /// Disambiguates scratch files opened within the same millisecond.
 static OPENED: AtomicU64 = AtomicU64::new(0);
@@ -643,13 +645,14 @@ pub fn save_editable_png(
     source: String,
     doc: String,
     scale: Option<f64>,
+    redacted: Option<Vec<u8>>,
 ) -> CmdResult<()> {
     let flattened = match scale {
         Some(s) => cli::with_dpi(&bytes, s),
         None => bytes,
     };
 
-    let out = match std::fs::read(&source) {
+    let out = match original_for(&source, redacted) {
         Ok(original) => markup::embed(&flattened, &original, &doc),
         Err(e) => {
             eprintln!("[shotly] saving {path} without re-editable markup: {e}");
@@ -703,6 +706,7 @@ pub fn save_to_library(
     scale: Option<f64>,
     source: Option<String>,
     doc: Option<String>,
+    redacted: Option<Vec<u8>>,
 ) -> CmdResult<String> {
     let bytes = match scale {
         Some(s) => cli::with_dpi(&bytes, s),
@@ -710,7 +714,7 @@ pub fn save_to_library(
     };
 
     let bytes = match (source, doc) {
-        (Some(source), Some(doc)) => match std::fs::read(&source) {
+        (Some(source), Some(doc)) => match original_for(&source, redacted) {
             Ok(original) => markup::embed(&bytes, &original, &doc),
             Err(e) => {
                 eprintln!("[shotly] saving without re-editable markup: {e}");
@@ -720,6 +724,25 @@ pub fn save_to_library(
         _ => bytes,
     };
     write_into_library(&app, &bytes, &stem)
+}
+
+/// The unannotated picture to tuck inside a saved capture.
+///
+/// Normally the file the capture was made from, read straight off the disk.
+/// When the document has anything blurred, the editor sends the same picture
+/// with those regions already destroyed, and *that* is what gets embedded —
+/// otherwise the re-editing payload would carry a perfect copy of whatever the
+/// blur was there to hide, one undo away from anyone who opens the file in
+/// Shotly. See `renderRedactedOriginal` in `lib/export.ts`.
+///
+/// Nothing else about the shape changes: it is still a blur annotation, still
+/// movable and deletable. Moving it just reveals blurred pixels rather than
+/// the secret.
+fn original_for(source: &str, redacted: Option<Vec<u8>>) -> std::io::Result<Vec<u8>> {
+    match redacted {
+        Some(bytes) if !bytes.is_empty() => Ok(bytes),
+        _ => std::fs::read(source),
+    }
 }
 
 /// Write bytes into the library under `stem`, without overwriting anything.
@@ -1158,6 +1181,17 @@ pub fn trash_captures(app: AppHandle, paths: Vec<String>) -> CmdResult<()> {
 #[tauri::command]
 pub fn reveal_in_finder(path: String) -> CmdResult<()> {
     crate::platform::shell::reveal(std::path::Path::new(&path))
+}
+
+/// Start dragging captures out of the window, as files.
+///
+/// Called from a pointer gesture the front end has already recognised as a
+/// drag, and returns as soon as the session is running — from then on the drag
+/// belongs to the window server, not to us. See `platform::dragout` for why the
+/// web view cannot do this itself.
+#[tauri::command]
+pub fn drag_out(window: tauri::WebviewWindow, paths: Vec<String>) -> CmdResult<()> {
+    crate::platform::dragout::begin_file_drag(&window, &paths)
 }
 
 /// How much image data one copy may put on the pasteboard, across all items.

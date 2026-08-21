@@ -34,14 +34,15 @@ import {
 import { useKeymap } from "@/lib/keys/useKeymap";
 import { isEditingText } from "@/lib/keys/keys";
 import type { Command } from "@/lib/keys/types";
-import { renderToPng } from "@/lib/export";
+import { renderRedactedOriginal, renderToPng } from "@/lib/export";
+import { type Sensitive, describeFindings, looksSensitive } from "@/lib/redact";
 import * as ipc from "@/lib/ipc";
 import { serialize as serializeMarkup } from "@/lib/markup";
 import { measureText } from "@/lib/shapes";
 import { captureStem } from "@/lib/naming";
 import { overlayFromClipboard } from "@/lib/overlay";
 import { useUpdates } from "@/lib/updater";
-import type { CaptureMode, CaptureResult, Rect, Scan, Trimmed } from "@/lib/types";
+import type { Annotation, CaptureMode, CaptureResult, Rect, Scan, Trimmed } from "@/lib/types";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import {
   MAX_BLUR,
@@ -322,11 +323,17 @@ export function EditorApp() {
    * The two save paths had drifted apart once already, so they share this
    * rather than each assembling their own. Only call it with a document open.
    */
-  const savePayload = useCallback(() => {
+  const savePayload = useCallback(async () => {
     const state = useEditor.getState();
     const doc = state.doc!;
     return {
       source: doc.path,
+      // A blur has to be a redaction, not a sticker: the file it is about to
+      // be embedded in is the *unannotated* original, and a saved capture
+      // whose blurred region can be lifted off is worse than no blur at all.
+      // Null unless something is actually blurred, so an ordinary save costs
+      // no second encode. See `renderRedactedOriginal`.
+      redacted: await renderRedactedOriginal(doc, state.annotations),
       doc: serializeMarkup({
         crop: doc.crop,
         stepCounter: state.stepCounter,
@@ -707,14 +714,14 @@ export function EditorApp() {
       // Saved captures stay editable: the file holds flattened pixels for
       // everyone else, plus the original and these shapes for Shotly. ⌘E
       // writes the flat version when a plain PNG is what's wanted.
-      const { source, doc: markup, scale } = savePayload();
+      const { source, doc: markup, scale, redacted } = await savePayload();
 
       let path: string;
       if (existing) {
-        await ipc.saveEditablePng(existing, png, source, markup, scale);
+        await ipc.saveEditablePng(existing, png, source, markup, scale, redacted);
         path = existing;
       } else {
-        path = await ipc.saveToLibrary(png, captureStem(), scale, { source, doc: markup });
+        path = await ipc.saveToLibrary(png, captureStem(), scale, { source, doc: markup, redacted });
         state.setLibraryPath(path);
       }
 
@@ -753,8 +760,8 @@ export function EditorApp() {
       const png = await exportPng();
       if (!png) return;
       const state = useEditor.getState();
-      const { source, doc: markup, scale } = savePayload();
-      await ipc.saveEditablePng(path, png, source, markup, scale);
+      const { source, doc: markup, scale, redacted } = await savePayload();
+      await ipc.saveEditablePng(path, png, source, markup, scale, redacted);
       state.markSaved();
       setSaved(path);
       notify("Saved");
@@ -895,6 +902,80 @@ export function EditorApp() {
     },
     [notify],
   );
+
+  /**
+   * Cover everything in the capture that looks like it should not be in it.
+   *
+   * One pass of the recogniser that is already there for the text grab, run
+   * over the whole file, with a blur laid over every line that matches a
+   * pattern. See `lib/redact` for what the patterns are, and for why this is a
+   * first pass rather than a promise.
+   *
+   * The whole *file*, not the visible document: a line cropped out of view is
+   * still inside the original that a saved capture carries, so blurring it is
+   * what stops the crop from being the way the secret gets out. It costs
+   * nothing on screen, because a shape outside the crop is not drawn.
+   */
+  const redactSensitive = useCallback(async () => {
+    const state = useEditor.getState();
+    const doc = state.doc;
+    if (!doc) return;
+
+    setBusy("redact");
+    try {
+      const scan = await ipc.scanImage(doc.path, null);
+      const found: Sensitive[] = [];
+      const blurs: Annotation[] = [];
+
+      for (const line of scan.lines) {
+        if (!line.rect) continue;
+        const kind = looksSensitive(line.text);
+        if (!kind) continue;
+
+        // Normalised against the whole file, so the crop offset comes off to
+        // reach the coordinates every annotation is stored in.
+        const height = line.rect.height * doc.naturalHeight;
+        // Padded, because a box that fits the glyphs exactly leaves the tops
+        // and tails of them legible along its edges.
+        const pad = Math.max(4, height * 0.25);
+        blurs.push({
+          id: crypto.randomUUID(),
+          kind: "blur",
+          x: line.rect.x * doc.naturalWidth - doc.crop.x - pad,
+          y: line.rect.y * doc.naturalHeight - doc.crop.y - pad,
+          width: line.rect.width * doc.naturalWidth + pad * 2,
+          height: height + pad * 2,
+          style: {
+            ...state.style,
+            // Enough blur to destroy a line of that size, whatever the tool
+            // happens to be set to. Over-blurring costs nothing here; under-
+            // blurring leaves a readable secret behind a smudge. Held inside
+            // the control's own range so that selecting one of these and
+            // reaching for the slider doesn't find it pinned past the end.
+            blurRadius: Math.min(
+              MAX_BLUR,
+              Math.max(state.style.blurRadius, Math.round(height * 0.6)),
+            ),
+          },
+        });
+        found.push(kind);
+      }
+
+      if (blurs.length === 0) {
+        notify("Nothing in this capture looks sensitive", "ok", 4000);
+        return;
+      }
+
+      state.snapshot();
+      state.replaceAll([...state.annotations, ...blurs]);
+      state.select(blurs.map((b) => b.id));
+      notify(`${describeFindings(found)} — ⌘Z if that was too keen`, "ok", 6000);
+    } catch (e) {
+      notify(`Could not read this capture: ${e}`, "error");
+    } finally {
+      setBusy(null);
+    }
+  }, [notify]);
 
   /**
    * Lay several library captures out on one canvas.
@@ -1078,6 +1159,15 @@ export function EditorApp() {
         shortcut: "Mod+D",
         enabled: hasSelection,
         run: () => s().duplicateSelection(),
+      },
+      {
+        id: "edit.redact",
+        title: "Blur anything sensitive",
+        group: "Edit",
+        shortcut: "Mod+Shift+B",
+        keywords: "redact privacy secret password email key token card censor",
+        enabled: hasDoc,
+        run: () => void redactSensitive(),
       },
       {
         id: "edit.selectAll",

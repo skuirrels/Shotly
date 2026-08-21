@@ -72,6 +72,16 @@ objc2-app-kit = { version = "0.3", features = [
   "NSGraphics",
   "NSPasteboard",
   "NSPasteboardItem",
+  # Dragging a capture out of the window and into another app. See
+  # `platform::dragout` for why this cannot be done from the web view.
+  "NSDragging",
+  "NSDraggingItem",
+  "NSDraggingSession",
+  "NSEvent",
+  "NSGraphicsContext",
+  "NSImage",
+  "NSView",
+  "NSWorkspace",
   "objc2-core-foundation",
 ] }
 objc2-foundation = "0.3"

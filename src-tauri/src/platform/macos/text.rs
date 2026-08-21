@@ -9,7 +9,7 @@
 //! as text costs a fraction of what a second call would, and it means the user
 //! never has to decide in advance which of the two they dragged a box around.
 
-use crate::ocr::{Code, Scan, TextLine};
+use crate::ocr::{Code, NormRect, Scan, TextLine};
 
 pub fn read(png: &[u8]) -> Result<Scan, String> {
     use objc2::rc::Retained;
@@ -70,6 +70,16 @@ pub fn read(png: &[u8]) -> Result<Scan, String> {
                 TextLine {
                     text: best.string().to_string(),
                     confidence: best.confidence(),
+                    // Flipped to a top-left origin here and nowhere else. See
+                    // `NormRect` — a rectangle that means something different
+                    // from every other rectangle in the app is exactly the sort
+                    // of thing that is wrong for months without being noticed.
+                    rect: Some(NormRect {
+                        x: box_.origin.x as f32,
+                        y: 1.0 - (box_.origin.y + box_.size.height) as f32,
+                        width: box_.size.width as f32,
+                        height: box_.size.height as f32,
+                    }),
                 },
                 // Normalised, and bottom-left origin — so a larger y is
                 // further *up* the image.

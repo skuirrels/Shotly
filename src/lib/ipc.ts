@@ -10,6 +10,7 @@ import type {
   LibraryItem,
   Scan,
   ShareLink,
+  TextIndexProgress,
   ShareProvider,
   Trimmed,
   TrimMode,
@@ -100,6 +101,7 @@ export const saveEditablePng = (
   source: string,
   doc: string,
   scale?: number,
+  redacted?: Uint8Array | null,
 ) =>
   invoke<void>("save_editable_png", {
     path,
@@ -107,6 +109,7 @@ export const saveEditablePng = (
     source,
     doc,
     scale: scale ?? null,
+    redacted: redacted ? Array.from(redacted) : null,
   });
 
 /** Save into ~/Documents/Shotly without a dialog. Resolves to the final path. */
@@ -114,7 +117,7 @@ export const saveToLibrary = (
   bytes: Uint8Array,
   stem: string,
   scale?: number,
-  editable?: { source: string; doc: string },
+  editable?: { source: string; doc: string; redacted?: Uint8Array | null },
 ) =>
   invoke<string>("save_to_library", {
     bytes: Array.from(bytes),
@@ -122,11 +125,40 @@ export const saveToLibrary = (
     scale: scale ?? null,
     source: editable?.source ?? null,
     doc: editable?.doc ?? null,
+    redacted: editable?.redacted ? Array.from(editable.redacted) : null,
   });
 
 export const saveLibraryPath = () => invoke<string>("save_library_path");
 
 export const revealInFinder = (path: string) => invoke<void>("reveal_in_finder", { path });
+
+/**
+ * Which captures have this text written in them.
+ *
+ * Answered from the index rather than by reading pictures, so it is a map
+ * lookup — a capture the reader has not got to yet simply isn't in the answer
+ * yet. See `src-tauri/src/textindex.rs`.
+ */
+export const searchText = (query: string) => invoke<string[]>("search_text", { query });
+
+/** Read up to `budget` captures that haven't been read yet. */
+export const textIndexStep = (budget: number) =>
+  invoke<TextIndexProgress>("text_index_step", { budget });
+
+export const textIndexProgress = () => invoke<TextIndexProgress>("text_index_progress");
+
+/** Forget the lot and read the library again. */
+export const textIndexReset = () => invoke<void>("text_index_reset");
+
+/**
+ * Start a native drag of these files, out of the window and into another app.
+ *
+ * Resolves as soon as the drag is running rather than when it is dropped: from
+ * that moment it belongs to the window server, and where it lands is between
+ * the user and whatever they let go over. See `lib/dragout` for the gesture and
+ * `src-tauri/src/platform/macos/dragout.rs` for why the web view can't do it.
+ */
+export const dragOut = (paths: string[]) => invoke<void>("drag_out", { paths });
 
 /**
  * Hand a file to whatever the system opens it with.

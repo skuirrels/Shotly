@@ -15,6 +15,7 @@ mod record;
 mod scroll;
 mod share;
 mod snap;
+mod textindex;
 mod platform;
 mod trim;
 mod update;
@@ -248,6 +249,7 @@ pub fn run() {
             commands::library_thumbnail,
             commands::trash_captures,
             commands::reveal_in_finder,
+            commands::drag_out,
             commands::open_externally,
             commands::copy_png_to_clipboard,
             commands::copy_files_to_clipboard,
@@ -269,6 +271,10 @@ pub fn run() {
             backup::launch_at_login,
             backup::set_launch_at_login,
             ocr::scan_image,
+            textindex::text_index_step,
+            textindex::text_index_progress,
+            textindex::text_index_reset,
+            textindex::search_text,
             combine::combine_captures,
             scroll::scroll_begin,
             scroll::scroll_ready,

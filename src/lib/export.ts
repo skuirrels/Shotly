@@ -18,7 +18,18 @@ import {
   stepFontSize,
   TEXT_PADDING,
 } from "./shapes";
-import { type Annotation, type Point, angleOf, boundsOf, isBox, isImage, isLine, isPen, isStep } from "./types";
+import {
+  type Annotation,
+  type Point,
+  angleOf,
+  boundsOf,
+  isBox,
+  isImage,
+  isLine,
+  isPen,
+  isStep,
+  movedBy,
+} from "./types";
 import { type Doc, hasBareCanvas } from "@/state/editorStore";
 import {
   type Backdrop,
@@ -110,6 +121,67 @@ export async function renderToPng(
       // turn only the part that is theirs; see `spinsItself` in
       // `AnnotationLayer`, and the blur and spotlight cases below.
       withSpin(ctx, a, () => drawAnnotation(ctx, a, img, doc, overlays));
+    }
+
+    return await canvasToPng(canvas);
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}
+
+/**
+ * The capture with its blurs burnt into the pixels, at natural size.
+ *
+ * This is what makes a blur a *redaction* rather than a sticker. A saved
+ * capture carries the unannotated original inside it so Shotly can reopen it
+ * as movable shapes (see `src-tauri/src/markup.rs`) — which means that without
+ * this, a screenshot with an API key blurred out ships the key, one undo away
+ * from anybody who has Shotly. Everything else about the shape stays editable:
+ * it can still be moved, resized and deleted, and the picture underneath it
+ * simply is not there any more.
+ *
+ * Returns null when there is nothing to redact, so an ordinary save costs no
+ * extra encode.
+ *
+ * Deliberately the *natural* image rather than the document: the crop and the
+ * output scale are both undoable, and this has to be the picture that goes on
+ * the disk. Which is also why the blurs are shifted by the crop origin on the
+ * way in — annotation coordinates are relative to the crop, and the file is
+ * not.
+ */
+export async function renderRedactedOriginal(
+  doc: Doc,
+  annotations: Annotation[],
+): Promise<Uint8Array | null> {
+  const blurs = annotations.filter((a) => a.kind === "blur");
+  if (blurs.length === 0) return null;
+
+  const bytes = await invoke<number[]>("read_capture_bytes", { path: doc.path });
+  const blob = new Blob([new Uint8Array(bytes)], { type: "image/png" });
+  const url = URL.createObjectURL(blob);
+
+  try {
+    const img = await loadImage(url);
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.max(1, doc.naturalWidth);
+    canvas.height = Math.max(1, doc.naturalHeight);
+
+    const ctx = canvas.getContext("2d");
+    if (!ctx) throw new Error("could not acquire a 2D context");
+    ctx.drawImage(img, 0, 0);
+
+    // A document whose window is the whole file, so the blur's own drawing
+    // code — clip, turn, redraw blurred — runs exactly as it does on export
+    // with no second version of it to keep in step.
+    const source: Doc = {
+      ...doc,
+      crop: { x: 0, y: 0, width: canvas.width, height: canvas.height },
+      outputScale: 1,
+    };
+
+    for (const a of blurs) {
+      const moved = movedBy(a, doc.crop.x, doc.crop.y);
+      withSpin(ctx, moved, () => drawAnnotation(ctx, moved, img, source, new Map()));
     }
 
     return await canvasToPng(canvas);
