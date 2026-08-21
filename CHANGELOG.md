@@ -8,7 +8,7 @@ The release notes on GitHub and the "what's new" text the in-app updater shows
 are both taken from this file — see `docs/RELEASING.md`. A version with nothing
 written here cannot be published.
 
-## Unreleased
+## 0.11.3 — 2026-08-21
 
 - **Space and drag now moves the canvas, at any zoom.** Panning was scrolling a
   pane that had been sized to fit the picture exactly, so at most zoom levels
