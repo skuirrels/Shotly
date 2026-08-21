@@ -8,7 +8,7 @@ The release notes on GitHub and the "what's new" text the in-app updater shows
 are both taken from this file — see `docs/RELEASING.md`. A version with nothing
 written here cannot be published.
 
-## Unreleased
+## 0.13.2 — 2026-08-21
 
 - **A movie no longer answers keys typed into something else.** With the
   command palette open over a recording, a space typed into its search box also
