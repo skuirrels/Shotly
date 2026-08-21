@@ -10,6 +10,11 @@ written here cannot be published.
 
 ## Unreleased
 
+- **Blur was never in the file.** It looked right in the editor and came out
+  completely sharp in every capture you saved, exported or copied — the whole
+  point of the tool, missing, since it shipped. Fixed, and the fix is checked
+  against the picture that actually lands on disk rather than against the
+  preview.
 - **Blurring something now really removes it.** A capture saved by Shotly
   carries the original picture inside it so the annotations stay editable —
   which meant a screenshot with a password blurred out was still carrying the

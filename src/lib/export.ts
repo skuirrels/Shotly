@@ -275,6 +275,86 @@ async function decodeOverlays(
   return decoded;
 }
 
+/**
+ * A blurred copy of the whole capture, made without `ctx.filter`.
+ *
+ * `ctx.filter = "blur(Npx)"` is the obvious way to write this and does not
+ * work: in the WebView Shotly actually ships in, the property stores the
+ * string and reads it back, and every drawing operation ignores it. So blur
+ * and pixelate looked right on screen — the preview is an SVG
+ * `feGaussianBlur`, which does work — and came out **completely sharp in every
+ * saved and exported file**. A blur that is only in the preview is worse than
+ * no blur at all, because it is exactly the tool people reach for to hide
+ * something before sending a screenshot.
+ *
+ * What replaces it is the oldest trick there is: draw the picture very small
+ * and then draw it back up again. Scaling down averages neighbouring pixels
+ * together and throws the rest away, and scaling back up cannot invent what
+ * was lost — which is both what makes it look like a blur and what makes it a
+ * redaction. Three passes, because a Gaussian is what repeatedly averaging a
+ * box converges to.
+ *
+ * The factor is chosen so the result matches the preview rather than merely
+ * resembling it. One pass of a box `d` wide has a variance of `d²/12`;
+ * variances add, so three of them give `d²/4`, and matching a Gaussian of
+ * standard deviation `r` — which is what `feGaussianBlur` and `blur(Npx)` both
+ * take — means `d = 2r`.
+ */
+const BLUR_PASSES = 3;
+
+const blurred = new WeakMap<CanvasImageSource, Map<number, HTMLCanvasElement>>();
+
+function blurredCopy(img: HTMLImageElement, radius: number): HTMLCanvasElement {
+  let byRadius = blurred.get(img);
+  if (!byRadius) {
+    byRadius = new Map();
+    blurred.set(img, byRadius);
+  }
+  // Several blurs over one capture is the normal case — the automatic
+  // redaction makes one per line — and they nearly always share a radius.
+  const cached = byRadius.get(radius);
+  if (cached) return cached;
+
+  const width = img.naturalWidth || img.width;
+  const height = img.naturalHeight || img.height;
+
+  const full = document.createElement("canvas");
+  full.width = Math.max(1, width);
+  full.height = Math.max(1, height);
+  const out = full.getContext("2d");
+
+  const box = Math.max(2, Math.round(radius * 2));
+  const small = document.createElement("canvas");
+  small.width = Math.max(1, Math.round(full.width / box));
+  small.height = Math.max(1, Math.round(full.height / box));
+  const down = small.getContext("2d");
+
+  if (!out || !down) {
+    // Nothing sensible to fall back to, and returning the sharp picture would
+    // be the very bug this exists to fix. An empty canvas is visibly wrong,
+    // which is the right way to fail here.
+    byRadius.set(radius, full);
+    return full;
+  }
+
+  for (const ctx of [out, down]) {
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = "high";
+  }
+
+  let source: CanvasImageSource = img;
+  for (let pass = 0; pass < BLUR_PASSES; pass++) {
+    down.clearRect(0, 0, small.width, small.height);
+    down.drawImage(source, 0, 0, small.width, small.height);
+    out.clearRect(0, 0, full.width, full.height);
+    out.drawImage(small, 0, 0, full.width, full.height);
+    source = full;
+  }
+
+  byRadius.set(radius, full);
+  return full;
+}
+
 function canvasToPng(canvas: HTMLCanvasElement): Promise<Uint8Array> {
   return new Promise((resolve, reject) => {
     canvas.toBlob((blob) => {
@@ -543,14 +623,14 @@ function drawAnnotation(
       ctx.roundRect(b.x, b.y, b.width, b.height, 2);
       ctx.clip();
       spinCtx(ctx, centre, -angleOf(a));
-      // Redraw the whole image blurred, clipped to the region. Drawing the
-      // full image (not just the region) means the blur samples real
-      // neighbouring pixels instead of fading out at the edges.
-      ctx.filter = `blur(${a.style.blurRadius}px)`;
+      // The whole picture, blurred, clipped to the region. The whole one and
+      // not just the region: a blur has to sample real neighbouring pixels
+      // instead of fading out into nothing at its own edges.
+      //
       // Positioned, not source-cropped, for the same reason as the main draw:
       // the crop may reach past the capture, and a source rectangle that does
       // is not a legal argument.
-      ctx.drawImage(img, -doc.crop.x, -doc.crop.y);
+      ctx.drawImage(blurredCopy(img, a.style.blurRadius), -doc.crop.x, -doc.crop.y);
       ctx.restore();
       break;
     }

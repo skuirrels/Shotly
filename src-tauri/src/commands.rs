@@ -50,6 +50,23 @@ fn conceal_editor_inner(app: &AppHandle) -> bool {
     true
 }
 
+/// Put the editor back exactly as visible as it was, and no further forward.
+///
+/// The shelf's counterpart to `reveal_editor`: same undoing of the hide taken
+/// for the capture, without the `set_focus` that would pull the user out of
+/// whatever they are doing.
+fn restore_editor_quietly(app: &AppHandle) {
+    let state = app.state::<AppState>();
+    let mut hid = state.hid_editor.lock().unwrap();
+    if !*hid {
+        return;
+    }
+    *hid = false;
+    if let Some(editor) = app.get_webview_window("editor") {
+        let _ = editor.show();
+    }
+}
+
 fn reveal_editor(app: &AppHandle) {
     let state = app.state::<AppState>();
     let mut hid = state.hid_editor.lock().unwrap();
@@ -320,10 +337,16 @@ pub(crate) fn deliver_capture(app: &AppHandle, frame: Frame) -> CmdResult<Captur
     if crate::shelf::shelf_enabled(app.clone()) {
         match crate::shelf::place(app, &frame) {
             Ok(_) => {
-                // The editor was hidden to keep it out of the shot, and is not
-                // coming back up — so the hide has to be settled here or the
-                // next capture would think it is still owed a reveal.
-                *app.state::<AppState>().hid_editor.lock().unwrap() = false;
+                // The editor was hidden to keep it out of the shot. It is not
+                // getting the capture, but it still has to come back: a window
+                // that was on screen before the key was pressed and is gone
+                // afterwards reads as a crash, not as a preference.
+                //
+                // Shown without being focused, though. The user is in some
+                // other app — that is the whole reason the shelf exists — and
+                // taking their keyboard to put a window back where it already
+                // was would be worse than leaving it hidden.
+                restore_editor_quietly(app);
                 return Ok(CaptureResult { frame, id: now_ms(), markup: None });
             }
             Err(err) => eprintln!("[shotly] could not shelve the capture, opening it instead: {err}"),
@@ -764,6 +787,7 @@ pub fn save_to_library(
 /// movable and deletable. Moving it just reveals blurred pixels rather than
 /// the secret.
 fn original_for(source: &str, redacted: Option<Vec<u8>>) -> std::io::Result<Vec<u8>> {
+    eprintln!("[shotly] original_for: redacted = {:?} bytes", redacted.as_ref().map(|b| b.len()));
     match redacted {
         Some(bytes) if !bytes.is_empty() => Ok(bytes),
         _ => std::fs::read(source),

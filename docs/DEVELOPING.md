@@ -1255,7 +1255,30 @@ out of it.
 
 ## A blur has to be a redaction
 
-`markup.rs` tucks the **unannotated original** into every saved PNG, which is
+Two separate things were wrong here, and the second one was worse.
+
+**`ctx.filter` does not work in the WebView this app ships in.** The property
+stores the string and reads it back — `ctx.filter = "blur(6px)"` then
+`ctx.filter` gives you `"blur(6px)"` — and every drawing operation ignores it.
+So the blur and pixelate tools looked right on screen, because the preview is
+an SVG `feGaussianBlur` and that does work, and came out **completely sharp in
+every saved and exported file**. Nobody had checked, because the two renderers
+are supposed to agree and the preview looked correct.
+
+`blurredCopy` replaces it with the oldest trick there is: draw the picture very
+small, then draw it back up. The downscale averages neighbouring pixels and
+throws the rest away; the upscale cannot invent what was lost. Three passes,
+because repeatedly averaging a box converges on a Gaussian, and a factor of
+`2r`, because one box of width `d` has variance `d²/12`, variances add, and
+three of them matching a Gaussian of standard deviation `r` gives `d = 2r` —
+which is the number `feGaussianBlur` and `blur(Npx)` both take, so the export
+matches the preview rather than merely resembling it.
+
+Do not put `ctx.filter` back. If you need another filter, check it on a real
+build first: the harness runs in an ordinary browser, where it works.
+
+**And the original was carried unblurred.** `markup.rs` tucks the
+**unannotated original** into every saved PNG, which is
 what makes a capture re-editable and is also, on its own, a hole: a screenshot
 with an API key blurred out was shipping the key, one undo away from anybody
 with Shotly. `renderRedactedOriginal` closes it. Before the original is
