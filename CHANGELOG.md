@@ -8,6 +8,18 @@ The release notes on GitHub and the "what's new" text the in-app updater shows
 are both taken from this file — see `docs/RELEASING.md`. A version with nothing
 written here cannot be published.
 
+## Unreleased
+
+- **The canvas can be pushed all the way to its own edges.** Zoomed in past the
+  pane, the left-hand side of a capture could not be reached at all: the view
+  opened somewhere in the middle of the picture, dragging with space held moved
+  it one way and refused the other, and every zoom step slid the picture
+  somewhere it had not been asked to go. The pane's centring was throwing that
+  part of the canvas away.
+- **Zooming from the toolbar, ⌘+ or the menu keeps the middle of the pane**
+  rather than diving for the top-left corner. ⌘-scroll and pinch still keep the
+  point under the pointer.
+
 ## 0.11.1 — 2026-08-21
 
 - **⌘-scroll zooms where you are pointing**, and a trackpad pinch does the same

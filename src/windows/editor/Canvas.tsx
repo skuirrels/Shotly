@@ -198,6 +198,8 @@ export function Canvas({ onNotify, actions, onScan }: CanvasProps) {
    * the correction can only be worked out once the new size is on the page.
    */
   const anchor = useRef<{ doc: Point; client: { x: number; y: number } } | null>(null);
+  /** The pane's own centre, in document coordinates, as of the last commit. */
+  const middle = useRef<Point | null>(null);
   /** Open right-click menu: where it is, and which shape it was opened on. */
   const [menu, setMenu] = useState<{ at: { x: number; y: number }; id: string | null } | null>(
     null,
@@ -346,16 +348,42 @@ export function Canvas({ onNotify, actions, onScan }: CanvasProps) {
    * One tick later and the capture visibly jumps.
    */
   useLayoutEffect(() => {
-    const held = anchor.current;
-    anchor.current = null;
-
     const el = viewport.current;
     const r = stage.current?.getBoundingClientRect();
+    const v = el?.getBoundingClientRect();
+    // A zoom nobody aimed — the toolbar's buttons, ⌘+, the menu — keeps the
+    // middle of the pane instead. Without it every step of the toolbar zoom
+    // walks off towards the top-left corner, since that is where a scroll
+    // container's origin is and there is nothing else asking to be kept.
+    const held =
+      anchor.current ??
+      (middle.current && v && { doc: middle.current, client: { x: v.left + v.width / 2, y: v.top + v.height / 2 } });
+    anchor.current = null;
+
     if (!held || !el || !r) return;
 
     el.scrollLeft += r.left + held.doc.x * zoom - held.client.x;
     el.scrollTop += r.top + held.doc.y * zoom - held.client.y;
   }, [zoom]);
+
+  /**
+   * Where the middle of the pane is, in the capture's own coordinates.
+   *
+   * Recorded after every commit — and after the correction above, so what it
+   * holds during the next zoom is where the pane was actually looking when that
+   * zoom began. A layout effect declared *after* the one that reads it, because
+   * within a component they run in the order they are written.
+   */
+  useLayoutEffect(() => {
+    const el = viewport.current;
+    const r = stage.current?.getBoundingClientRect();
+    if (!el || !r) return;
+    const v = el.getBoundingClientRect();
+    middle.current = {
+      x: (v.left + v.width / 2 - r.left) / zoom,
+      y: (v.top + v.height / 2 - r.top) / zoom,
+    };
+  });
 
   /**
    * Space picks the canvas up.
@@ -380,12 +408,17 @@ export function Canvas({ onNotify, actions, onScan }: CanvasProps) {
     // a hand it will not honour.
     const clear = () => setHandOpen(false);
 
-    window.addEventListener("keydown", down);
-    window.addEventListener("keyup", up);
+    // On the way down, not on the way back up. A window listener in the bubble
+    // phase is the *last* thing a key reaches, and anything that claims a chord
+    // on the capture phase — `useKeymap` does, for every shortcut it owns —
+    // stops the event dead before it ever gets there. The hand has to be
+    // claimed where nothing can have swallowed it yet.
+    window.addEventListener("keydown", down, { capture: true });
+    window.addEventListener("keyup", up, { capture: true });
     window.addEventListener("blur", clear);
     return () => {
-      window.removeEventListener("keydown", down);
-      window.removeEventListener("keyup", up);
+      window.removeEventListener("keydown", down, { capture: true });
+      window.removeEventListener("keyup", up, { capture: true });
       window.removeEventListener("blur", clear);
     };
   }, []);
@@ -1255,7 +1288,19 @@ export function Canvas({ onNotify, actions, onScan }: CanvasProps) {
       style={{ cursor: hand ?? undefined }}
       onPointerDownCapture={onViewportPointerDown}
     >
-      <div className="flex min-h-full min-w-full items-center justify-center" style={{ padding: PAD }}>
+      {/* Centred, but never at the cost of the far edge. A plain
+          `justify-center` on a scroll container throws away the overflow on the
+          *start* side: once the capture is wider than the pane, its left-hand
+          third sits at a negative offset that no scroll position can reach, and
+          the pane opens somewhere in the middle of the picture with no way back.
+          Every gesture that steers by scrolling then dies against the clamp —
+          which is what a pan that "does nothing" and a canvas that "jumps" both
+          actually were. The safe keyword says centre it while it fits and pin it
+          to the start once it does not. */}
+      <div
+        className="flex min-h-full min-w-full items-center-safe justify-center-safe"
+        style={{ padding: PAD }}
+      >
         <div
           className={clsx("shrink-0", !frame && "contents")}
           style={

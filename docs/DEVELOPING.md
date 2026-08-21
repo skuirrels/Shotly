@@ -1213,9 +1213,34 @@ worth fixing: the whole picture is on screen, so nothing is sliding out of
 view. Anchoring matters exactly when you are zoomed past the edges, and there
 it is exact to a rounding error on the integer scroll offsets.
 
+A zoom that nobody aimed — the toolbar buttons, ⌘+, the menu — keeps the
+*middle of the pane* instead of the cursor. The middle is recorded in document
+coordinates after every commit by a second layout effect, declared after the
+one that reads it so that what it holds during a zoom is where the pane was
+looking when that zoom began. Without it every step of the toolbar zoom walks
+off towards the top-left corner, because that is where a scroll container's
+origin is and nothing else was asking to be kept.
+
+**A centred canvas could not be scrolled to its own left edge**, and that one
+line of CSS was two bug reports. `justify-content: center` on a scroll
+container throws the overflow on the *start* side away: once the capture is
+wider than the pane, its left-hand third sits at a negative offset that no
+scroll position can reach — measured in the running app at 244%, the stage
+began 3308px to the left of a scroll origin whose maximum was 0. So the pane
+opened somewhere in the middle of the picture, every gesture that steers by
+scrolling died against the clamp, and a pan that could only move one way read
+as a pan that did not work at all. `justify-center-safe` and `items-center-safe`
+centre it while it fits and pin it to the start once it does not. Anything
+inside a scroll container wants the safe variants; the plain ones are a trap
+that only springs on content larger than its pane.
+
 Space-to-pan is a **capture-phase** handler on the viewport that stops there.
 Anything less and the press also reaches the stage, so letting go leaves a
-rectangle behind wherever the pan ended. The hand cursor is forced onto every
+rectangle behind wherever the pan ended. The key itself is claimed on the
+capture phase too: a `keydown` listener on the window in the *bubble* phase is
+the last thing an event reaches, and `useKeymap` stops every chord it owns dead
+on the way down. The hand is a mode rather than a shortcut, so it is taken
+where nothing can have swallowed it yet. The hand cursor is forced onto every
 descendant with `[&_*]:cursor-grab`, because the shapes carry SVG `cursor`
 attributes and the stage carries an inline style, and a descendant rule is the
 only thing that outranks both.
