@@ -8,7 +8,7 @@ The release notes on GitHub and the "what's new" text the in-app updater shows
 are both taken from this file — see `docs/RELEASING.md`. A version with nothing
 written here cannot be published.
 
-## Unreleased
+## 0.11.1 — 2026-08-21
 
 - **⌘-scroll zooms where you are pointing**, and a trackpad pinch does the same
   — so you can aim at a detail and magnify it instead of watching it slide off
