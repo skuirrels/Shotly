@@ -8,7 +8,7 @@ The release notes on GitHub and the "what's new" text the in-app updater shows
 are both taken from this file — see `docs/RELEASING.md`. A version with nothing
 written here cannot be published.
 
-## Unreleased
+## 0.13.0 — 2026-08-21
 
 - **Screen recordings can have your voice on them.** There is a microphone
   switch on the recording overlay, next to *Record the whole screen*, and the
