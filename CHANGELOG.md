@@ -8,7 +8,7 @@ The release notes on GitHub and the "what's new" text the in-app updater shows
 are both taken from this file — see `docs/RELEASING.md`. A version with nothing
 written here cannot be published.
 
-## Unreleased
+## 0.12.1 — 2026-08-21
 
 - **Reveal in Finder has a shortcut that works.** It was on ⇧⌘R, which
   recording already had, so it had never once fired from the keyboard. It is
