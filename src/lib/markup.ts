@@ -57,8 +57,13 @@ export interface MarkupDoc {
  * for it and would draw every rectangle at the fixed 4px it has always used —
  * a square box where a rounded one belongs, or the reverse, which is the same
  * kind of quietly different picture as the rest of this list.
+ *
+ * 10 let shapes be turned. An older build would ignore the angle and draw
+ * every one of them square to the page — an arrow pointing somewhere else, a
+ * label lying flat across a diagram it was set at a slant to follow. The most
+ * literally different picture on this list.
  */
-const VERSION = 9;
+const VERSION = 10;
 
 export function serialize(doc: Omit<MarkupDoc, "version">): string {
   return JSON.stringify({ version: VERSION, ...doc });

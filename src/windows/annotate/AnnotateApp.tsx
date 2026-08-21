@@ -21,15 +21,32 @@ import { Kbd } from "@/components/ui/Kbd";
 import { captureStem } from "@/lib/naming";
 import { readColor, readNumber, readString, write } from "@/lib/prefs";
 import {
+  angleFrom,
   arrowPolygon,
   calloutBaselines,
+  centreOf,
   fontFor,
+  HANDLE_SPECS,
+  type HandleName,
+  handleAnchor,
+  handlePoint,
+  holdsHeight,
+  holdsWidth,
   measureText,
   neonBorderForFont,
   neonPaint,
   neonRadius,
+  normalizeAngle,
   polygonToPath,
+  resizeCursor,
+  respunBox,
+  rotatePoint,
+  snapTurn,
+  spinTransform,
+  spunBounds,
   TEXT_PADDING,
+  unspun,
+  unspunBox,
 } from "@/lib/shapes";
 import { NEON_SWATCHES, SWATCHES } from "@/windows/editor/tools";
 
@@ -70,6 +87,14 @@ interface Stroke {
   points: Point[];
   /** Only meaningful for `tool === "text"`. */
   text?: string;
+  /**
+   * Degrees clockwise about the stroke's own centre.
+   *
+   * The points stay square to the axes and the turn happens at draw time —
+   * see the rotation section of `lib/shapes`, which the editor's annotations
+   * are turned by too.
+   */
+  angle?: number;
 }
 
 /** Breathing room between a callout's words and its lit edge. */
@@ -107,6 +132,8 @@ interface Draft {
   color: string;
   size: number;
   text: string;
+  /** Carried through so retyping a turned label doesn't stand it back up. */
+  angle?: number;
 }
 
 interface Bounds {
@@ -116,7 +143,16 @@ interface Bounds {
   height: number;
 }
 
-type Handle = "nw" | "ne" | "sw" | "se";
+/** The point every rotation in here is measured from. */
+const ORIGIN: Point = { x: 0, y: 0 };
+
+/**
+ * How far above the frame the rotate grip floats.
+ *
+ * Clear of the corner handles at any size, and close enough to read as part of
+ * the selection rather than as something else on the screen.
+ */
+const GRIP_REACH = 26;
 
 /**
  * What the pointer is currently doing.
@@ -128,7 +164,13 @@ type Handle = "nw" | "ne" | "sw" | "se";
 type Gesture =
   | { kind: "draw" }
   | { kind: "move"; ids: string[]; origin: Point; before: Stroke[] }
-  | { kind: "resize"; handle: Handle; box: Bounds; before: Stroke[] };
+  // `box` and `angle` are the selection as it stood when the handle was
+  // taken. The box is in unspun space, which is where the whole resize
+  // happens — see `lib/shapes`.
+  | { kind: "resize"; handle: HandleName; box: Bounds; angle: number; before: Stroke[] }
+  // `grab` is where the hand already was when it took the grip, so the
+  // selection turns with it rather than jumping under it on the first pixel.
+  | { kind: "rotate"; pivot: Point; grab: number; angle: number; before: Stroke[] };
 
 // ------------------------------------------------------------------ geometry
 
@@ -165,26 +207,6 @@ function strokeBounds(s: Stroke): Bounds | null {
   return { x: minX, y: minY, width: maxX - minX, height: maxY - minY };
 }
 
-/** Bounding box of a set of strokes. */
-function boundsOf(strokes: Stroke[]): Bounds | null {
-  let minX = Infinity;
-  let minY = Infinity;
-  let maxX = -Infinity;
-  let maxY = -Infinity;
-
-  for (const s of strokes) {
-    const b = strokeBounds(s);
-    if (!b) continue;
-    minX = Math.min(minX, b.x);
-    minY = Math.min(minY, b.y);
-    maxX = Math.max(maxX, b.x + b.width);
-    maxY = Math.max(maxY, b.y + b.height);
-  }
-
-  if (!Number.isFinite(minX)) return null;
-  return { x: minX, y: minY, width: maxX - minX, height: maxY - minY };
-}
-
 const translate = (s: Stroke, dx: number, dy: number): Stroke => ({
   ...s,
   points: s.points.map((p) => ({ x: p.x + dx, y: p.y + dy })),
@@ -212,21 +234,84 @@ const scale = (s: Stroke, anchor: Point, sx: number, sy: number): Stroke => ({
   })),
 });
 
-const HANDLES: { id: Handle; cursor: string }[] = [
-  { id: "nw", cursor: "nwse-resize" },
-  { id: "ne", cursor: "nesw-resize" },
-  { id: "sw", cursor: "nesw-resize" },
-  { id: "se", cursor: "nwse-resize" },
-];
+/**
+ * The frame drawn round the selection, and which way up it is.
+ *
+ * When everything selected agrees on an angle the frame takes it, and the box
+ * is measured in unspun space — where they are all square to the axes again,
+ * so the frame hugs them and a drag on a side handle pulls along the shapes'
+ * own axes rather than the screen's.
+ *
+ * A selection that does *not* agree has no angle to take. It gets the upright
+ * box that covers wherever the pieces have ended up, which is the honest
+ * answer: there is no one direction that is "along" a pile of shapes lying at
+ * different angles. Turning it still works — every piece turns about the same
+ * pivot — and the box simply re-fits as they go round.
+ */
+function selectionOf(strokes: Stroke[]): { box: Bounds; angle: number } | null {
+  if (strokes.length === 0) return null;
+  const first = strokes[0].angle ?? 0;
+  const angle = strokes.every((s) => (s.angle ?? 0) === first) ? first : 0;
 
-const handleAt = (b: Bounds, h: Handle): Point => ({
-  x: h === "nw" || h === "sw" ? b.x : b.x + b.width,
-  y: h === "nw" || h === "ne" ? b.y : b.y + b.height,
-});
+  const boxes = strokes.flatMap((s) => {
+    const b = strokeBounds(s);
+    if (!b) return [];
+    return [angle ? unspunBox(b, angle) : spunBounds(b, s.angle ?? 0)];
+  });
+  if (boxes.length === 0) return null;
 
-/** The corner diagonally opposite the one being dragged — it stays put. */
-const anchorFor = (b: Bounds, h: Handle): Point =>
-  handleAt(b, (({ nw: "se", ne: "sw", sw: "ne", se: "nw" }) as const)[h]);
+  const x = Math.min(...boxes.map((b) => b.x));
+  const y = Math.min(...boxes.map((b) => b.y));
+  const right = Math.max(...boxes.map((b) => b.x + b.width));
+  const bottom = Math.max(...boxes.map((b) => b.y + b.height));
+
+  return { box: { x, y, width: right - x, height: bottom - y }, angle };
+}
+
+/**
+ * Scale one stroke as its share of a selection being resized.
+ *
+ * The drag happens in unspun space; a stroke stores its points square to the
+ * axes and is turned about its own centre at draw time. So it goes in, scales
+ * by the same arithmetic it always did, and comes back out landed on the
+ * centre it has just been given — which is what keeps a turned selection under
+ * the hand instead of swinging away from it.
+ */
+function resizeStroke(s: Stroke, deg: number, anchor: Point, sx: number, sy: number): Stroke {
+  const local = strokeBounds(s);
+  if (!local) return s;
+
+  const there = unspunBox(local, deg);
+  const scaled = scale(translate(s, there.x - local.x, there.y - local.y), anchor, sx, sy);
+
+  const after = strokeBounds(scaled);
+  if (!after) return scaled;
+  const back = respunBox(after, deg);
+  return translate(scaled, back.x - after.x, back.y - after.y);
+}
+
+/**
+ * Turn one stroke about a pivot that may not be its own centre.
+ *
+ * A rigid turn of a group is each piece turned in place, with its centre
+ * carried round the pivot — which is exactly the two halves of this.
+ */
+function spinStroke(s: Stroke, pivot: Point, deg: number): Stroke {
+  const b = strokeBounds(s);
+  if (!b) return s;
+  const centre = centreOf(b);
+  const moved = rotatePoint(centre, pivot, deg);
+  return {
+    ...translate(s, moved.x - centre.x, moved.y - centre.y),
+    angle: normalizeAngle((s.angle ?? 0) + deg),
+  };
+}
+
+/** Where a stroke turns about, for the transform that draws it. */
+function spinOf(s: Stroke): string | undefined {
+  const b = strokeBounds(s);
+  return b ? spinTransform(s.angle ?? 0, centreOf(b)) : undefined;
+}
 
 const HEARTBEAT_MS = 1000;
 /** How many undo steps to keep. Deep enough for a session, cheap to hold. */
@@ -780,7 +865,7 @@ export function AnnotateApp() {
   // --------------------------------------------------------------- selection
 
   const selectedStrokes = strokes.filter((s) => selected.includes(s.id));
-  const selectionBox = boundsOf(selectedStrokes);
+  const selection = selectionOf(selectedStrokes);
   /** Kept separate from `editing` so the keyboard effect only re-binds when a
    *  box opens or closes, not on every keystroke inside it. */
   const isEditing = editing !== null;
@@ -885,6 +970,7 @@ export function AnnotateApp() {
       width: draft.size,
       points: [draft.at],
       text: draft.text,
+      angle: draft.angle,
     };
 
     snapshot();
@@ -980,12 +1066,35 @@ export function AnnotateApp() {
     };
   };
 
-  const grabHandle = (e: React.PointerEvent, handle: Handle) => {
-    if (e.button !== 0 || !selectionBox) return;
+  const grabHandle = (e: React.PointerEvent, handle: HandleName) => {
+    if (e.button !== 0 || !selection) return;
     e.stopPropagation();
     (e.currentTarget as Element).setPointerCapture(e.pointerId);
 
-    gesture.current = { kind: "resize", handle, box: selectionBox, before: strokes };
+    gesture.current = {
+      kind: "resize",
+      handle,
+      box: selection.box,
+      angle: selection.angle,
+      before: strokes,
+    };
+  };
+
+  const grabGrip = (e: React.PointerEvent) => {
+    if (e.button !== 0 || !selection) return;
+    e.stopPropagation();
+    (e.currentTarget as Element).setPointerCapture(e.pointerId);
+
+    // The frame is measured unspun, so its centre has to be turned back out
+    // to find the point on screen that everything will go round.
+    const pivot = rotatePoint(centreOf(selection.box), ORIGIN, selection.angle);
+    gesture.current = {
+      kind: "rotate",
+      pivot,
+      grab: angleFrom(pivot, { x: e.clientX, y: e.clientY }),
+      angle: selection.angle,
+      before: strokes,
+    };
   };
 
   const extend = (e: React.PointerEvent) => {
@@ -1019,20 +1128,37 @@ export function AnnotateApp() {
       return;
     }
 
-    // Resize: scale the selection about the corner opposite the one held.
-    const anchor = anchorFor(active.box, active.handle);
-    const corner = handleAt(active.box, active.handle);
-    const spanX = corner.x - anchor.x;
-    const spanY = corner.y - anchor.y;
-    // A zero span cannot be scaled — a flat selection would collapse to
-    // nothing and never come back.
-    const sx = Math.abs(spanX) < 1 ? 1 : (e.clientX - anchor.x) / spanX;
-    const sy = Math.abs(spanY) < 1 ? 1 : (e.clientY - anchor.y) / spanY;
+    if (active.kind === "rotate") {
+      let deg = angleFrom(active.pivot, { x: e.clientX, y: e.clientY }) - active.grab;
+      if (e.shiftKey) deg = snapTurn(active.angle, deg);
+      setStrokes(
+        active.before.map((s) => (selected.includes(s.id) ? spinStroke(s, active.pivot, deg) : s)),
+      );
+      return;
+    }
 
-    // Shift keeps the aspect ratio, as it does when drawing.
-    const [fx, fy] = e.shiftKey ? [Math.min(sx, sy), Math.min(sx, sy)] : [sx, sy];
+    // Resize: scale the selection about the point the handle holds still —
+    // the opposite corner, or the opposite edge for a handle on a flat side.
+    // All of it in unspun space, which is where `active.box` was measured.
+    const anchor = handleAnchor(active.box, active.handle);
+    const grabbed = handlePoint(active.box, active.handle);
+    const to = unspun({ x: e.clientX, y: e.clientY }, active.angle);
+    const spanX = grabbed.x - anchor.x;
+    const spanY = grabbed.y - anchor.y;
+    // A zero span cannot be scaled — a flat selection would collapse to
+    // nothing and never come back. Nor can the axis a side handle holds.
+    const sx = holdsWidth(active.handle) || Math.abs(spanX) < 1 ? 1 : (to.x - anchor.x) / spanX;
+    const sy = holdsHeight(active.handle) || Math.abs(spanY) < 1 ? 1 : (to.y - anchor.y) / spanY;
+
+    // Shift keeps the aspect ratio, as it does when drawing — which only means
+    // anything on a corner, since a side handle holds one axis already.
+    const square =
+      e.shiftKey && !holdsWidth(active.handle) && !holdsHeight(active.handle);
+    const [fx, fy] = square ? [Math.min(sx, sy), Math.min(sx, sy)] : [sx, sy];
     setStrokes(
-      active.before.map((s) => (selected.includes(s.id) ? scale(s, anchor, fx, fy) : s)),
+      active.before.map((s) =>
+        selected.includes(s.id) ? resizeStroke(s, active.angle, anchor, fx, fy) : s,
+      ),
     );
   };
 
@@ -1222,6 +1348,7 @@ export function AnnotateApp() {
           .map((s) => (
             <g
               key={s.id}
+              transform={spinOf(s)}
               onPointerDown={(e) => grab(e, s.id)}
               onDoubleClick={() => {
                 if (s.tool !== "text" && s.tool !== "callout") return;
@@ -1232,6 +1359,7 @@ export function AnnotateApp() {
                   color: s.color,
                   size: s.width,
                   text: s.text ?? "",
+                  angle: s.angle,
                 });
               }}
               style={{ cursor: "move" }}
@@ -1249,21 +1377,24 @@ export function AnnotateApp() {
             strokes themselves, so it tracks them live. Hiding it mid-gesture
             would also mean hiding it forever, since `gesture` is a ref and
             clearing it triggers no re-render. */}
-        {selectionBox && (
-          <g>
+        {selection && (
+          // Drawn in unspun space and turned as one piece, so the frame and
+          // every handle on it stay square to the shapes however far round
+          // they have been taken.
+          <g transform={spinTransform(selection.angle, ORIGIN)}>
             <rect
-              x={selectionBox.x}
-              y={selectionBox.y}
-              width={selectionBox.width}
-              height={selectionBox.height}
+              x={selection.box.x}
+              y={selection.box.y}
+              width={selection.box.width}
+              height={selection.box.height}
               fill="none"
               stroke="var(--color-accent)"
               strokeWidth={1.5}
               strokeDasharray="5 3"
               pointerEvents="none"
             />
-            {HANDLES.map((h) => {
-              const at = handleAt(selectionBox, h.id);
+            {HANDLE_SPECS.map((h) => {
+              const at = handlePoint(selection.box, h.id);
               return (
                 <rect
                   key={h.id}
@@ -1275,11 +1406,32 @@ export function AnnotateApp() {
                   fill="var(--color-accent)"
                   stroke="#fff"
                   strokeWidth={1.5}
-                  style={{ cursor: h.cursor }}
+                  style={{ cursor: resizeCursor(h.id, selection.angle) }}
                   onPointerDown={(e) => grabHandle(e, h.id)}
                 />
               );
             })}
+            {/* A stalk up to the grip, so it reads as attached to what it
+                turns rather than as a stray dot above it. */}
+            <line
+              x1={selection.box.x + selection.box.width / 2}
+              y1={selection.box.y}
+              x2={selection.box.x + selection.box.width / 2}
+              y2={selection.box.y - GRIP_REACH}
+              stroke="var(--color-accent)"
+              strokeWidth={1.5}
+              pointerEvents="none"
+            />
+            <circle
+              cx={selection.box.x + selection.box.width / 2}
+              cy={selection.box.y - GRIP_REACH}
+              r={6}
+              fill="#22c55e"
+              stroke="#fff"
+              strokeWidth={1.5}
+              style={{ cursor: "grab" }}
+              onPointerDown={grabGrip}
+            />
           </g>
         )}
       </svg>
@@ -1569,6 +1721,10 @@ function TextBox({
   };
 
   const m = measureText(draft.text, draft.size);
+  // Typed at the angle it will be read at. The box turns about the middle of
+  // the shape it is standing in for, which `typedBox` is the authority on —
+  // on short bare text the textarea is the wider of the two.
+  const shape = typedBox({ tool: draft.tool, text: draft.text, width: draft.size });
   // Typing into a callout should look like the callout: white on the darkened
   // tint, inside the lit edge. Committing then changes nothing you can see,
   // which is the whole point of styling the box to match the shape.
@@ -1596,6 +1752,8 @@ function TextBox({
       style={{
         left: draft.at.x,
         top: draft.at.y,
+        transform: draft.angle ? `rotate(${draft.angle}deg)` : undefined,
+        transformOrigin: `${shape.width / 2}px ${shape.height / 2}px`,
         color: neon ? paint.ink : draft.color,
         font: fontFor(draft.size),
         lineHeight: 1.3,

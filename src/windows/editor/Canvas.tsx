@@ -2,12 +2,24 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react
 import { listen } from "@tauri-apps/api/event";
 import clsx from "clsx";
 import {
+  angleFrom,
   calloutLayout,
   CALLOUT_PADDING,
+  centreOf,
   contrastInk,
   FREEHAND_MIN_STEP,
+  handleAnchor,
+  holdsHeight,
+  holdsWidth,
   measureText,
+  normalizeAngle,
+  resizedBox,
+  respunBox,
+  rotatePoint,
+  snapTurn,
   stepRadius,
+  unspun,
+  unspunBox,
   wrapText,
 } from "@/lib/shapes";
 import {
@@ -26,6 +38,7 @@ import {
   type BoxKind,
   type Point,
   type Rect,
+  angleOf,
   boundsOf,
   isBox,
   isImage,
@@ -42,7 +55,11 @@ import { AnnotationLayer, type HandleId } from "./AnnotationLayer";
 type Drag =
   | { kind: "create"; id: string; origin: Point }
   | { kind: "move"; ids: string[]; origin: Point; snapshot: Annotation[] }
-  | { kind: "resize"; id: string; handle: HandleId; snapshot: Annotation }
+  | { kind: "resize"; id: string; handle: Exclude<HandleId, "rotate">; snapshot: Annotation }
+  // `grab` is how far the pointer already led the shape when the grip was
+  // taken, so the shape turns with the hand instead of snapping its top edge
+  // under it on the first pixel of the drag.
+  | { kind: "rotate"; id: string; grab: number; snapshot: Annotation }
   | { kind: "crop"; origin: Point }
   | { kind: "grab"; origin: Point };
 
@@ -61,9 +78,17 @@ const CALLOUT_MIN = { width: 160, height: 56 };
  */
 function fitCallout(a: Annotation): Annotation {
   if (a.kind !== "callout" || !isBox(a)) return a;
-  const box = boundsOf(a);
-  const { needed } = calloutLayout(a.text ?? "", a.style.fontSize, box.width);
-  return { ...a, x: box.x, y: box.y, width: box.width, height: Math.max(box.height, needed) };
+  const deg = angleOf(a);
+  const { needed } = calloutLayout(a.text ?? "", a.style.fontSize, boundsOf(a).width);
+  // Grown in unspun space, where "down" is the callout's own down and holding
+  // x and y holds its top edge. Growing a turned box in place would move its
+  // centre, and a turned shape hangs off its centre — so the box would swing
+  // as it grew, which is not what rewrapping a line of text should look like.
+  const box = unspunBox(boundsOf(a), deg);
+  return {
+    ...a,
+    ...respunBox({ ...box, height: Math.max(box.height, needed) }, deg),
+  };
 }
 const PAD = 48;
 
@@ -460,6 +485,18 @@ export function Canvas({ onNotify, actions, onScan }: CanvasProps) {
     if (!target) return;
 
     store.snapshot();
+
+    if (handle === "rotate") {
+      const centre = centreOf(boundsOf(target));
+      drag.current = {
+        kind: "rotate",
+        id,
+        grab: angleFrom(centre, toDoc(e)) - angleOf(target),
+        snapshot: target,
+      };
+      return;
+    }
+
     drag.current = { kind: "resize", id, handle, snapshot: target };
   };
 
@@ -567,7 +604,10 @@ export function Canvas({ onNotify, actions, onScan }: CanvasProps) {
       case "resize": {
         const original = active.snapshot;
 
-        if (isLine(original)) {
+        // The two ends of a line are the only handles that are not on a box,
+        // and a line is the only shape that has them.
+        if (active.handle === "start" || active.handle === "end") {
+          if (!isLine(original)) break;
           const end = e.shiftKey
             ? snapAngle(
                 active.handle === "start" ? { x: original.x2, y: original.y2 } : { x: original.x1, y: original.y1 },
@@ -581,31 +621,37 @@ export function Canvas({ onNotify, actions, onScan }: CanvasProps) {
           break;
         }
 
-        const b = boundsOf(original);
-        // Anchor is the corner diagonally opposite the one being dragged.
-        const anchor = {
-          x: active.handle === "nw" || active.handle === "sw" ? b.x + b.width : b.x,
-          y: active.handle === "nw" || active.handle === "ne" ? b.y + b.height : b.y,
-        };
-        const end = e.shiftKey ? snapSquare(anchor, point) : point;
-        const box = {
-          x: Math.min(anchor.x, end.x),
-          y: Math.min(anchor.y, end.y),
-          width: Math.abs(end.x - anchor.x),
-          height: Math.abs(end.y - anchor.y),
-        };
+        const handle = active.handle;
+        const deg = angleOf(original);
+        // Everything from here happens in unspun space, where the shape is
+        // square to the axes again and this is the corner-drag arithmetic it
+        // always was. Only the way in and the way back out know about angles.
+        const local = boundsOf(original);
+        const b = unspunBox(local, deg);
+        const anchor = handleAnchor(b, handle);
+        const to = unspun(point, deg);
+        // Shift squares the shape, which only means anything on a corner: a
+        // side handle is already holding one axis still.
+        const corner = !holdsWidth(handle) && !holdsHeight(handle);
+        const asked = resizedBox(b, handle, anchor, e.shiftKey && corner ? snapSquare(anchor, to) : to);
+        const box = respunBox(asked, deg);
+        // The shape turns about its own centre and the resize just moved that
+        // centre; this is the nudge that puts the dragged edge back under the
+        // pointer. Anything positioned alongside the box takes it too.
+        const back = { x: box.x - asked.x, y: box.y - asked.y };
 
         if (isPen(original)) {
           // A scribble has no width and height of its own, so it is fitted into
           // the new box instead: every sample keeps its position within the
           // stroke. A flat stroke keeps its axis rather than collapsing to a
           // point it could never be dragged back out of.
-          const sx = b.width < 0.5 ? 1 : box.width / b.width;
-          const sy = b.height < 0.5 ? 1 : box.height / b.height;
+          const sx = b.width < 0.5 ? 1 : asked.width / b.width;
+          const sy = b.height < 0.5 ? 1 : asked.height / b.height;
+          const skew = { x: b.x - local.x, y: b.y - local.y };
           store.update(active.id, {
             points: original.points.map((p) => ({
-              x: box.x + (p.x - b.x) * sx,
-              y: box.y + (p.y - b.y) * sy,
+              x: asked.x + (p.x + skew.x - b.x) * sx + back.x,
+              y: asked.y + (p.y + skew.y - b.y) * sy + back.y,
             })),
           });
           break;
@@ -615,11 +661,35 @@ export function Canvas({ onNotify, actions, onScan }: CanvasProps) {
         // mistake, and there is no reason to want one. Shift is already taken
         // by the square snap above, so distorting is simply not offered.
         if (isImage(original)) {
-          store.update(active.id, fitToBox(original, box, anchor));
+          const fitted = fitToBox(original, asked, anchor);
+          // Holding the ratio means a side drag grows the other axis as well,
+          // and it has to grow both ways from the middle or the picture walks
+          // sideways as it is pulled.
+          if (holdsWidth(handle)) fitted.x = anchor.x - fitted.width / 2;
+          if (holdsHeight(handle)) fitted.y = anchor.y - fitted.height / 2;
+          store.update(active.id, {
+            ...fitted,
+            x: fitted.x + back.x,
+            y: fitted.y + back.y,
+          });
           break;
         }
 
         if (isBox(original)) store.update(active.id, box);
+        break;
+      }
+
+      case "rotate": {
+        const centre = centreOf(boundsOf(active.snapshot));
+        // Deliberately the raw point rather than the clamped one: the grip
+        // swings well outside the capture at any angle off the vertical, and
+        // clamping it would stick the shape at the edge of the page.
+        let deg = angleFrom(centre, toDoc(e)) - active.grab;
+        // `grab` already carries the shape's own angle, so what comes out here
+        // is where it ends up rather than how far it has come — and that is
+        // what Shift lands on a right angle.
+        if (e.shiftKey) deg = snapTurn(0, deg);
+        store.update(active.id, { angle: normalizeAngle(deg) });
         break;
       }
     }
@@ -706,7 +776,10 @@ export function Canvas({ onNotify, actions, onScan }: CanvasProps) {
     const hit = [...annotations].reverse().find((a) => {
       if (a.kind !== "text" && a.kind !== "callout") return false;
       const b = boundsOf(a);
-      const p = toDoc(e);
+      // Asked of the shape as it is stored, with the click turned back the
+      // same way — a box tested against a spun shape would catch clicks off
+      // its corners and miss ones squarely on it.
+      const p = rotatePoint(toDoc(e), centreOf(b), -angleOf(a));
       return p.x >= b.x && p.x <= b.x + b.width && p.y >= b.y && p.y <= b.y + b.height;
     });
     if (hit) setEditingId(hit.id);
@@ -931,6 +1004,15 @@ export function Canvas({ onNotify, actions, onScan }: CanvasProps) {
               value={editing.text ?? ""}
               x={boundsOf(editing).x * zoom}
               y={boundsOf(editing).y * zoom}
+              // Typed at the angle it will be read at. The box is turned about
+              // its own centre in both renderers, so the origin here is the
+              // middle of the box rather than of the textarea, which on bare
+              // text is not quite the same rectangle.
+              spin={{
+                deg: angleOf(editing),
+                originX: (boundsOf(editing).width / 2) * zoom,
+                originY: (boundsOf(editing).height / 2) * zoom,
+              }}
               // On a callout the words sit on the fill, so they take the same
               // automatic ink the drawn shape would — typing has to look like
               // the result, or committing is a jump-cut.
@@ -1108,6 +1190,7 @@ function TextEditor({
   color,
   fontSize,
   box,
+  spin,
   onChange,
   onCommit,
 }: {
@@ -1118,6 +1201,8 @@ function TextEditor({
   fontSize: number;
   /** Set for a callout, whose text is bound to a box already on screen. */
   box?: { width: number; height: number; padding: number };
+  /** How far the shape is turned, and about which point of this element. */
+  spin: { deg: number; originX: number; originY: number };
   onChange: (v: string) => void;
   onCommit: () => void;
 }) {
@@ -1227,6 +1312,8 @@ function TextEditor({
       style={{
         left: x,
         top: y,
+        transform: spin.deg ? `rotate(${spin.deg}deg)` : undefined,
+        transformOrigin: `${spin.originX}px ${spin.originY}px`,
         color,
         font: `600 ${fontSize}px -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif`,
         lineHeight: 1.3,

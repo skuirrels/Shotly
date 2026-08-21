@@ -3,10 +3,14 @@ import {
   arrowPolygon,
   calloutBaselines,
   calloutLayout,
+  centreOf,
   contrastInk,
   FONT_STACK,
   fontFor,
   freehandPath,
+  HANDLE_SPECS,
+  type HandleName,
+  handlePoint,
   measureGeometry,
   measureText,
   neonBorderForFont,
@@ -14,10 +18,13 @@ import {
   neonRadius,
   rectRadius,
   polygonToPath,
+  resizeCursor,
+  spinTransform,
+  spunCorners,
   stepFontSize,
   TEXT_PADDING,
 } from "@/lib/shapes";
-import { type Annotation, boundsOf, isLine, isPen, isStep } from "@/lib/types";
+import { type Annotation, angleOf, boundsOf, canRotate, isLine, isPen, isStep } from "@/lib/types";
 import type { Doc } from "@/state/editorStore";
 
 interface Props {
@@ -32,7 +39,22 @@ interface Props {
   onHandlePointerDown: (e: React.PointerEvent, id: string, handle: HandleId) => void;
 }
 
-export type HandleId = "nw" | "ne" | "sw" | "se" | "start" | "end";
+/**
+ * What a drag of a piece of selection chrome means.
+ *
+ * The eight around the box resize it; `start` and `end` are a line's two ends,
+ * which is what a line has instead; `rotate` is the grip that floats above the
+ * top edge.
+ */
+export type HandleId = HandleName | "start" | "end" | "rotate";
+
+/**
+ * How far above the box the rotate grip sits, in on-screen pixels.
+ *
+ * Far enough to be clear of the corner handles at any size, and close enough
+ * that it reads as belonging to the shape rather than floating near it.
+ */
+const GRIP_REACH = 26;
 
 /**
  * Renders annotations as SVG in document pixel space.
@@ -80,7 +102,17 @@ export function AnnotationLayer({
                 <feGaussianBlur stdDeviation={a.style.blurRadius} />
               </filter>
               <clipPath id={`clip-${a.id}`}>
-                <rect x={b.x} y={b.y} width={b.width} height={b.height} rx={2} />
+                {/* The clip turns; the picture it exposes does not. Blurring
+                    is a look at the pixels underneath, and those stay where
+                    they are however the region over them is angled. */}
+                <rect
+                  x={b.x}
+                  y={b.y}
+                  width={b.width}
+                  height={b.height}
+                  rx={2}
+                  transform={spinTransform(angleOf(a), centreOf(b))}
+                />
               </clipPath>
             </Fragment>
           );
@@ -94,6 +126,10 @@ export function AnnotationLayer({
           // which one it hit, without the canvas having to re-run hit-testing
           // the browser has already done.
           data-annotation={a.id}
+          // Spun here, once, for every shape that is wholly its own — which
+          // is all of them but the two that reach outside their box. See
+          // `spinsItself`.
+          transform={spinsItself(a) ? undefined : spinTransform(angleOf(a), centreOf(boundsOf(a)))}
           onPointerDown={(e) => onShapePointerDown(e, a.id)}
           style={{ cursor: shapeCursor }}
         >
@@ -132,6 +168,16 @@ function glow(style: Annotation["style"]): string {
     `drop-shadow(0 0 ${paint.glow * 2}px ${style.color})`
   );
 }
+
+/**
+ * The two shapes that cannot simply be turned as a whole.
+ *
+ * Both reach outside their own box — the blur samples the picture underneath
+ * it, the spotlight darkens everything around it — and spinning the group
+ * would take that reach with it: a blur showing tilted pixels, a scrim tilted
+ * off the corners of the capture. Each turns only the part that is its own.
+ */
+const spinsItself = (a: Annotation) => a.kind === "blur" || a.kind === "spotlight";
 
 function Shape({ a, doc, hidden }: { a: Annotation; doc: Doc; hidden: boolean }) {
   // `hidden` means "the text editor is standing in for this one". For a plain
@@ -374,12 +420,15 @@ function Shape({ a, doc, hidden }: { a: Annotation; doc: Doc; hidden: boolean })
 
     case "spotlight": {
       const { width: w, height: h } = doc.crop;
+      const deg = angleOf(a);
       return (
         <>
           {/* Two subpaths and the even-odd rule: the outer covers the capture,
-              the inner punches the lit region out of it. */}
+              the inner punches the lit region out of it. The hole is written
+              out corner by corner rather than as a rectangle so it can be the
+              turned one while the cover stays square to the capture. */}
           <path
-            d={`M0 0H${w}V${h}H0Z M${b.x} ${b.y}H${b.x + b.width}V${b.y + b.height}H${b.x}Z`}
+            d={`M0 0H${w}V${h}H0Z ${polygonToPath(spunCorners(b, deg))}`}
             fillRule="evenodd"
             fill="#000"
             fillOpacity={a.style.dim ?? 0.55}
@@ -391,15 +440,17 @@ function Shape({ a, doc, hidden }: { a: Annotation; doc: Doc; hidden: boolean })
           />
           {/* The rim is the grab handle, as a fat invisible stroke — the same
               trick that makes hairline arrows selectable. */}
-          <rect
-            x={b.x}
-            y={b.y}
-            width={b.width}
-            height={b.height}
-            fill="none"
-            stroke="transparent"
-            strokeWidth={14}
-          />
+          <g transform={spinTransform(deg, centreOf(b))}>
+            <rect
+              x={b.x}
+              y={b.y}
+              width={b.width}
+              height={b.height}
+              fill="none"
+              stroke="transparent"
+              strokeWidth={14}
+            />
+          </g>
         </>
       );
     }
@@ -527,9 +578,14 @@ function SelectionChrome({
 
   const b = boundsOf(a);
   const inset = px(3);
+  const deg = angleOf(a);
+  // The whole frame turns with the shape, so the handle on an edge is still on
+  // that edge however far round it has been taken — which is what lets the
+  // resize pull along the shape's own axes rather than the screen's.
+  const grip = { x: b.x + b.width / 2, y: b.y - inset - px(GRIP_REACH) };
 
   return (
-    <g>
+    <g transform={spinTransform(deg, centreOf(b))}>
       <rect
         x={b.x - inset}
         y={b.y - inset}
@@ -543,25 +599,42 @@ function SelectionChrome({
       />
       {isStep(a) ? null : (
         <>
-          <Handle x={b.x} y={b.y} zoom={zoom} onDown={(e) => onHandlePointerDown(e, a.id, "nw")} />
-          <Handle
-            x={b.x + b.width}
-            y={b.y}
-            zoom={zoom}
-            onDown={(e) => onHandlePointerDown(e, a.id, "ne")}
-          />
-          <Handle
-            x={b.x}
-            y={b.y + b.height}
-            zoom={zoom}
-            onDown={(e) => onHandlePointerDown(e, a.id, "sw")}
-          />
-          <Handle
-            x={b.x + b.width}
-            y={b.y + b.height}
-            zoom={zoom}
-            onDown={(e) => onHandlePointerDown(e, a.id, "se")}
-          />
+          {HANDLE_SPECS.map((h) => {
+            const at = handlePoint(b, h.id);
+            return (
+              <Handle
+                key={h.id}
+                x={at.x}
+                y={at.y}
+                zoom={zoom}
+                cursor={resizeCursor(h.id, deg)}
+                onDown={(e) => onHandlePointerDown(e, a.id, h.id)}
+              />
+            );
+          })}
+          {canRotate(a) && (
+            <>
+              {/* A stalk up to the grip, so it reads as attached to the shape
+                  rather than as a stray dot near it. */}
+              <line
+                x1={grip.x}
+                y1={b.y - inset}
+                x2={grip.x}
+                y2={grip.y}
+                stroke="var(--color-accent)"
+                strokeWidth={px(1)}
+                pointerEvents="none"
+              />
+              <Handle
+                x={grip.x}
+                y={grip.y}
+                zoom={zoom}
+                cursor="grab"
+                fill="#22c55e"
+                onDown={(e) => onHandlePointerDown(e, a.id, "rotate")}
+              />
+            </>
+          )}
         </>
       )}
     </g>
@@ -572,19 +645,30 @@ function Handle({
   x,
   y,
   zoom,
+  cursor,
+  fill = "var(--color-accent)",
   onDown,
 }: {
   x: number;
   y: number;
   zoom: number;
+  cursor?: string;
+  fill?: string;
   onDown: (e: React.PointerEvent) => void;
 }) {
   const r = 4.5 / zoom;
   return (
     <>
-      <circle cx={x} cy={y} r={r} fill="var(--color-accent)" stroke="#fff" strokeWidth={1.5 / zoom} />
+      <circle cx={x} cy={y} r={r} fill={fill} stroke="#fff" strokeWidth={1.5 / zoom} />
       {/* Generous invisible hit area — the visible dot is too small to grab. */}
-      <circle cx={x} cy={y} r={r * 2.6} fill="transparent" onPointerDown={onDown} />
+      <circle
+        cx={x}
+        cy={y}
+        r={r * 2.6}
+        fill="transparent"
+        style={cursor ? { cursor } : undefined}
+        onPointerDown={onDown}
+      />
     </>
   );
 }

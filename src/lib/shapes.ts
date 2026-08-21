@@ -1,4 +1,5 @@
-import type { LineAnnotation, Point, StepAnnotation, Style } from "./types";
+import { type Annotation, angleOf, boundsOf } from "./types";
+import type { LineAnnotation, Point, Rect, StepAnnotation, Style } from "./types";
 
 /**
  * Geometry shared by the SVG renderer (screen) and the Canvas2D renderer
@@ -469,4 +470,243 @@ export function measureGeometry(a: LineAnnotation, scale: number): MeasureGeomet
     },
     fontSize,
   };
+}
+
+// --------------------------------------------------------------- rotation
+
+/**
+ * How annotations are turned.
+ *
+ * A shape is *stored* square to the axes and spun about its own centre when it
+ * is drawn — one number on the shape rather than rotated geometry. Everything
+ * that already worked on boxes and points keeps working untouched: the stored
+ * width of a rectangle is still its width, text still wraps to a horizontal
+ * line length, and a callout laid out at 30° is laid out exactly as it would
+ * be at 0°. Only the last step before ink differs, and both renderers take it
+ * — `rotate()` in SVG, `ctx.rotate` on the canvas.
+ *
+ * Rotating about the centre, specifically, is what makes it free: the centre
+ * is the one point a rotation does not move, so a spun shape still has the
+ * position it is stored with and dragging it is still a translation.
+ */
+
+/** Rotation snaps to this many degrees while Shift is held. */
+export const ROTATE_STEP = 15;
+
+const ORIGIN: Point = { x: 0, y: 0 };
+
+export interface Box {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+export const centreOf = (b: Box): Point => ({
+  x: b.x + b.width / 2,
+  y: b.y + b.height / 2,
+});
+
+/** Turn a point `deg` degrees clockwise about another. */
+export function rotatePoint(p: Point, about: Point, deg: number): Point {
+  if (!deg) return p;
+  const r = (deg * Math.PI) / 180;
+  const cos = Math.cos(r);
+  const sin = Math.sin(r);
+  const dx = p.x - about.x;
+  const dy = p.y - about.y;
+  return {
+    x: about.x + dx * cos - dy * sin,
+    y: about.y + dx * sin + dy * cos,
+  };
+}
+
+/** The SVG transform that spins a shape in place — nothing at all at 0°. */
+export function spinTransform(deg: number, centre: Point): string | undefined {
+  return deg ? `rotate(${deg} ${centre.x} ${centre.y})` : undefined;
+}
+
+/** The four corners of a box once it has been spun, clockwise from top-left. */
+export function spunCorners(b: Box, deg: number): Point[] {
+  const c = centreOf(b);
+  return [
+    { x: b.x, y: b.y },
+    { x: b.x + b.width, y: b.y },
+    { x: b.x + b.width, y: b.y + b.height },
+    { x: b.x, y: b.y + b.height },
+  ].map((p) => rotatePoint(p, c, deg));
+}
+
+/**
+ * What a spun box actually covers.
+ *
+ * Wider and taller than the box itself at every angle but a right one — which
+ * is the point: a crop that has to hold a shape has to hold where the shape
+ * *is*, not where its unrotated twin would be.
+ */
+export function spunBounds(b: Box, deg: number): Box {
+  if (!deg) return { x: b.x, y: b.y, width: b.width, height: b.height };
+  const xs = spunCorners(b, deg).map((p) => p.x);
+  const ys = spunCorners(b, deg).map((p) => p.y);
+  const x = Math.min(...xs);
+  const y = Math.min(...ys);
+  return { x, y, width: Math.max(...xs) - x, height: Math.max(...ys) - y };
+}
+
+/**
+ * Where an annotation really lands, once it has been turned.
+ *
+ * `boundsOf` is the shape's own box, which is what resizing, wrapping and
+ * hit-testing all work in. This is the room it takes up on the page, which is
+ * what cropping and fitting need — at any angle but a right one the two differ.
+ */
+export function spunBoundsOf(a: Annotation): Rect {
+  return spunBounds(boundsOf(a), angleOf(a)) as Rect;
+}
+
+/** Fold an angle into (-180, 180], so turning round and round never drifts. */
+export function normalizeAngle(deg: number): number {
+  const wrapped = ((deg % 360) + 360) % 360;
+  return wrapped > 180 ? wrapped - 360 : wrapped;
+}
+
+/**
+ * Where Shift lands a turn.
+ *
+ * On the angle the shape ends up at, not on how far the hand has moved it —
+ * so Shift finds true upright and true square, rather than fifteen degrees
+ * from wherever the shape happened to be already.
+ */
+export const snapTurn = (from: number, by: number): number =>
+  Math.round((from + by) / ROTATE_STEP) * ROTATE_STEP - from;
+
+/** Which way `p` lies from `centre`, in degrees clockwise from straight up. */
+export function angleFrom(centre: Point, p: Point): number {
+  return (Math.atan2(p.y - centre.y, p.x - centre.x) * 180) / Math.PI + 90;
+}
+
+/**
+ * Resizing something that has been spun, without any new arithmetic.
+ *
+ * Dragging a corner of a turned shape is the same drag it always was, seen
+ * from a room tilted the other way. `unspun` takes a point — or a box — into
+ * that room, where the shape is square to the axes again and the ordinary
+ * anchor-and-opposite-corner maths applies exactly as written. `respun` takes
+ * the answer back out.
+ *
+ * The two are inverses, and the corner under the pointer is what they hold
+ * fixed: a shape spins about its own centre, so a resize that moves the centre
+ * would swing the whole shape out from under the hand without this.
+ */
+export const unspun = (p: Point, deg: number): Point => rotatePoint(p, ORIGIN, -deg);
+
+export function unspunBox<T extends Box>(b: T, deg: number): T {
+  const c = centreOf(b);
+  const m = unspun(c, deg);
+  return { ...b, x: b.x + m.x - c.x, y: b.y + m.y - c.y };
+}
+
+export function respunBox<T extends Box>(b: T, deg: number): T {
+  const m = centreOf(b);
+  const c = rotatePoint(m, ORIGIN, deg);
+  return { ...b, x: b.x + c.x - m.x, y: b.y + c.y - m.y };
+}
+
+/**
+ * The eight resize handles, and the rotate grip that floats above them.
+ *
+ * Corners scale both ways; the four on the flat sides scale one. `anchor` is
+ * the fraction of the box that must not move while this handle is dragged —
+ * the opposite corner for a corner, the opposite edge for a side, where 0.5
+ * means "this axis is not being resized at all".
+ */
+export type HandleAxis = 0 | 0.5 | 1;
+
+export interface HandleSpec {
+  id: string;
+  /** Where on the box it sits, as a fraction of width and height. */
+  at: readonly [HandleAxis, HandleAxis];
+}
+
+export const HANDLE_SPECS = [
+  { id: "nw", at: [0, 0] },
+  { id: "n", at: [0.5, 0] },
+  { id: "ne", at: [1, 0] },
+  { id: "e", at: [1, 0.5] },
+  { id: "se", at: [1, 1] },
+  { id: "s", at: [0.5, 1] },
+  { id: "sw", at: [0, 1] },
+  { id: "w", at: [0, 0.5] },
+] as const satisfies readonly HandleSpec[];
+
+export type HandleName = (typeof HANDLE_SPECS)[number]["id"];
+
+const HANDLE_AT = new Map<string, readonly [HandleAxis, HandleAxis]>(
+  HANDLE_SPECS.map((h) => [h.id, h.at]),
+);
+
+/** Where a handle sits on a box, before the box is spun. */
+export function handlePoint(b: Box, handle: HandleName): Point {
+  const [fx, fy] = HANDLE_AT.get(handle) ?? [1, 1];
+  return { x: b.x + b.width * fx, y: b.y + b.height * fy };
+}
+
+/**
+ * The point a drag of this handle must leave where it is.
+ *
+ * For a corner that is the opposite corner. For a side it is the opposite
+ * edge, and the other axis is pinned to the centre — which is what stops a
+ * top-edge drag from also sliding the shape sideways.
+ */
+export function handleAnchor(b: Box, handle: HandleName): Point {
+  const [fx, fy] = HANDLE_AT.get(handle) ?? [0, 0];
+  return {
+    x: b.x + b.width * (fx === 0.5 ? 0.5 : 1 - fx),
+    y: b.y + b.height * (fy === 0.5 ? 0.5 : 1 - fy),
+  };
+}
+
+/** True where dragging this handle must not touch that axis at all. */
+export const holdsWidth = (handle: HandleName) => handle === "n" || handle === "s";
+export const holdsHeight = (handle: HandleName) => handle === "e" || handle === "w";
+
+/**
+ * The box a handle drag asks for.
+ *
+ * Written once because both the editor and the live overlay resize the same
+ * way, and a side handle that behaved differently in the two would be a bug
+ * nobody could describe. Every coordinate here is in unspun space — see
+ * `unspun` — so this is the same arithmetic it always was.
+ */
+export function resizedBox(
+  before: Box,
+  handle: HandleName,
+  anchor: Point,
+  to: Point,
+): Box {
+  // A side handle leaves its other axis exactly as it found it: the anchor is
+  // pinned to the centre there, so measuring from it would halve the shape.
+  const x0 = holdsWidth(handle) ? before.x : Math.min(anchor.x, to.x);
+  const x1 = holdsWidth(handle) ? before.x + before.width : Math.max(anchor.x, to.x);
+  const y0 = holdsHeight(handle) ? before.y : Math.min(anchor.y, to.y);
+  const y1 = holdsHeight(handle) ? before.y + before.height : Math.max(anchor.y, to.y);
+  return { x: x0, y: y0, width: x1 - x0, height: y1 - y0 };
+}
+
+const RESIZE_CURSORS = ["ns-resize", "nesw-resize", "ew-resize", "nwse-resize"];
+
+/**
+ * The cursor for a handle, once the shape it belongs to has been turned.
+ *
+ * A shape lying on its side wants its top handle to say "this stretches
+ * sideways", because it does. Rounded to the nearest 45° — the four cursors
+ * macOS actually has — and taken modulo 180°, since a resize arrow is the same
+ * arrow whichever end you read it from.
+ */
+export function resizeCursor(handle: HandleName, deg: number): string {
+  const [fx, fy] = HANDLE_AT.get(handle) ?? [1, 1];
+  // Which way the handle points out of the box, as an angle.
+  const base = angleFrom(ORIGIN, { x: fx - 0.5, y: fy - 0.5 });
+  const turned = (((base + deg) % 180) + 180) % 180;
+  return RESIZE_CURSORS[Math.round(turned / 45) % 4];
 }

@@ -1129,6 +1129,57 @@ picking one switches neon on: a swatch that shows you a lit chip and then draws
 a flat box is the picker lying about what it does. They carry no ⌘-digit
 shortcuts, which stay with the original nine.
 
+## Turning shapes — one number, and a room tilted the other way
+
+A shape carries an `angle` and nothing else. Its geometry stays square to the
+axes and the turn happens at draw time, about the shape's **own centre** —
+`rotate()` on a group in SVG, `ctx.rotate` on the canvas. That one decision is
+why rotation cost so little: the stored width of a rectangle is still its
+width, text still wraps to a horizontal line length, a callout laid out at 30°
+is laid out exactly as it would be at 0°, and dragging a turned shape is still
+a translation, because the centre is the one point a rotation does not move.
+
+Resizing is where it would have got expensive, and doesn't. A corner drag on a
+turned shape is the same drag it always was, seen from a room tilted the other
+way: `unspun` takes the pointer there, `unspunBox` takes the shape, the
+ordinary anchor-and-opposite-corner arithmetic runs untouched, and `respunBox`
+takes the answer back. What the last step is really doing is holding the corner
+under the pointer still — the shape hangs off its centre, and a resize moves
+that centre, so without it a turned shape swings out from under the hand, more
+the further round it is. `spin.test.ts` pins exactly that: drag a corner of a
+33° box and both the dragged corner and the anchor land where they should.
+
+The frame and all eight handles turn with the shape, which is the point of the
+side ones: on a shape lying on its side, the handle on its top edge stretches
+it sideways on screen, because that is its top edge. The cursor is rounded to
+the nearest of the four macOS resize arrows for the same reason.
+
+**Two shapes cannot be turned as a whole**, and both fail the same way — by
+reaching outside their own box. The blur samples the picture underneath it, so
+its *window* tilts while its pixels stay where they are: the transform goes on
+the clip path, not the group, and on the canvas the context turns, sets the
+clip, and turns back before the image goes down. The spotlight darkens
+everything around it, so its cover has to stay square to the capture while the
+hole leans: the hole is written out corner by corner instead of as a rectangle.
+`spinsItself` in `AnnotationLayer` names them; `withSpin` in `export.ts` skips
+the same two. Get this wrong and it looks like a rendering bug in the blur
+rather than a rotation one.
+
+Lines and numbered steps do not turn. A line is already pointed wherever its
+ends are, and turning a step would turn its number over; both say what they
+mean with the handles they have. See `canRotate`.
+
+In the live overlay a selection can hold several shapes, and a rigid turn of a
+group is each piece turned in place with its centre carried round the pivot —
+`spinStroke`, two lines, exactly that. The frame takes the selection's angle
+when they all agree on one and stands upright when they do not, because a pile
+of shapes lying at different angles has no direction that is "along" it.
+
+Markup version 10. An older build would ignore the angle and draw everything
+square to the page, which is the most literally different picture on that list.
+`harness/spin.html` has every turnable kind at an angle, with the exporter's
+version of the same shapes beside it.
+
 ## Window level and Spaces — the rule for every overlay
 
 A window created while a full-screen app is in front belongs to the **desktop**

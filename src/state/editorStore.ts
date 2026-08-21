@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import { type Backdrop, DEFAULT_BACKDROP, NO_BACKDROP } from "@/lib/backdrop";
 import { parse as parseMarkup } from "@/lib/markup";
+import { spunBoundsOf } from "@/lib/shapes";
 import { type OverlaySource, placeOverlay } from "@/lib/overlay";
 import { readColor, readNumber, readString, write } from "@/lib/prefs";
 import {
@@ -545,7 +546,9 @@ export const useEditor = create<EditorState>((set, get) => ({
     let x1 = width;
     let y1 = height;
     for (const a of s.annotations) {
-      const b = boundsOf(a);
+      // Where the shape lands rather than the box it is stored as: a canvas
+      // grown to hold a turned shape has to hold the corners it really has.
+      const b = spunBoundsOf(a);
       x0 = Math.min(x0, b.x);
       y0 = Math.min(y0, b.y);
       x1 = Math.max(x1, b.x + b.width);
@@ -747,7 +750,7 @@ export const useEditor = create<EditorState>((set, get) => ({
       if (!s.doc) return {};
       const shifted = s.annotations
         .filter((a) => {
-          const b = boundsOf(a);
+          const b = spunBoundsOf(a);
           return (
             b.x + b.width > rect.x &&
             b.y + b.height > rect.y &&

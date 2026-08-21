@@ -229,6 +229,15 @@ export interface Style {
 interface AnnotationBase {
   id: string;
   style: Style;
+  /**
+   * How far the shape is turned, in degrees clockwise about its own centre.
+   *
+   * Absent on everything drawn before rotation existed, and on everything
+   * still square to the page — which is why it is optional rather than a 0
+   * written into every annotation ever saved. See the rotation section of
+   * `lib/shapes` for why the geometry stays unrotated underneath it.
+   */
+  angle?: number;
 }
 
 /** All geometry is in *image pixel* space, so annotations stay pinned to the
@@ -322,6 +331,20 @@ export function isPen(a: Annotation): a is PenAnnotation {
 export function isImage(a: Annotation): a is ImageAnnotation {
   return a.kind === "image";
 }
+
+/**
+ * Which shapes can be turned.
+ *
+ * A line is already pointed wherever its ends are, and turning a numbered step
+ * would only turn its number over — both have handles that say what they mean
+ * instead. Everything positioned by a box, and freehand, can be spun.
+ */
+export function canRotate(a: Annotation): boolean {
+  return isRectangular(a) || isPen(a);
+}
+
+/** How far a shape is turned; nothing saved before rotation is. */
+export const angleOf = (a: Annotation): number => (canRotate(a) ? (a.angle ?? 0) : 0);
 
 /** Anything positioned by a rectangle, whatever else it may be. */
 export function isRectangular(a: Annotation): a is BoxAnnotation | ImageAnnotation {

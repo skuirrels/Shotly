@@ -3,6 +3,8 @@ import {
   arrowPolygon,
   calloutBaselines,
   calloutLayout,
+  centreOf,
+  spunCorners,
   neonBorderForFont,
   neonPaint,
   neonRadius,
@@ -16,7 +18,7 @@ import {
   stepFontSize,
   TEXT_PADDING,
 } from "./shapes";
-import { type Annotation, boundsOf, isBox, isImage, isLine, isPen, isStep } from "./types";
+import { type Annotation, type Point, angleOf, boundsOf, isBox, isImage, isLine, isPen, isStep } from "./types";
 import { type Doc, hasBareCanvas } from "@/state/editorStore";
 import {
   type Backdrop,
@@ -103,7 +105,11 @@ export async function renderToPng(
     const overlays = await decodeOverlays(annotations);
 
     for (const a of annotations) {
-      drawAnnotation(ctx, a, img, doc, overlays);
+      // Turned here, once, for every shape that is wholly its own — exactly
+      // as the preview turns it. The two that reach outside their own box
+      // turn only the part that is theirs; see `spinsItself` in
+      // `AnnotationLayer`, and the blur and spotlight cases below.
+      withSpin(ctx, a, () => drawAnnotation(ctx, a, img, doc, overlays));
     }
 
     return await canvasToPng(canvas);
@@ -256,6 +262,30 @@ function withShadow(ctx: CanvasRenderingContext2D, on: boolean, draw: () => void
     ctx.shadowBlur = SHADOW.blur * shadow;
     ctx.shadowOffsetY = SHADOW.offsetY * shadow;
   }
+  draw();
+  ctx.restore();
+}
+
+/** Turn the canvas about a point, in degrees, the way `rotate()` does in SVG. */
+function spinCtx(ctx: CanvasRenderingContext2D, centre: Point, deg: number) {
+  ctx.translate(centre.x, centre.y);
+  ctx.rotate((deg * Math.PI) / 180);
+  ctx.translate(-centre.x, -centre.y);
+}
+
+/**
+ * Draw a shape at the angle it is stored with.
+ *
+ * Around the whole draw rather than inside each case: every one of them is
+ * written in the shape's own square coordinates, and this is the single step
+ * that takes them to the page. The blur and the spotlight opt out and do their
+ * own turning, because neither is only what is inside its box.
+ */
+function withSpin(ctx: CanvasRenderingContext2D, a: Annotation, draw: () => void) {
+  const deg = angleOf(a);
+  if (!deg || a.kind === "blur" || a.kind === "spotlight") return draw();
+  ctx.save();
+  spinCtx(ctx, centreOf(boundsOf(a)), deg);
   draw();
   ctx.restore();
 }
@@ -428,11 +458,19 @@ function drawAnnotation(
       });
       break;
 
-    case "blur":
+    case "blur": {
+      const centre = centreOf(b);
       ctx.save();
+      // The clip turns; the picture it exposes does not. Blurring is a look at
+      // the pixels underneath, and those stay where they are however the
+      // region over them is angled — so the canvas goes back to square once
+      // the clip is set. Mirrors the SVG, where the transform sits on the clip
+      // path's rectangle rather than on the group.
+      spinCtx(ctx, centre, angleOf(a));
       ctx.beginPath();
       ctx.roundRect(b.x, b.y, b.width, b.height, 2);
       ctx.clip();
+      spinCtx(ctx, centre, -angleOf(a));
       // Redraw the whole image blurred, clipped to the region. Drawing the
       // full image (not just the region) means the blur samples real
       // neighbouring pixels instead of fading out at the edges.
@@ -443,6 +481,7 @@ function drawAnnotation(
       ctx.drawImage(img, -doc.crop.x, -doc.crop.y);
       ctx.restore();
       break;
+    }
 
     case "highlight":
       ctx.save();
@@ -453,18 +492,24 @@ function drawAnnotation(
       ctx.restore();
       break;
 
-    case "spotlight":
+    case "spotlight": {
       ctx.save();
       ctx.beginPath();
       // Outer subpath covers the capture, inner one punches out the lit
       // region; even-odd is what makes the second a hole rather than a
-      // second layer of darkness. Mirrors the SVG in `AnnotationLayer`.
+      // second layer of darkness. Mirrors the SVG in `AnnotationLayer`, down
+      // to the hole being drawn corner by corner: the cover stays square to
+      // the capture whatever angle the lit region is at.
       ctx.rect(0, 0, doc.crop.width, doc.crop.height);
-      ctx.rect(b.x, b.y, b.width, b.height);
+      const hole = spunCorners(b, angleOf(a));
+      ctx.moveTo(hole[0].x, hole[0].y);
+      for (const p of hole.slice(1)) ctx.lineTo(p.x, p.y);
+      ctx.closePath();
       ctx.fillStyle = `rgba(0,0,0,${a.style.dim ?? 0.55})`;
       ctx.fill("evenodd");
       ctx.restore();
       break;
+    }
 
     case "callout": {
       const layout = calloutLayout(a.text ?? "", a.style.fontSize, b.width);
