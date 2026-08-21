@@ -406,26 +406,38 @@ export function Canvas({ onNotify, actions, onScan }: CanvasProps) {
 
     e.preventDefault();
     e.stopPropagation();
-    el.setPointerCapture(e.pointerId);
-    pan.current = { x: e.clientX, y: e.clientY, left: el.scrollLeft, top: el.scrollTop };
+
+    const from = { x: e.clientX, y: e.clientY, left: el.scrollLeft, top: el.scrollTop };
+    pan.current = from;
     setPanning(true);
-  };
 
-  const onViewportPointerMove = (e: React.PointerEvent) => {
-    const from = pan.current;
-    const el = viewport.current;
-    if (!from || !el) return;
-    // The canvas follows the hand, so the scroll goes the other way.
-    el.scrollLeft = from.left - (e.clientX - from.x);
-    el.scrollTop = from.top - (e.clientY - from.y);
-  };
+    // Listeners on the window rather than `setPointerCapture` on this element,
+    // and that is the whole of the bug this replaced: capture on a *scroll
+    // container* is not something to rely on. The pointer is being used to
+    // change the very thing it is captured by, and a pan that outruns the
+    // scroll leaves the pointer over a different element mid-gesture. The pin
+    // window learned the same lesson about AppKit's drag loop — see `PinApp`.
+    //
+    // The window also keeps the drag alive past the edge of the pane, which is
+    // exactly where a pan wants to end up.
+    const move = (m: PointerEvent) => {
+      // The canvas follows the hand, so the scroll goes the other way.
+      el.scrollLeft = from.left - (m.clientX - from.x);
+      el.scrollTop = from.top - (m.clientY - from.y);
+    };
+    // Deliberately not ended by letting go of space: a pan that stopped
+    // halfway because a thumb lifted early would be its own small annoyance.
+    const up = () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+      window.removeEventListener("pointercancel", up);
+      pan.current = null;
+      setPanning(false);
+    };
 
-  // Deliberately not ended by letting go of space: a pan that stopped halfway
-  // because a thumb lifted early would be its own small annoyance.
-  const endPan = () => {
-    if (!pan.current) return;
-    pan.current = null;
-    setPanning(false);
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+    window.addEventListener("pointercancel", up);
   };
 
   // The hover cursor has to say which gesture Alt is about to produce — the
@@ -1242,9 +1254,6 @@ export function Canvas({ onNotify, actions, onScan }: CanvasProps) {
       )}
       style={{ cursor: hand ?? undefined }}
       onPointerDownCapture={onViewportPointerDown}
-      onPointerMove={onViewportPointerMove}
-      onPointerUp={endPan}
-      onPointerCancel={endPan}
     >
       <div className="flex min-h-full min-w-full items-center justify-center" style={{ padding: PAD }}>
         <div
