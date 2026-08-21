@@ -1689,7 +1689,10 @@ export function EditorApp() {
         id: "export.reveal",
         title: nouns.revealLast,
         group: "Export",
-        shortcut: "Mod+Shift+R",
+        // ⌥⌘R rather than the ⇧⌘R this had: recording claims that one, and
+        // registration order decides, so this command had never once fired
+        // from the keyboard. ⌥⌘R is what VS Code puts Reveal in Finder on.
+        shortcut: "Mod+Alt+R",
         enabled: () => saved !== null,
         run: () => saved && void ipc.revealInFinder(saved),
       },

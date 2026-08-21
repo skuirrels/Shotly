@@ -8,6 +8,12 @@ The release notes on GitHub and the "what's new" text the in-app updater shows
 are both taken from this file — see `docs/RELEASING.md`. A version with nothing
 written here cannot be published.
 
+## Unreleased
+
+- **Reveal in Finder has a shortcut that works.** It was on ⇧⌘R, which
+  recording already had, so it had never once fired from the keyboard. It is
+  ⌥⌘R now.
+
 ## 0.12.0 — 2026-08-21
 
 - **Arrows bend.** Drag the grip in the middle of an arrow or line to bow it
