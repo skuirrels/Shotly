@@ -120,24 +120,60 @@ export function rerouted(annotations: Annotation[]): Annotation[] {
 }
 
 /**
+ * How close an end has to come, in screen pixels, for a shape to catch it.
+ *
+ * There has to be some reach. The place the hand naturally stops is the *edge*
+ * of the thing being pointed at — that is where the arrowhead belongs — and an
+ * edge is a boundary, so "inside the bounds" turns a gesture aimed at exactly
+ * the right place into a coin toss. Without this, connecting took several
+ * goes; with it, one.
+ *
+ * Divided by the zoom at the call site, so the reach is a constant distance
+ * under the pointer rather than a constant number of document pixels: at
+ * "fit" on a large capture the latter would be a couple of pixels on screen.
+ */
+export const BOND_REACH = 14;
+
+/** How far `at` lies outside `box`. Zero anywhere inside it. */
+function distanceToBox(at: Point, box: Rect): number {
+  const dx = Math.max(box.x - at.x, 0, at.x - (box.x + box.width));
+  const dy = Math.max(box.y - at.y, 0, at.y - (box.y + box.height));
+  return Math.hypot(dx, dy);
+}
+
+/**
  * What an end dropped here would tie itself to, if anything.
  *
- * Topmost first, since that is the one under the pointer as far as the eye is
- * concerned. Locked shapes are still valid targets: locked means "not to be
- * edited", and being pointed at is not an edit.
+ * Inside beats near: a point within a shape's bounds takes the topmost shape
+ * holding it, which is the one under the pointer as far as the eye is
+ * concerned. Only when the point is outside everything does `slack` come into
+ * it, and then the nearest edge wins rather than the topmost — the question
+ * being answered is "which shape was that aimed at", and at arm's length the
+ * honest answer is the closest one.
+ *
+ * Locked shapes are still valid targets: locked means "not to be edited", and
+ * being pointed at is not an edit.
  */
 export function bondTargetAt(
   annotations: Annotation[],
   at: Point,
   exclude: string,
+  slack = 0,
 ): Annotation | null {
+  let nearest: Annotation | null = null;
+  let best = Infinity;
+
   for (let i = annotations.length - 1; i >= 0; i--) {
     const a = annotations[i];
     if (a.id === exclude || !canBond(a)) continue;
-    const b = spunBoundsOf(a);
-    if (at.x >= b.x && at.x <= b.x + b.width && at.y >= b.y && at.y <= b.y + b.height) return a;
+    const gap = distanceToBox(at, spunBoundsOf(a));
+    if (gap === 0) return a;
+    if (gap <= slack && gap < best) {
+      best = gap;
+      nearest = a;
+    }
   }
-  return null;
+  return nearest;
 }
 
 /** Does this line have either end tied to something? */

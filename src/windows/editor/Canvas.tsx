@@ -49,6 +49,7 @@ import {
   angleOf,
   boundsOf,
   canBend,
+  canBond,
   isBox,
   isImage,
   isLine,
@@ -66,7 +67,7 @@ import {
   targetsFor,
   unionOf,
 } from "@/lib/guides";
-import { bondTargetAt } from "@/lib/connect";
+import { BOND_REACH, bondTargetAt } from "@/lib/connect";
 import { fitToBox } from "@/lib/overlay";
 import { backdropMetrics, fillById, fillToCss, hasBackdrop } from "@/lib/backdrop";
 import { docSize, familyOf, hasBareCanvas, useEditor } from "@/state/editorStore";
@@ -690,10 +691,22 @@ export function Canvas({ onNotify, actions, onScan }: CanvasProps) {
 
   // ------------------------------------------------------------- interactions
 
-  const startCreate = (e: React.PointerEvent) => {
+  /**
+   * Begin drawing, at the point under the press.
+   *
+   * `fromId` ties the tail of a new arrow to a shape as it is born — see
+   * `onShapePointerDown`. The store reroutes on every update, so the tail
+   * walks around that shape's edge as the head is dragged, and the connector
+   * is finished the moment the drag is.
+   */
+  const startCreate = (e: React.PointerEvent, fromId?: string) => {
     const store = useEditor.getState();
     const origin = clampToDoc(toDoc(e));
     const id = crypto.randomUUID();
+    // Whatever the hover was offering has been taken up or passed over; from
+    // here the drag itself says what the head is over.
+    bond.current = null;
+    setBondTo(null);
 
     store.snapshot();
 
@@ -751,6 +764,7 @@ export function Canvas({ onNotify, actions, onScan }: CanvasProps) {
         y1: origin.y,
         x2: origin.x,
         y2: origin.y,
+        ...(fromId ? { fromId } : {}),
         style: { ...style },
       });
     } else if (BOX_TOOLS.includes(tool as BoxKind)) {
@@ -825,6 +839,27 @@ export function Canvas({ onNotify, actions, onScan }: CanvasProps) {
     // fall through to the stage rather than pick the shape up.
     if (tool === "pick") return;
     if (e.altKey && tool !== "select") return;
+
+    // With the arrow in hand, a press on a shape draws *from* that shape.
+    //
+    // The exception to the rule below, and the reason for it: an arrow is the
+    // one tool whose whole job is to relate two things, so a press on one of
+    // them is the start of that sentence rather than an attempt to move it.
+    // It used to move the shape, which meant a connector could only be drawn
+    // by starting on bare canvas and then dragging each end back onto a shape
+    // afterwards — three gestures for the thing the tool is named after.
+    //
+    // Moving a shape while the arrow tool is up is still Alt (handled above),
+    // and still the select tool, which is where the hand goes for it anyway.
+    if (tool === "arrow") {
+      const from = useEditor.getState().annotations.find((a) => a.id === id);
+      if (from && canBond(from)) {
+        e.stopPropagation();
+        (e.currentTarget as Element).setPointerCapture?.(e.pointerId);
+        startCreate(e, id);
+        return;
+      }
+    }
 
     // Double-press on a text box, detected by hand. The container's
     // onDoubleClick below works in a plain browser but not in WKWebView, where
@@ -937,7 +972,31 @@ export function Canvas({ onNotify, actions, onScan }: CanvasProps) {
     }
 
     const active = drag.current;
-    if (!active || !doc) return;
+
+    // Nothing being dragged, arrow in hand: light up whatever a press would
+    // draw from. The connector is only obvious once the app has said, before
+    // the gesture rather than during it, that these shapes are things an
+    // arrow can be tied to.
+    if (!active) {
+      if (tool === "arrow" && doc) {
+        const over = bondTargetAt(
+          useEditor.getState().annotations,
+          pointer.current,
+          "",
+          BOND_REACH / zoom,
+        );
+        // Same state the drag uses; React drops the write when the id has not
+        // changed, so this costs a lookup per move and no renders.
+        bond.current = over?.id ?? null;
+        setBondTo(bond.current);
+      } else if (bond.current !== null) {
+        bond.current = null;
+        setBondTo(null);
+      }
+      return;
+    }
+
+    if (!doc) return;
 
     const store = useEditor.getState();
     const point = clampToDoc(toDoc(e));
@@ -1003,6 +1062,21 @@ export function Canvas({ onNotify, actions, onScan }: CanvasProps) {
             });
           } else {
             store.update(active.id, { x2: end.x, y2: end.y });
+            // The head looks for something to land on while it is still in the
+            // air, exactly as a dragged end handle does — same question, same
+            // highlight, and the answer is set on the drop. Measure is left
+            // out of it: its ends belong to edges in the picture, which is a
+            // different kind of aim entirely.
+            if (canBend(target)) {
+              const over = bondTargetAt(
+                store.annotations,
+                end,
+                active.id,
+                BOND_REACH / zoom,
+              );
+              bond.current = over && over.id !== target.fromId ? over.id : null;
+              setBondTo(bond.current);
+            }
           }
         } else if (isBox(target)) {
           let end = point;
@@ -1096,7 +1170,7 @@ export function Canvas({ onNotify, actions, onScan }: CanvasProps) {
           // answer is the thing being offered: the shape lights up under the
           // end while it is still in the air.
           const other = active.handle === "start" ? original.toId : original.fromId;
-          const over = bondTargetAt(store.annotations, end, active.id);
+          const over = bondTargetAt(store.annotations, end, active.id, BOND_REACH / zoom);
           bond.current = over && over.id !== other ? over.id : null;
           setBondTo(bond.current);
           break;
@@ -1238,7 +1312,17 @@ export function Canvas({ onNotify, actions, onScan }: CanvasProps) {
       if (created && isDegenerate(created)) {
         store.remove([active.id]);
         store.undo();
+        bond.current = null;
+        setBondTo(null);
+        return;
       }
+
+      // Whatever the head was hovering when the hand let go. `rerouted` runs
+      // inside the store and puts both ends on their edges before this paints.
+      const tied = bond.current;
+      bond.current = null;
+      setBondTo(null);
+      if (tied && created && isLine(created)) store.update(active.id, { toId: tied });
     }
 
     // An end let go over a shape belongs to that shape from now on. Setting
@@ -1260,6 +1344,16 @@ export function Canvas({ onNotify, actions, onScan }: CanvasProps) {
       if (shape?.kind === "callout") store.update(shape.id, fitCallout(shape));
     }
   };
+
+  // Putting the arrow tool down takes its offer with it: the highlight says
+  // "press here to draw from this", which stops being true the moment the
+  // tool changes.
+  useEffect(() => {
+    if (tool !== "arrow" && !drag.current) {
+      bond.current = null;
+      setBondTo(null);
+    }
+  }, [tool]);
 
   // ------------------------------------------------------------ text editing
 
@@ -1542,6 +1636,13 @@ export function Canvas({ onNotify, actions, onScan }: CanvasProps) {
           onPointerMove={onPointerMove}
           onPointerUp={onPointerUp}
           onPointerCancel={onPointerUp}
+          // The hover highlight belongs to the pointer, so it leaves with it.
+          onPointerLeave={() => {
+            if (!drag.current && bond.current !== null) {
+              bond.current = null;
+              setBondTo(null);
+            }
+          }}
           onDoubleClick={onDoubleClick}
           onContextMenu={onContextMenu}
         >

@@ -6,7 +6,7 @@
  * will just quietly point at the wrong place.
  */
 import { expect, test } from "vitest";
-import { BOND_GAP, attachPoint, bondTargetAt, isBonded, rerouted } from "./connect";
+import { BOND_GAP, BOND_REACH, attachPoint, bondTargetAt, isBonded, rerouted } from "./connect";
 import type { Annotation, LineAnnotation, Style } from "./types";
 
 const style: Style = {
@@ -109,6 +109,32 @@ test("dropping an end picks the shape on top", () => {
   expect(bondTargetAt(doc, { x: 150, y: 150 }, "line")?.id).toBe("over");
   expect(bondTargetAt(doc, { x: 350, y: 350 }, "line")?.id).toBe("under");
   expect(bondTargetAt(doc, { x: 900, y: 900 }, "line")).toBeNull();
+});
+
+test("an end that stops on the edge still lands, which is where the hand stops", () => {
+  // The whole bug this reach exists for: 200 is the box's own right edge, and
+  // "inside the bounds" made an aim at exactly the right place a coin toss.
+  const doc = [rect("box", 100, 100, 100, 100)];
+  expect(bondTargetAt(doc, { x: 200, y: 150 }, "line")?.id).toBe("box");
+  expect(bondTargetAt(doc, { x: 208, y: 150 }, "line", BOND_REACH)).toBe(doc[0]);
+  // Reach is a distance, not a bounding box: the same 8px out along both axes
+  // is 11 away from the corner, which is still within it.
+  expect(bondTargetAt(doc, { x: 208, y: 208 }, "line", BOND_REACH)?.id).toBe("box");
+  // And it is finite.
+  expect(bondTargetAt(doc, { x: 260, y: 150 }, "line", BOND_REACH)).toBeNull();
+  // Asked without reach, only the shape itself answers.
+  expect(bondTargetAt(doc, { x: 208, y: 150 }, "line")).toBeNull();
+});
+
+test("inside beats near, and near means nearest", () => {
+  const doc = [rect("under", 0, 0, 400, 400), rect("over", 100, 100, 100, 100)];
+  // Inside both: the topmost wins, reach or no reach.
+  expect(bondTargetAt(doc, { x: 150, y: 150 }, "line", BOND_REACH)?.id).toBe("over");
+  // Outside everything, between two candidates: the closer edge wins even
+  // though the other is on top — at arm's length "which was that aimed at?"
+  // is a question about distance, not z-order.
+  const pair = [rect("far", 0, 0, 10, 10), rect("near", 100, 0, 10, 10)];
+  expect(bondTargetAt(pair, { x: 116, y: 5 }, "line", 20)?.id).toBe("near");
 });
 
 test("an arrow is never a target, including itself", () => {
