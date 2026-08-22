@@ -821,7 +821,11 @@ export const useEditor = create<EditorState>((set, get) => ({
 
   add: (annotation) =>
     set((s) => ({
-      annotations: [...s.annotations, annotation],
+      // Rerouted like every other mutation. A shape arriving already tied —
+      // an arrow drawn from a shape's anchor — has coordinates that are only
+      // a guess at where its own edge is until this runs, and leaving the one
+      // path that skips it is how an invariant becomes a special case.
+      annotations: rerouted([...s.annotations, annotation]),
       selectedIds: [annotation.id],
       dirty: true,
       stepCounter: annotation.kind === "step" ? s.stepCounter + 1 : s.stepCounter,

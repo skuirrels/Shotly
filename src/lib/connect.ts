@@ -92,8 +92,17 @@ export function rerouted(annotations: Annotation[]): Annotation[] {
   return annotations.map((a) => {
     if (!isLine(a) || (!a.fromId && !a.toId)) return a;
 
-    const from = a.fromId ? byId.get(a.fromId) : undefined;
-    const to = a.toId ? byId.get(a.toId) : undefined;
+    // `canBond` decides what is a target, so it decides here too, and not
+    // only in the hit test that offers one. A document can arrive from
+    // anywhere — a hand-edited markup payload, a version that allowed
+    // something this one does not — and an arrow tied to another arrow has no
+    // edge to sit on and two ends that would chase each other.
+    const bonded = (id: string | undefined) => {
+      const target = id ? byId.get(id) : undefined;
+      return target && canBond(target) ? target : undefined;
+    };
+    const from = bonded(a.fromId);
+    const to = bonded(a.toId);
     // A bond to a shape that has been deleted is not a bond, and holding onto
     // the id would tie the arrow to whatever an undo brought back in its place.
     const next: LineAnnotation = { ...a };
