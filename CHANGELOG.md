@@ -8,6 +8,16 @@ The release notes on GitHub and the "what's new" text the in-app updater shows
 are both taken from this file — see `docs/RELEASING.md`. A version with nothing
 written here cannot be published.
 
+## 0.14.5 — 2026-08-22
+
+- **Sizing a shape says when it matches another one.** Alignment guides could
+  only ever say where a shape was, never how big it was — so three rectangles
+  could be perfectly lined up and still be three different widths, which does
+  not show until the picture is exported. Drag a shape's edge to a width, or a
+  height, that something else on the page already is, and it lands there
+  exactly, with a bar under each shape that shares the measurement. It works
+  while drawing a box as well as while resizing one.
+
 ## 0.14.4 — 2026-08-22
 
 - **Nothing changes on a Mac.** This release is the build going green: a

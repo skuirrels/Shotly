@@ -2,7 +2,7 @@
   "name": "shotly",
   "private": true,
   "license": "FSL-1.1-ALv2",
-  "version": "0.14.4",
+  "version": "0.14.5",
   "type": "module",
   "scripts": {
     "dev": "vite",
