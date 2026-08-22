@@ -55,6 +55,42 @@ export const TOOLS: ToolDef[] = [
   { id: "crop", label: "Crop", shortcut: "C", icon: IconCrop },
 ];
 
+/**
+ * The palette, in slots rather than in sixteen icons.
+ *
+ * Sixteen identical squares in a row give the eye nothing to hold on to and
+ * ask the hand to remember sixteen letters. Grouped by what the tool *makes* —
+ * a shape, some words, an emphasis, a reading off the picture — the bar is six
+ * slots, each showing whichever of its tools you used last, with the rest one
+ * press away in a menu that names them and their keys.
+ *
+ * Every letter still works exactly as it did. This changes what the bar looks
+ * like and what it teaches, not what the keyboard does: nothing here is a
+ * rebinding, and a hand that knows `S` for spotlight never has to learn where
+ * spotlight went.
+ */
+export interface ToolGroup {
+  id: string;
+  /** What the slot is called when it holds more than one tool. */
+  label: string;
+  /** In menu order; the first is the slot's default before anything is used. */
+  tools: ToolId[];
+}
+
+export const TOOL_GROUPS: ToolGroup[] = [
+  { id: "select", label: "Select", tools: ["select"] },
+  { id: "shape", label: "Shapes", tools: ["arrow", "line", "rect", "ellipse", "pen"] },
+  { id: "text", label: "Text", tools: ["text", "callout", "step"] },
+  { id: "emphasis", label: "Emphasis", tools: ["blur", "highlight", "spotlight"] },
+  // The three that take something *out* of the capture rather than adding to
+  // it: the words, a distance, a colour.
+  { id: "read", label: "Read from the capture", tools: ["grab", "measure", "pick"] },
+  { id: "crop", label: "Crop", tools: ["crop"] },
+];
+
+/** The tool definition for an id — the icon, label and key the palette shows. */
+export const toolDef = (id: ToolId): ToolDef => TOOLS.find((t) => t.id === id)!;
+
 /** Annotation ink palette. Index order doubles as the ⌘1–⌘9 shortcuts. */
 export const SWATCHES = [
   { name: "Red", value: "#FF3B30" },

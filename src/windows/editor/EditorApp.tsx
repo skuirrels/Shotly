@@ -1985,6 +1985,7 @@ export function EditorApp() {
             onNotify={notify}
             focus={focus}
             onToggleFocus={() => setFocus((v) => !v)}
+            onShortcuts={() => setSheet(true)}
           />
         )}
 
