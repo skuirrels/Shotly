@@ -8,6 +8,20 @@ The release notes on GitHub and the "what's new" text the in-app updater shows
 are both taken from this file — see `docs/RELEASING.md`. A version with nothing
 written here cannot be published.
 
+## 0.14.1 — 2026-08-22
+
+- **Arrows connect to shapes on the first try.** Tying an arrow to a shape
+  took three or four goes, for three reasons that stacked up. A press on a
+  shape with the arrow tool moved the shape, so a connector could only be
+  made by drawing an arrow to nowhere and dragging its ends back afterwards
+  — the arrow tool now draws *from* the shape under the press, and Alt still
+  draws straight through. A newly drawn arrow never bonded at all, however
+  well it was aimed. And an end had to land strictly *inside* the target,
+  when the place a hand naturally stops is its edge; ends now reach a little
+  way, by a distance on screen rather than in the picture, so it works the
+  same at any zoom. The shape under the pointer lights up before the press
+  as well as during the drag.
+
 ## 0.14.0 — 2026-08-22
 
 - **Shotly has a licence.** It is published under the [Functional Source
