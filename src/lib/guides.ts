@@ -62,7 +62,32 @@ export interface GapGuide {
   size: number;
 }
 
-export type Guide = AlignGuide | GapGuide;
+/**
+ * A dimension two shapes turned out to share, drawn as a bar under each.
+ *
+ * The one thing alignment guides cannot say. Three boxes can be perfectly
+ * lined up and still be three different widths, and at the zoom a screenshot
+ * is edited at the difference is invisible until it is exported — so a shape
+ * being sized is also asked whether it has just reached the width of
+ * something already on the page, and told so with a bar under both.
+ *
+ * Same shape as `GapGuide` on purpose: a span, an offset, and a number. The
+ * two are drawn by the same component and mean different things — that gap
+ * equals that gap; this width equals that width.
+ */
+export interface SizeGuide {
+  kind: "size";
+  /** `x` for a matched width, `y` for a matched height. */
+  axis: "x" | "y";
+  /** The extent of the dimension, along `axis`. */
+  from: number;
+  to: number;
+  /** The edge the bar hangs off, on the other axis. */
+  at: number;
+  size: number;
+}
+
+export type Guide = AlignGuide | GapGuide | SizeGuide;
 
 /** What a snap decided: how far to move, and what to draw about it. */
 export interface Snap {
@@ -107,7 +132,23 @@ export function targetsFor(
   moving: Set<string>,
   page: { width: number; height: number },
 ): Box[] {
-  const boxes: Box[] = [{ x: 0, y: 0, width: page.width, height: page.height }];
+  return [
+    { x: 0, y: 0, width: page.width, height: page.height },
+    ...shapeBoxesFor(annotations, moving),
+  ];
+}
+
+/**
+ * The same boxes without the page.
+ *
+ * What a *size* is measured against. The page belongs in the alignment
+ * targets — centring a callout on the capture is an everyday thing to want —
+ * but "this rectangle is exactly as wide as the whole screenshot" is a
+ * coincidence, not an intention, and a bar the width of the document drawn
+ * across the picture says nothing worth interrupting for.
+ */
+export function shapeBoxesFor(annotations: Annotation[], moving: Set<string>): Box[] {
+  const boxes: Box[] = [];
   for (const a of annotations) {
     if (moving.has(a.id)) continue;
     // A spotlight is the whole page with a hole in it and a blur is a patch of
@@ -300,6 +341,113 @@ export function snapBox(box: Box, targets: Box[], reach: number): Snap {
 }
 
 /**
+ * A dimension the drag came within reach of, and how far short it fell.
+ */
+export interface SizeMatch {
+  axis: "x" | "y";
+  size: number;
+}
+
+/**
+ * Below this, a "matching" size means nothing.
+ *
+ * A line has no height and an arrow drawn straight down has no width, so
+ * without a floor every one of them would offer to snap the shape being sized
+ * to nothing at all — and a rectangle collapsed to a hairline is not something
+ * a snap should ever be able to do.
+ */
+const MIN_SIZE = 2;
+
+/** The nearest size the moving edge could reach, measured from the anchor. */
+function nearestSize(p: number, anchor: number, sizes: number[], reach: number) {
+  // Which side of the anchor the drag is on. Sizing leftwards past the anchor
+  // flips the box, and the width it is looking for is the same number in the
+  // other direction.
+  const sign = p >= anchor ? 1 : -1;
+  let best: { delta: number; size: number } | null = null;
+
+  for (const size of sizes) {
+    if (size < MIN_SIZE) continue;
+    const delta = anchor + sign * size - p;
+    if (Math.abs(delta) >= reach) continue;
+    if (!best || Math.abs(delta) < Math.abs(best.delta)) best = { delta, size };
+  }
+  return best;
+}
+
+/**
+ * Pull a corner being dragged out to a size something else already is.
+ *
+ * Measured from the `anchor` — the corner or edge the drag is pinned to —
+ * which is what keeps this honest for a side handle: the width is the distance
+ * from the anchor to the pointer, whatever the rest of the box is doing.
+ *
+ * `can` says which dimensions this handle is allowed to change. A north or
+ * south handle cannot change a width, so it must not be offered one; the
+ * pointer would jump sideways along an axis the drag does not own.
+ */
+export function snapSize(
+  point: Point,
+  anchor: Point,
+  targets: Box[],
+  reach: number,
+  can: { width: boolean; height: boolean },
+): { dx: number; dy: number; sizes: SizeMatch[] } {
+  const sizes: SizeMatch[] = [];
+  let dx = 0;
+  let dy = 0;
+
+  if (can.width) {
+    const m = nearestSize(point.x, anchor.x, targets.map((t) => t.width), reach);
+    if (m) {
+      dx = m.delta;
+      sizes.push({ axis: "x", size: m.size });
+    }
+  }
+  if (can.height) {
+    const m = nearestSize(point.y, anchor.y, targets.map((t) => t.height), reach);
+    if (m) {
+      dy = m.delta;
+      sizes.push({ axis: "y", size: m.size });
+    }
+  }
+
+  return { dx, dy, sizes };
+}
+
+/**
+ * The bars that say so: one under the shape just sized, one under each shape
+ * it now matches.
+ *
+ * Every match is drawn rather than only the nearest. Three rectangles the same
+ * width is the thing being made, and showing one of the two agreements would
+ * be the same half-truth as drawing one alignment line where two marks met.
+ */
+export function sizeGuides(box: Box, targets: Box[], sizes: SizeMatch[]): SizeGuide[] {
+  const guides: SizeGuide[] = [];
+
+  for (const { axis, size } of sizes) {
+    const of = (b: Box): SizeGuide =>
+      axis === "x"
+        ? { kind: "size", axis, from: b.x, to: right(b), at: bottom(b), size }
+        : { kind: "size", axis, from: b.y, to: bottom(b), at: right(b), size };
+
+    const matched = targets.filter(
+      (t) => Math.abs((axis === "x" ? t.width : t.height) - size) < 0.01,
+    );
+    // Nothing to compare it against means nothing to say, however close the
+    // number came.
+    if (matched.length === 0) continue;
+
+    guides.push(of(box), ...matched.map(of));
+  }
+
+  return guides;
+}
+
+/**
+ * Snap one moving corner — what a resize or a fresh drag-out has instead of a
+ * box./**
  * Snap one moving corner — what a resize or a fresh drag-out has instead of a
  * box.
  *

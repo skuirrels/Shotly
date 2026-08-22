@@ -59,10 +59,14 @@ import {
 import {
   type GapGuide,
   type Guide,
+  type SizeGuide,
   NO_SNAP,
   SNAP_REACH,
+  shapeBoxesFor,
+  sizeGuides,
   snapBox,
   snapPoint,
+  snapSize,
   targetsFor,
   unionOf,
 } from "@/lib/guides";
@@ -698,6 +702,45 @@ export function Canvas({ onNotify, actions, onScan }: CanvasProps) {
     [doc],
   );
 
+  /**
+   * Has the edge being dragged reached a size something else already is?
+   *
+   * Measured from `pin`, the corner or edge the drag is anchored to, so it is
+   * the same question for a side handle as for a corner: how far is the
+   * pointer from the fixed edge, and is that a width already on the page.
+   *
+   * `claimed` is what alignment has already decided. An axis it took is not
+   * offered a size as well — an edge meeting another edge is the stronger
+   * statement of the two, and both pulling at once puts the pointer somewhere
+   * neither asked for.
+   *
+   * The bars are returned as a function of the finished box because the box is
+   * not known until the caller has applied the snap: the caller owns the
+   * arithmetic that turns a corner into a rectangle, and this only owns the
+   * question.
+   */
+  const matchSize = useCallback(
+    (
+      id: string,
+      at: Point,
+      pin: Point,
+      claimed: Guide[],
+      can: { width: boolean; height: boolean },
+    ) => {
+      const targets = shapeBoxesFor(useEditor.getState().annotations, new Set([id]));
+      const snap = snapSize(at, pin, targets, SNAP_REACH / zoom, {
+        width: can.width && !claimed.some((g) => g.axis === "x"),
+        height: can.height && !claimed.some((g) => g.axis === "y"),
+      });
+
+      return {
+        at: { x: at.x + snap.dx, y: at.y + snap.dy },
+        bars: (box: Rect) => sizeGuides(box, targets, snap.sizes),
+      };
+    },
+    [zoom],
+  );
+
   // ------------------------------------------------------------- interactions
 
   /**
@@ -1093,7 +1136,23 @@ export function Canvas({ onNotify, actions, onScan }: CanvasProps) {
             // the spot the drag began.
             const snap = snapPoint(end, snapTargets([active.id]), SNAP_REACH / zoom);
             end = { x: end.x + snap.dx, y: end.y + snap.dy };
-            setGuides(snap.guides);
+            // A box being drawn out is being sized, exactly as one being
+            // resized is, and wanting it the width of the one above it is the
+            // same wish either way. The corner it started from is the anchor.
+            const sized = matchSize(active.id, end, active.origin, snap.guides, {
+              width: true,
+              height: true,
+            });
+            end = sized.at;
+            setGuides([
+              ...snap.guides,
+              ...sized.bars({
+                x: Math.min(active.origin.x, end.x),
+                y: Math.min(active.origin.y, end.y),
+                width: Math.abs(end.x - active.origin.x),
+                height: Math.abs(end.y - active.origin.y),
+              }),
+            ]);
           }
           store.update(active.id, {
             x: Math.min(active.origin.x, end.x),
@@ -1197,11 +1256,25 @@ export function Canvas({ onNotify, actions, onScan }: CanvasProps) {
             x: point.x + (holdsWidth(handle) ? 0 : snap.dx),
             y: point.y + (holdsHeight(handle) ? 0 : snap.dy),
           };
-          setGuides(
-            snap.guides.filter((g) =>
-              g.axis === "x" ? !holdsWidth(handle) : !holdsHeight(handle),
-            ),
+          const lines = snap.guides.filter((g) =>
+            g.axis === "x" ? !holdsWidth(handle) : !holdsHeight(handle),
           );
+
+          // Then, on whichever axis alignment did not already claim: has this
+          // edge just arrived at a width something else already is? Asked
+          // second because an edge that lines up with another edge is the
+          // stronger statement, and two pulls on one axis would fight.
+          const before = boundsOf(original);
+          const pin = handleAnchor(before, handle);
+          const sized = matchSize(active.id, at, pin, lines, {
+            width: !holdsWidth(handle),
+            height: !holdsHeight(handle),
+          });
+          at = sized.at;
+          setGuides([
+            ...lines,
+            ...sized.bars(resizedBox(before, handle, pin, sized.at)),
+          ]);
         }
 
         // Everything from here happens in unspun space, where the shape is
@@ -1880,28 +1953,46 @@ function GuideLayer({
             shapeRendering="crispEdges"
           />
         ) : (
-          <GapBar key={i} gap={g} zoom={zoom} />
+          <MeasureBar key={i} bar={g} zoom={zoom} />
         ),
       )}
     </svg>
   );
 }
 
-/** One matched gap: a bar with a tick at each end and its size beside it. */
-function GapBar({ gap, zoom }: { gap: GapGuide; zoom: number }) {
-  const flat = gap.axis === "x";
-  const x1 = (flat ? gap.from : gap.at) * zoom;
-  const y1 = (flat ? gap.at : gap.from) * zoom;
-  const x2 = (flat ? gap.to : gap.at) * zoom;
-  const y2 = (flat ? gap.at : gap.to) * zoom;
+/**
+ * One measurement: a bar with a tick at each end and its size beside it.
+ *
+ * Two things are drawn with it and they are the same picture — a gap that
+ * equals another gap, and a width that equals another width. The difference is
+ * where it sits: a gap bar lies *between* two shapes, and a size bar hangs
+ * just off the edge of one, since the span it is measuring is the shape
+ * itself and a bar drawn across it would be mistaken for part of the picture.
+ */
+function MeasureBar({ bar, zoom }: { bar: GapGuide | SizeGuide; zoom: number }) {
+  const flat = bar.axis === "x";
+  // Clear of the edge by a constant on screen rather than in the document, so
+  // it does not creep further away as the capture is zoomed in.
+  const OFF = bar.kind === "size" ? 7 : 0;
+  const gap = {
+    ...bar,
+    at: bar.at * zoom + OFF,
+  };
+  const x1 = flat ? bar.from * zoom : gap.at;
+  const y1 = flat ? gap.at : bar.from * zoom;
+  const x2 = flat ? bar.to * zoom : gap.at;
+  const y2 = flat ? gap.at : bar.to * zoom;
 
   const CAP = 4;
-  const label = String(Math.round(gap.size));
+  const label = String(Math.round(bar.size));
   const boxWidth = label.length * 6 + 8;
   // Off the bar rather than on it: the number is what the bar is *for*, and a
   // label straddling the line hides the thing being measured.
   const cx = flat ? (x1 + x2) / 2 : x2 + boxWidth / 2 + 6;
-  const cy = flat ? y1 - 9 : (y1 + y2) / 2;
+  // A gap bar has the shapes on either side of it, so the number goes above.
+  // A size bar already hangs below its shape; putting the number above it too
+  // would wedge it into the two pixels between the bar and the edge.
+  const cy = flat ? (bar.kind === "size" ? y1 + 14 : y1 - 9) : (y1 + y2) / 2;
 
   return (
     <g>

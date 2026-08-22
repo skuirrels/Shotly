@@ -8,7 +8,16 @@
  * its own.
  */
 import { expect, test } from "vitest";
-import { NO_SNAP, snapBox, snapPoint, targetsFor, unionOf } from "./guides";
+import {
+  NO_SNAP,
+  shapeBoxesFor,
+  sizeGuides,
+  snapBox,
+  snapPoint,
+  snapSize,
+  targetsFor,
+  unionOf,
+} from "./guides";
 import type { Annotation } from "./types";
 
 const page = { x: 0, y: 0, width: 1000, height: 800 };
@@ -144,4 +153,95 @@ test("a spotlight is not something you line a shape up with", () => {
   ];
   const targets = targetsFor(shapes, new Set(), { width: 100, height: 100 });
   expect(targets).toHaveLength(1);
+});
+
+// --------------------------------------------------------------- same size
+
+/** A box, written the way the resize arithmetic hands them over. */
+const box = (x: number, y: number, width: number, height: number) => ({ x, y, width, height });
+
+test("a corner dragged near a width something else already is lands on it", () => {
+  // The box being sized is pinned at (0,0) and the pointer is at 98 across —
+  // two short of the 100 the other rectangle is.
+  const targets = [box(200, 0, 100, 40)];
+  const snap = snapSize({ x: 98, y: 60 }, { x: 0, y: 0 }, targets, 6, {
+    width: true,
+    height: true,
+  });
+  expect(snap.dx).toBeCloseTo(2, 6);
+  expect(snap.sizes).toEqual([{ axis: "x", size: 100 }]);
+  // Nothing is 60 tall, so the height is left exactly where the hand put it.
+  expect(snap.dy).toBe(0);
+});
+
+test("the pull is finite, and measured from the anchor rather than the origin", () => {
+  const targets = [box(0, 0, 100, 40)];
+  // Ten short is out of reach.
+  expect(snapSize({ x: 90, y: 0 }, { x: 0, y: 0 }, targets, 6, { width: true, height: true }).dx).toBe(0);
+  // The same width asked for from a different anchor is a different pointer
+  // position, and still found.
+  const from = snapSize({ x: 598, y: 0 }, { x: 500, y: 0 }, targets, 6, { width: true, height: true });
+  expect(from.dx).toBeCloseTo(2, 6);
+});
+
+test("sizing back past the anchor looks for the same width the other way", () => {
+  const targets = [box(0, 0, 100, 40)];
+  // Dragging the left edge leftwards past the anchor: the box is 98 wide and
+  // wants to be 100, so the pointer goes further left, not right.
+  const snap = snapSize({ x: -98, y: 0 }, { x: 0, y: 0 }, targets, 6, {
+    width: true,
+    height: true,
+  });
+  expect(snap.dx).toBeCloseTo(-2, 6);
+});
+
+test("a handle that cannot change a dimension is never offered one", () => {
+  // A north or south handle holds the width. Offering it a matching width
+  // would jump the pointer sideways along an axis the drag does not own.
+  const targets = [box(0, 0, 100, 40)];
+  const snap = snapSize({ x: 98, y: 38 }, { x: 0, y: 0 }, targets, 6, {
+    width: false,
+    height: true,
+  });
+  expect(snap.dx).toBe(0);
+  expect(snap.dy).toBeCloseTo(2, 6);
+  expect(snap.sizes).toEqual([{ axis: "y", size: 40 }]);
+});
+
+test("a line has no width, and nothing snaps to nothing", () => {
+  // Without a floor, every horizontal line on the page would offer to snap
+  // the shape being sized to a width of zero.
+  const targets = [box(0, 0, 0, 40), box(0, 0, 1, 40)];
+  expect(snapSize({ x: 2, y: 0 }, { x: 0, y: 0 }, targets, 6, { width: true, height: true }).dx).toBe(0);
+});
+
+test("every shape that shares the size gets a bar, and the sized one too", () => {
+  const targets = [box(0, 0, 100, 40), box(0, 200, 100, 90), box(0, 400, 55, 40)];
+  const sized = box(300, 300, 100, 40);
+  const bars = sizeGuides(sized, targets, [{ axis: "x", size: 100 }]);
+
+  // The shape just sized, and the two that are also 100 wide. Not the 55.
+  expect(bars).toHaveLength(3);
+  expect(bars.every((b) => b.kind === "size" && b.axis === "x" && b.size === 100)).toBe(true);
+  // Each bar spans its own shape and hangs off its bottom edge.
+  expect(bars[0]).toMatchObject({ from: 300, to: 400, at: 340 });
+  expect(bars[1]).toMatchObject({ from: 0, to: 100, at: 40 });
+  expect(bars[2]).toMatchObject({ from: 0, to: 100, at: 290 });
+});
+
+test("a size with nothing to compare it against draws nothing", () => {
+  expect(sizeGuides(box(0, 0, 100, 40), [box(0, 0, 55, 40)], [{ axis: "x", size: 100 }])).toEqual([]);
+});
+
+test("sizes are measured against the shapes, not against the page", () => {
+  // `targetsFor` puts the page first so a shape can be centred on the capture.
+  // A rectangle that happens to be exactly as wide as the screenshot is a
+  // coincidence, and a bar drawn the width of the document says nothing.
+  const style = { color: "#f00" } as Annotation["style"];
+  const shapes: Annotation[] = [
+    { id: "a", kind: "rect", x: 0, y: 0, width: 10, height: 10, style },
+  ];
+  expect(targetsFor(shapes, new Set(), { width: 100, height: 100 })).toHaveLength(2);
+  expect(shapeBoxesFor(shapes, new Set())).toHaveLength(1);
+  expect(shapeBoxesFor(shapes, new Set(["a"]))).toHaveLength(0);
 });
