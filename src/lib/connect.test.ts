@@ -6,7 +6,16 @@
  * will just quietly point at the wrong place.
  */
 import { expect, test } from "vitest";
-import { BOND_GAP, BOND_REACH, attachPoint, bondTargetAt, isBonded, rerouted } from "./connect";
+import {
+  BOND_GAP,
+  BOND_REACH,
+  anchorsOf,
+  attachPoint,
+  bondForEnd,
+  bondTargetAt,
+  isBonded,
+  rerouted,
+} from "./connect";
 import type { Annotation, LineAnnotation, Style } from "./types";
 
 const style: Style = {
@@ -140,6 +149,34 @@ test("inside beats near, and near means nearest", () => {
 test("an arrow is never a target, including itself", () => {
   const doc = [arrow({ id: "other", x1: 0, y1: 0, x2: 400, y2: 400 })];
   expect(bondTargetAt(doc, { x: 200, y: 200 }, "line")).toBeNull();
+});
+
+test("a shape offers four anchors, on the edges an arrow would leave from", () => {
+  const [top, right, bottom, left] = anchorsOf(rect("box", 100, 200, 60, 40));
+  expect(top).toEqual({ x: 130, y: 200 });
+  expect(right).toEqual({ x: 160, y: 220 });
+  expect(bottom).toEqual({ x: 130, y: 240 });
+  expect(left).toEqual({ x: 100, y: 220 });
+});
+
+test("an anchor is a place the arrow actually leaves from", () => {
+  // The dot the hand presses and the point `attachPoint` answers with are the
+  // same place, or the arrow would jump on the first frame of the drag.
+  const box = rect("box", 0, 0, 100, 100);
+  const [, right] = anchorsOf(box);
+  const met = attachPoint(box, { x: 900, y: 50 }, 0);
+  expect(met).toEqual(right);
+});
+
+test("an end will not tie to whatever the other end is already holding", () => {
+  // Both ends on one shape is an arrow with no direction and two ends chasing
+  // the same edge. Asked of both drags — drawing one and dragging its end —
+  // through this one rule, because they had already drifted apart once.
+  const doc = [rect("a", 0, 0, 100, 100), rect("b", 400, 0, 100, 100)];
+  expect(bondForEnd(doc, { x: 50, y: 50 }, "line", "a", BOND_REACH)).toBeNull();
+  expect(bondForEnd(doc, { x: 450, y: 50 }, "line", "a", BOND_REACH)).toBe("b");
+  // Nothing under it is nothing tied, whatever the other end is doing.
+  expect(bondForEnd(doc, { x: 900, y: 900 }, "line", undefined, BOND_REACH)).toBeNull();
 });
 
 test("isBonded is about the ends, not the kind", () => {

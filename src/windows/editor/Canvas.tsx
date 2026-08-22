@@ -49,7 +49,6 @@ import {
   angleOf,
   boundsOf,
   canBend,
-  canBond,
   isBox,
   isImage,
   isLine,
@@ -67,7 +66,8 @@ import {
   targetsFor,
   unionOf,
 } from "@/lib/guides";
-import { BOND_REACH, bondTargetAt } from "@/lib/connect";
+import { BOND_REACH, bondForEnd, bondTargetAt } from "@/lib/connect";
+import { shapePress } from "@/lib/press";
 import { fitToBox } from "@/lib/overlay";
 import { backdropMetrics, fillById, fillToCss, hasBackdrop } from "@/lib/backdrop";
 import { docSize, familyOf, hasBareCanvas, useEditor } from "@/state/editorStore";
@@ -211,6 +211,15 @@ export function Canvas({ onNotify, actions, onScan }: CanvasProps) {
   const [guides, setGuides] = useState<Guide[]>([]);
   /** The shape a dragged end is hovering over, lit up while it is offered. */
   const [bondTo, setBondTo] = useState<string | null>(null);
+  /**
+   * The shape showing its anchors, because the arrow tool is over it.
+   *
+   * Kept apart from `bondTo`, which the same highlight uses to answer "this
+   * one?" mid-drag: the offer to *start* a connector is only open while
+   * nothing is being dragged, and dots on the shape an arrow is about to land
+   * on would be four more things to press that mean nothing.
+   */
+  const [anchored, setAnchored] = useState<string | null>(null);
   /** The same, for the release to read: state has not committed by then. */
   const bond = useRef<string | null>(null);
   /** Space is down: the canvas is a thing to push around rather than draw on. */
@@ -707,6 +716,7 @@ export function Canvas({ onNotify, actions, onScan }: CanvasProps) {
     // here the drag itself says what the head is over.
     bond.current = null;
     setBondTo(null);
+    setAnchored(null);
 
     store.snapshot();
 
@@ -784,6 +794,20 @@ export function Canvas({ onNotify, actions, onScan }: CanvasProps) {
     drag.current = { kind: "create", id, origin };
   };
 
+  /**
+   * Press on one of the dots around a hovered shape: draw a connector from it.
+   *
+   * The gesture the arrow tool is named after, and the only thing that starts
+   * a bonded arrow. It is a separate target from the shape's body on purpose —
+   * the body is how you move it, and one press cannot honestly mean both.
+   */
+  const onAnchorPointerDown = (e: React.PointerEvent, id: string) => {
+    if (!doc || e.button !== 0) return;
+    e.stopPropagation();
+    (e.currentTarget as Element).setPointerCapture?.(e.pointerId);
+    startCreate(e, id);
+  };
+
   const onStagePointerDown = (e: React.PointerEvent) => {
     if (!doc || e.button !== 0) return;
 
@@ -835,31 +859,11 @@ export function Canvas({ onNotify, actions, onScan }: CanvasProps) {
    */
   const onShapePointerDown = (e: React.PointerEvent, id: string) => {
     if (!doc || e.button !== 0) return;
-    // The eyedropper reads the capture underneath, so a press on a shape must
-    // fall through to the stage rather than pick the shape up.
-    if (tool === "pick") return;
-    if (e.altKey && tool !== "select") return;
-
-    // With the arrow in hand, a press on a shape draws *from* that shape.
-    //
-    // The exception to the rule below, and the reason for it: an arrow is the
-    // one tool whose whole job is to relate two things, so a press on one of
-    // them is the start of that sentence rather than an attempt to move it.
-    // It used to move the shape, which meant a connector could only be drawn
-    // by starting on bare canvas and then dragging each end back onto a shape
-    // afterwards — three gestures for the thing the tool is named after.
-    //
-    // Moving a shape while the arrow tool is up is still Alt (handled above),
-    // and still the select tool, which is where the hand goes for it anyway.
-    if (tool === "arrow") {
-      const from = useEditor.getState().annotations.find((a) => a.id === id);
-      if (from && canBond(from)) {
-        e.stopPropagation();
-        (e.currentTarget as Element).setPointerCapture?.(e.pointerId);
-        startCreate(e, id);
-        return;
-      }
-    }
+    // Every tool moves the shape it is pressed on — see `shapePress`, which
+    // is where that rule lives and where it is tested. Connectors do not get
+    // an exception to it; they start from the anchors that appear on a shape
+    // the arrow tool is hovering. See `onAnchorPointerDown`.
+    if (shapePress(tool, e.altKey) === "through") return;
 
     // Double-press on a text box, detected by hand. The container's
     // onDoubleClick below works in a plain browser but not in WKWebView, where
@@ -989,9 +993,11 @@ export function Canvas({ onNotify, actions, onScan }: CanvasProps) {
         // changed, so this costs a lookup per move and no renders.
         bond.current = over?.id ?? null;
         setBondTo(bond.current);
+        setAnchored(bond.current);
       } else if (bond.current !== null) {
         bond.current = null;
         setBondTo(null);
+        setAnchored(null);
       }
       return;
     }
@@ -1068,13 +1074,13 @@ export function Canvas({ onNotify, actions, onScan }: CanvasProps) {
             // out of it: its ends belong to edges in the picture, which is a
             // different kind of aim entirely.
             if (canBend(target)) {
-              const over = bondTargetAt(
+              bond.current = bondForEnd(
                 store.annotations,
                 end,
                 active.id,
+                target.fromId,
                 BOND_REACH / zoom,
               );
-              bond.current = over && over.id !== target.fromId ? over.id : null;
               setBondTo(bond.current);
             }
           }
@@ -1170,8 +1176,7 @@ export function Canvas({ onNotify, actions, onScan }: CanvasProps) {
           // answer is the thing being offered: the shape lights up under the
           // end while it is still in the air.
           const other = active.handle === "start" ? original.toId : original.fromId;
-          const over = bondTargetAt(store.annotations, end, active.id, BOND_REACH / zoom);
-          bond.current = over && over.id !== other ? over.id : null;
+          bond.current = bondForEnd(store.annotations, end, active.id, other, BOND_REACH / zoom);
           setBondTo(bond.current);
           break;
         }
@@ -1352,6 +1357,7 @@ export function Canvas({ onNotify, actions, onScan }: CanvasProps) {
     if (tool !== "arrow" && !drag.current) {
       bond.current = null;
       setBondTo(null);
+      setAnchored(null);
     }
   }, [tool]);
 
@@ -1641,6 +1647,7 @@ export function Canvas({ onNotify, actions, onScan }: CanvasProps) {
             if (!drag.current && bond.current !== null) {
               bond.current = null;
               setBondTo(null);
+              setAnchored(null);
             }
           }}
           onDoubleClick={onDoubleClick}
@@ -1680,6 +1687,8 @@ export function Canvas({ onNotify, actions, onScan }: CanvasProps) {
             editingId={editingId}
             shapeCursor={altDown && tool !== "select" ? "crosshair" : "move"}
             bondTo={bondTo}
+            anchorsFor={anchored}
+            onAnchorPointerDown={onAnchorPointerDown}
             onShapePointerDown={onShapePointerDown}
             onHandlePointerDown={onHandlePointerDown}
           />

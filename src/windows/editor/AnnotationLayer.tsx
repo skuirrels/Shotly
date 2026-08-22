@@ -37,6 +37,7 @@ import {
   isPen,
   isStep,
 } from "@/lib/types";
+import { anchorsOf } from "@/lib/connect";
 import type { Doc } from "@/state/editorStore";
 
 interface Props {
@@ -51,6 +52,9 @@ interface Props {
   onHandlePointerDown: (e: React.PointerEvent, id: string, handle: HandleId) => void;
   /** The shape an end being dragged right now would tie itself to, if any. */
   bondTo?: string | null;
+  /** The shape offering its anchors, because the arrow tool is hovering it. */
+  anchorsFor?: string | null;
+  onAnchorPointerDown?: (e: React.PointerEvent, id: string) => void;
 }
 
 /**
@@ -87,6 +91,8 @@ export function AnnotationLayer({
   onShapePointerDown,
   onHandlePointerDown,
   bondTo,
+  anchorsFor,
+  onAnchorPointerDown,
 }: Props) {
   const { width, height } = doc.crop;
   const blurs = annotations.filter((a) => a.kind === "blur");
@@ -181,6 +187,28 @@ export function AnnotationLayer({
             />
           );
         })}
+
+      {/* Where a connector can be started from. Only on the shape under the
+          pointer, and only with the arrow tool in hand, so they are an answer
+          to "can I join these?" asked at the moment it is being asked — and
+          nothing to look at the rest of the time. Pressing the shape itself
+          still moves it; that is the whole reason these exist. */}
+      {onAnchorPointerDown &&
+        annotations
+          .filter((a) => a.id === anchorsFor)
+          .flatMap((a) =>
+            anchorsOf(a).map((p, i) => (
+              <Handle
+                key={`anchor-${a.id}-${i}`}
+                x={p.x}
+                y={p.y}
+                zoom={zoom}
+                cursor="crosshair"
+                fill="var(--color-accent)"
+                onDown={(e) => onAnchorPointerDown(e, a.id)}
+              />
+            )),
+          )}
 
       {/* Selection chrome sits above every shape so it is never occluded. */}
       {annotations

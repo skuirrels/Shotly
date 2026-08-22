@@ -120,6 +120,32 @@ export function rerouted(annotations: Annotation[]): Annotation[] {
 }
 
 /**
+ * The four places a connector can be started from, on a shape being hovered.
+ *
+ * Edge midpoints of the upright bounds — the same box `attachPoint` measures
+ * against, so the dot the hand presses is where the arrow actually leaves
+ * from. An ellipse touches its box at exactly these four points, so one
+ * formula serves both.
+ *
+ * They exist because the alternative does not work: pressing the *body* of a
+ * shape has always meant "move it", for every tool, and a connector that
+ * needs that press takes the move gesture away from the whole page for as
+ * long as the arrow tool is in hand. A dot on the edge asks for neither.
+ */
+export function anchorsOf(shape: Annotation): Point[] {
+  const b = spunBoundsOf(shape);
+  const midX = b.x + b.width / 2;
+  const midY = b.y + b.height / 2;
+  return [
+    { x: midX, y: b.y },
+    { x: b.x + b.width, y: midY },
+    { x: midX, y: b.y + b.height },
+    { x: b.x, y: midY },
+  ];
+}
+
+/**
+ * How close an end has to come, in screen pixels, for a shape to catch it./**
  * How close an end has to come, in screen pixels, for a shape to catch it.
  *
  * There has to be some reach. The place the hand naturally stops is the *edge*
@@ -174,6 +200,28 @@ export function bondTargetAt(
     }
   }
   return nearest;
+}
+
+/**
+ * What the end of a line being dragged would tie itself to.
+ *
+ * `bondTargetAt` plus the one rule on top of it: an arrow with both ends on
+ * the same shape has no direction and two ends chasing one edge, so whatever
+ * the other end is already holding is not on offer to this one.
+ *
+ * Both the end-handle drag and the draw-a-new-arrow drag ask this, rather than
+ * each deciding for itself — they had drifted apart once already, which is how
+ * a freshly drawn arrow came to bond to nothing at all.
+ */
+export function bondForEnd(
+  annotations: Annotation[],
+  at: Point,
+  lineId: string,
+  otherEnd: string | undefined,
+  reach: number,
+): string | null {
+  const over = bondTargetAt(annotations, at, lineId, reach);
+  return over && over.id !== otherEnd ? over.id : null;
 }
 
 /** Does this line have either end tied to something? */
