@@ -8,6 +8,26 @@ The release notes on GitHub and the "what's new" text the in-app updater shows
 are both taken from this file — see `docs/RELEASING.md`. A version with nothing
 written here cannot be published.
 
+## 0.14.0 — 2026-08-22
+
+- **Shotly has a licence.** It is published under the [Functional Source
+  License](LICENSE.md) (`FSL-1.1-ALv2`): read it, build it, change it, use it
+  for anything you like except selling it back as a competing product — and
+  two years after each release, that version turns Apache 2.0. Contributions
+  are welcome under a one-time CLA; see `CONTRIBUTING.md`. **Acknowledgements**
+  in the Shotly menu now lists the licence of everything Shotly is built on,
+  and the same file ships inside the app.
+- **A blank page from the menu bar.** *New Blank Image* sits with the capture
+  items in the menu bar, for the times there is nothing open to press ⌘N in —
+  an empty canvas to paste onto, arrange, and annotate like any capture.
+- **Focus mode** (⌘⇧F, or the button at the end of the tool palette) puts the
+  editor full screen and takes everything except the tools away: no title bar,
+  no recents rail, just the picture and what you draw on it with. The same key,
+  the same button, or macOS' own ⌃⌘F brings it all back.
+- **The command palette says it exists.** A **Commands ⌘K** button in the
+  middle of the library's title bar — the palette held every action in the app
+  and the only way to find that out was to be told.
+
 ## 0.13.2 — 2026-08-21
 
 - **A movie no longer answers keys typed into something else.** With the
