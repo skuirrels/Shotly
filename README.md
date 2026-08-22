@@ -260,8 +260,14 @@ The live annotation layer (<kbd>⌃⇧A</kbd>) has the neon callout too — pres
 <kbd>O</kbd>, click where you want it, and type. It draws the same lit box, over
 whatever is on the screen.
 
-<kbd>⌘K</kbd> opens a command palette if you'd rather search than remember, and
-<kbd>⌘/</kbd> shows every key in one sheet.
+**Focus mode** (<kbd>⌘⇧F</kbd>, or the button at the right-hand end of the tool
+palette) puts the window full screen and takes everything except the tools
+away — no title bar, no recents rail, just the picture and the toolbar. The
+same key, the same button, or macOS' own <kbd>⌃⌘F</kbd> brings it all back.
+
+<kbd>⌘K</kbd> opens a command palette if you'd rather search than remember —
+there's a **Commands** button in the middle of the title bar that says so, and
+opens it — and <kbd>⌘/</kbd> shows every key in one sheet.
 
 ---
 
@@ -369,8 +375,9 @@ have the canvas take the shape of what's on it. Nothing is destructive: undo
 puts it all back.
 
 To start from nothing at all, **New blank image** (<kbd>⌘N</kbd>, in the Capture
-menu) opens an empty page to paste onto — same canvas, same shrink-wrap, no
-capture underneath. And **New image from clipboard** (<kbd>⌘⇧V</kbd>) turns a
+menu, and in the menu bar) opens an empty page to paste onto — same canvas,
+same shrink-wrap, no capture underneath. And **New image from clipboard**
+(<kbd>⌘⇧V</kbd>) turns a
 picture you copied anywhere else into a capture of its own, to annotate and
 save like any other — it's in the menu bar too, for when Shotly's window isn't
 on screen. The difference from <kbd>⌘V</kbd> is what it does with it:
@@ -421,7 +428,7 @@ Hotkeys tab that opens the right pane.
 <kbd>⌘0</kbd> fit · <kbd>⌘1</kbd> actual size · <kbd>⌘</kbd>-scroll zoom ·
 <kbd>space</kbd>-drag pan · <kbd>⌘L</kbd> back to library ·
 <kbd>⌘N</kbd> new blank image · <kbd>⌘⇧V</kbd> new image from the clipboard ·
-<kbd>⌘,</kbd> settings
+<kbd>⌘⇧F</kbd> focus mode · <kbd>⌘,</kbd> settings
 
 **Drawing on the screen:** tool letters as above · <kbd>1</kbd>–<kbd>6</kbd>
 colours · <kbd>[</kbd> <kbd>]</kbd> size · <kbd>D</kbd> move the toolbar ·

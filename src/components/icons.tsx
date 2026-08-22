@@ -387,6 +387,23 @@ export const IconFit = (p: SVGProps<SVGSVGElement>) => (
   </Icon>
 );
 
+/**
+ * Focus mode, in its two states: arrows pushing out to the corners, and the
+ * same arrows pulled back in. Deliberately distinct from `IconFit`, which is
+ * the *picture* filling the window rather than the window filling the screen.
+ */
+export const IconExpand = (p: SVGProps<SVGSVGElement>) => (
+  <Icon {...p}>
+    <path d="M9.5 2.5h4v4M13.5 2.5 9.8 6.2M6.5 13.5h-4v-4M2.5 13.5l3.7-3.7" />
+  </Icon>
+);
+
+export const IconCollapse = (p: SVGProps<SVGSVGElement>) => (
+  <Icon {...p}>
+    <path d="M13.5 2.5 9.8 6.2M9.8 6.2h3.2M9.8 6.2V3M2.5 13.5l3.7-3.7M6.2 9.8H3M6.2 9.8V13" />
+  </Icon>
+);
+
 export const IconCommand = (p: SVGProps<SVGSVGElement>) => (
   <Icon {...p}>
     <path d="M5.5 2.5a1.5 1.5 0 1 0 1.5 1.5v8a1.5 1.5 0 1 1-1.5-1.5h5a1.5 1.5 0 1 1-1.5 1.5V4a1.5 1.5 0 1 0 1.5 1.5z" />

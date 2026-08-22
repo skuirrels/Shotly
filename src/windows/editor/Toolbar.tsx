@@ -1,4 +1,5 @@
 import clsx from "clsx";
+import { IconCollapse, IconExpand } from "@/components/icons";
 import { IconButton } from "@/components/ui/IconButton";
 import { Kbd } from "@/components/ui/Kbd";
 import { Popover } from "@/components/ui/Popover";
@@ -37,9 +38,12 @@ interface Props {
   /** Passed through to the overlay picker; see `OverlayPicker`. */
   currentPath?: string;
   onNotify: (text: string) => void;
+  /** Whether the rest of the chrome is currently hidden. */
+  focus: boolean;
+  onToggleFocus: () => void;
 }
 
-export function Toolbar({ currentPath, onNotify }: Props) {
+export function Toolbar({ currentPath, onNotify, focus, onToggleFocus }: Props) {
   const tool = useEditor((s) => s.tool);
   const setTool = useEditor((s) => s.setTool);
   const setStyle = useEditor((s) => s.setStyle);
@@ -80,6 +84,19 @@ export function Toolbar({ currentPath, onNotify }: Props) {
         {/* Not one of the TOOLS: nothing is drawn with it, so it opens a menu
             of sources instead of becoming the tool in hand. */}
         <OverlayPicker currentPath={currentPath} onNotify={onNotify} />
+
+        {/* The way out, and the reason it lives on the tool palette rather
+            than the top bar: in focus mode this is the only bar left, so the
+            button that leaves has to be one of the ones still on screen. */}
+        <Divider />
+        <IconButton
+          icon={focus ? <IconCollapse /> : <IconExpand />}
+          label={focus ? "Leave focus mode" : "Focus mode"}
+          shortcut="Mod+Shift+F"
+          active={focus}
+          tooltipSide="top"
+          onClick={onToggleFocus}
+        />
 
         {anyControls && <Divider />}
 

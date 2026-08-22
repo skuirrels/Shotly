@@ -11,6 +11,7 @@ import {
   IconCamera,
   IconCanvas,
   IconCheck,
+  IconCollapse,
   IconCommand,
   IconCopy,
   IconCrop,
@@ -19,6 +20,7 @@ import {
   IconImage,
   IconAlign,
   IconDistribute,
+  IconExpand,
   IconGroup,
   IconLayers,
   IconLock,
@@ -142,6 +144,16 @@ export function EditorApp() {
   /** Path of the most recent save, so the toast can offer to reveal it. */
   const [saved, setSaved] = useState<string | null>(null);
   const [dropping, setDropping] = useState(false);
+  /**
+   * Focus mode: the canvas and the tool palette, and nothing else.
+   *
+   * Called focus mode rather than full screen because the full screen is the
+   * means and not the point — the window goes fullscreen, but what makes the
+   * mode is that the chrome around the picture goes away. Kept here rather
+   * than in the editor store: it survives opening the next capture, and the
+   * store is reset for every document.
+   */
+  const [focus, setFocus] = useState(false);
   /** Bumped whenever the library's contents change on disk. */
   const [libraryKey, setLibraryKey] = useState(0);
   const [view, setView] = useState<View>("library");
@@ -594,6 +606,52 @@ export function EditorApp() {
       void pending.then((fn) => fn());
     };
   }, [openPath]);
+
+  /**
+   * The window follows the mode, and only ever from here.
+   *
+   * One direction, one place: everything that turns focus mode on or off sets
+   * the flag, and this puts the window where the flag says. The alternative —
+   * each caller toggling the state and the window — is how the two drift
+   * apart, which looks like a mode that will not switch off.
+   */
+  useEffect(() => {
+    // A window that refuses to go fullscreen still loses its chrome, which is
+    // the half of this that matters. Worth a line in the log and no more: the
+    // way out is the toolbar button, which is on screen either way.
+    void getCurrentWebviewWindow()
+      .setFullscreen(focus)
+      .catch((e) => console.warn("[shotly] could not change fullscreen:", e));
+  }, [focus]);
+
+  /**
+   * Leaving fullscreen by any other route leaves focus mode too.
+   *
+   * macOS keeps its own ways out — ⌃⌘F, and the green button that slides down
+   * when the pointer touches the top of the screen — and neither goes anywhere
+   * near this component. Without this the window would come back to its normal
+   * size with every piece of chrome still hidden, which reads as a broken app
+   * rather than a mode.
+   *
+   * Deliberately one-way. Someone who takes the window fullscreen with the
+   * green button may well want the toolbars they went to the trouble of
+   * arranging; only the explicit ask hides them.
+   */
+  useEffect(() => {
+    const win = getCurrentWebviewWindow();
+    const pending = win.onResized(() => {
+      void win
+        .isFullscreen()
+        .then((full) => {
+          if (!full) setFocus(false);
+        })
+        .catch(() => {});
+    });
+
+    return () => {
+      void pending.then((fn) => fn());
+    };
+  }, []);
 
   /**
    * Guard the export actions.
@@ -1518,6 +1576,21 @@ export function EditorApp() {
         run: () => s().setZoom(1),
       },
       {
+        id: "view.focus",
+        title: focus ? "Leave focus mode" : "Focus mode",
+        group: "View",
+        // ⌃⌘F is macOS' own, and it keeps working — this is the one that also
+        // takes the chrome away, so it gets a key of its own rather than
+        // hijacking the system's.
+        shortcut: "Mod+Shift+F",
+        icon: focus ? <IconCollapse /> : <IconExpand />,
+        keywords: "full screen fullscreen distraction free zen presentation hide toolbars chrome canvas only",
+        // Nothing to focus on in the library, and the player has its own idea
+        // of what a big picture looks like.
+        enabled: hasDoc,
+        run: () => setFocus((v) => !v),
+      },
+      {
         id: "view.palette",
         title: "Command palette",
         group: "View",
@@ -1733,6 +1806,7 @@ export function EditorApp() {
     ];
   }, [
     copy,
+    focus,
     pasteOverlay,
     save,
     saveAs,
@@ -1772,6 +1846,14 @@ export function EditorApp() {
    * mean "leave this", and letting the editor act on them as well would close
    * the movie and the document under it in one keystroke.
    */
+  // Focus mode is a way of looking at the canvas, so it lasts exactly as long
+  // as there is a canvas to look at. Closing the document or stepping into the
+  // library takes the window back out of fullscreen with it, rather than
+  // leaving a chromeless library filling the screen.
+  useEffect(() => {
+    if (activeView !== "editor") setFocus(false);
+  }, [activeView]);
+
   const playing = activeView === "player";
   const bound = useMemo(
     () =>
@@ -1795,6 +1877,11 @@ export function EditorApp() {
 
   return (
     <div className="flex h-full flex-col bg-canvas">
+      {/* The whole point of focus mode. Removed rather than hidden: it is the
+          window's drag region, and a drag region over a fullscreen canvas
+          would swallow the first click of every annotation drawn near the
+          top of the picture. */}
+      {!focus && (
       <TopBar
         view={activeView}
         canEdit={doc !== null}
@@ -1811,6 +1898,7 @@ export function EditorApp() {
           }
         }
         onView={showView}
+        onPalette={() => setPalette(true)}
         onCapture={startCapture}
         onOpenFile={() => void openFile()}
         onNewCanvas={() => void newCanvas()}
@@ -1822,10 +1910,12 @@ export function EditorApp() {
         pickedCount={picked.length}
         busy={busy}
       />
+      )}
 
       <main className="relative flex flex-1 overflow-hidden">
         {activeView === "editor" ? (
           <>
+            {!focus && (
             <RecentStrip
               refreshKey={libraryKey}
               currentPath={doc?.libraryPath}
@@ -1836,6 +1926,7 @@ export function EditorApp() {
               onDelete={(paths) => void deleteCaptures(paths)}
               onError={reportError}
             />
+            )}
             <Canvas onNotify={notify} actions={canvasActions} onScan={scanArea} />
           </>
         ) : activeView === "player" && movie ? (
@@ -1889,7 +1980,12 @@ export function EditorApp() {
           </div>
         )}
         {activeView === "editor" && (
-          <Toolbar currentPath={doc?.libraryPath} onNotify={notify} />
+          <Toolbar
+            currentPath={doc?.libraryPath}
+            onNotify={notify}
+            focus={focus}
+            onToggleFocus={() => setFocus((v) => !v)}
+          />
         )}
 
         {dropping && (

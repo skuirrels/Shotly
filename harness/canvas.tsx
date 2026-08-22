@@ -24,7 +24,7 @@ createRoot(document.getElementById("root")!).render(
     <div className="flex h-12 items-center justify-center gap-2 bg-surface">
       <CanvasPicker />
     </div>
-    <Toolbar onNotify={() => {}} />
+    <Toolbar onNotify={() => {}} focus={false} onToggleFocus={() => {}} />
   </div>,
 );
 

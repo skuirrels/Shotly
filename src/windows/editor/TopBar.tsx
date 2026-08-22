@@ -26,6 +26,7 @@ import {
 } from "@/components/icons";
 import { IconButton } from "@/components/ui/IconButton";
 import { Kbd } from "@/components/ui/Kbd";
+import { formatShortcut } from "@/lib/keys/keys";
 import { Popover } from "@/components/ui/Popover";
 import { BackdropPicker } from "./BackdropPicker";
 import { CanvasPicker } from "./CanvasPicker";
@@ -54,6 +55,8 @@ interface Props {
   /** The recording the player is holding, if there is one. */
   player: PlayerBar | null;
   onView: (view: View) => void;
+  /** Open the command palette — the button beside the tabs, and ⌘K. */
+  onPalette: () => void;
   onCapture: (mode: CaptureMode) => void;
   onOpenFile: () => void;
   onCopy: () => void;
@@ -95,6 +98,7 @@ export function TopBar({
   canEdit,
   player,
   onView,
+  onPalette,
   onCapture,
   onOpenFile,
   onNewCanvas,
@@ -165,6 +169,34 @@ export function TopBar({
           while a button says "Saving…" is the cheaper of the two. */}
       <div className="pointer-events-none flex min-w-0 flex-1 justify-center px-2">
         {editing && doc && <ResizePicker />}
+
+        {/* The palette holds every action in the app, and until this button
+            existed the only way to find that out was to be told. It goes in
+            the gap the library leaves down the middle of the bar rather than
+            beside the tabs: the editor's half of this space is spoken for by
+            the size readout, and a button that pushes that into an ellipsis
+            has taken something to give something. Nothing is lost by it being
+            here — the library is where you land, and where anyone looking
+            around the app is looking.
+            It wears its key rather than hiding it in a tooltip, since the key
+            is the point: a button you reach for with the mouse is not what ⌘K
+            is for. */}
+        {browsing && (
+          <Tooltip label="Every action in one list — search it" shortcut="Mod+K">
+            <button
+              type="button"
+              onClick={onPalette}
+              className="no-drag pointer-events-auto flex h-8 items-center gap-1.5 rounded-lg bg-white/[0.07] px-3 text-ink-2 transition-colors hover:bg-white/[0.11] hover:text-ink active:bg-white/[0.14]"
+            >
+              <span className="text-[12.5px] font-medium">Commands</span>
+              {/* Spelled by `formatShortcut` rather than typed: Ctrl+K on
+                  Windows, and one place that decides which. */}
+              <span className="font-sans text-[11px] font-medium text-ink-3">
+                {formatShortcut("Mod+K")}
+              </span>
+            </button>
+          </Tooltip>
+        )}
         {/* The player has no document, so the space the resize control would
             occupy carries the one thing it can't show elsewhere: which
             recording you are watching. */}

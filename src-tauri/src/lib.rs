@@ -504,6 +504,11 @@ fn tray_menu(app: &tauri::AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
         MenuItem::with_id(app, "window-list", "Capture Window from List…", true, None::<&str>)?;
     let scroll =
         MenuItem::with_id(app, "scroll", "Scrolling Capture", true, accel(Action::Scroll))?;
+    // The one document that starts from nothing at all. It belongs beside the
+    // captures rather than buried in the editor, because the reason to want a
+    // blank page is that there is nothing open to reach the editor's ⌘N from.
+    let new_canvas =
+        MenuItem::with_id(app, "new-canvas", "New Blank Image", true, None::<&str>)?;
     // The one capture that starts somewhere other than the screen, and the
     // menu bar is where it is wanted: you copy a picture in another app, and
     // the editor is not on screen to press ⌘⇧V in.
@@ -571,6 +576,7 @@ fn tray_menu(app: &tauri::AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
         &anything,
         &window_list,
         &scroll,
+        &new_canvas,
         &from_clipboard,
         &sep,
         &record,
@@ -645,6 +651,15 @@ fn build_tray(app: &tauri::AppHandle) -> tauri::Result<()> {
                 let _ = std::process::Command::new("/usr/bin/open")
                     .arg("x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")
                     .spawn();
+            }
+            "new-canvas" => {
+                let app = app.clone();
+                tauri::async_runtime::spawn(async move {
+                    if let Err(err) = commands::new_canvas(app.clone()).await {
+                        eprintln!("[shotly] blank canvas failed: {err}");
+                        let _ = tauri::Emitter::emit(&app, "capture:error", err);
+                    }
+                });
             }
             "new-from-clipboard" => {
                 let app = app.clone();
