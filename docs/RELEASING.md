@@ -16,6 +16,17 @@ npm run publish
 `publish` builds, then refuses to upload anything that would break an existing
 install. Read [What can go wrong](#what-can-go-wrong) before overriding it.
 
+The build starts by regenerating `THIRD_PARTY_NOTICES.md` — the licences of
+everything in the bundle, which the app shows under **Shotly →
+Acknowledgements**. That needs `cargo-about` on the machine:
+
+```bash
+cargo install cargo-about --locked --features cli
+```
+
+If the regenerated file differs from the committed one, commit it; it should
+only change when a dependency does.
+
 ## The changelog
 
 `CHANGELOG.md` is not a courtesy — it is where the release notes come from.

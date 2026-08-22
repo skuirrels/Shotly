@@ -1,0 +1,28 @@
+# cargo-about: the licences Shotly is willing to ship, and the crates it
+# bundles. `npm run notices` turns this into THIRD_PARTY_NOTICES.md.
+accepted = [
+  "0BSD",
+  "Apache-2.0",
+  "BSD-2-Clause",
+  "BSD-3-Clause",
+  "BSL-1.0",
+  "CC0-1.0",
+  "CDLA-Permissive-2.0",
+  "ISC",
+  "MIT",
+  "MIT-0",
+  "MPL-2.0",
+  "Unicode-3.0",
+  "Unlicense",
+  "Zlib",
+]
+
+# The binary only ever builds for macOS; crates that exist for other targets
+# are not in it and owe no notice.
+targets = ["aarch64-apple-darwin", "x86_64-apple-darwin"]
+
+ignore-build-dependencies = true
+ignore-dev-dependencies = true
+
+# Shotly itself — `publish = false` in Cargo.toml — is not a third party.
+private = { ignore = true }

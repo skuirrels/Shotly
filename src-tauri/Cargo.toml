@@ -3,6 +3,8 @@ name = "shotly"
 version = "0.13.2"
 description = "Capture, annotate, ship."
 authors = ["Ty Omidi"]
+license = "FSL-1.1-ALv2"
+publish = false
 edition = "2021"
 
 [lib]

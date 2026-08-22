@@ -1,0 +1,119 @@
+// Regenerate THIRD_PARTY_NOTICES.md: every licence Shotly ships inside the
+// bundle, in one file. Runs before every release so it cannot go stale.
+//
+// Two halves. cargo-about walks the crate graph and renders about.hbs; this
+// script walks the production half of package-lock.json for the JavaScript
+// side, which cargo-about knows nothing about. Both are grouped by licence
+// text rather than by package, because the MIT licence does not get more
+// true for being printed eighty times.
+
+import { execFileSync } from "node:child_process";
+import { readFileSync, writeFileSync, existsSync } from "node:fs";
+import { join, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
+
+const root = join(dirname(fileURLToPath(import.meta.url)), "..");
+const out = join(root, "THIRD_PARTY_NOTICES.md");
+
+// --- Rust -----------------------------------------------------------------
+
+let crates;
+try {
+  crates = execFileSync(
+    "cargo",
+    ["about", "generate", "--config", "about.toml", "about.hbs"],
+    { cwd: join(root, "src-tauri"), encoding: "utf8", stdio: ["ignore", "pipe", "inherit"] },
+  );
+} catch (err) {
+  console.error("cargo-about failed. Install it with: cargo install cargo-about --locked");
+  process.exit(err.status ?? 1);
+}
+
+// --- JavaScript ------------------------------------------------------------
+
+const lock = JSON.parse(readFileSync(join(root, "package-lock.json"), "utf8"));
+// LICENSE_MIT is the Tauri convention for a dual-licensed package; listing
+// it here elects MIT, which every Shotly dependency offers.
+const candidates = ["LICENSE", "LICENSE.md", "LICENSE.txt", "LICENSE_MIT", "LICENSE-MIT", "LICENCE", "LICENCE.md", "license", "license.md", "License.txt"];
+
+// The Tauri plugins ship no licence text at all — only an SPDX tag file with
+// the copyright holder in it. Electing MIT from their "MIT OR Apache-2.0",
+// the notice owed is the MIT text over that copyright line.
+const mitText = (copyright) => `MIT License
+
+Copyright (c) ${copyright}
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.`;
+
+function licenseText(dir, declared) {
+  const file = candidates.map((c) => join(dir, c)).find(existsSync);
+  if (file) return readFileSync(file, "utf8").trim();
+  const spdx = join(dir, "LICENSE.spdx");
+  if (existsSync(spdx) && /\bMIT\b/.test(declared ?? "")) {
+    const m = readFileSync(spdx, "utf8").match(/^PackageCopyrightText:\s*(.+)$/m);
+    if (m) return mitText(m[1].trim());
+  }
+  return null;
+}
+
+// licence text → { license, packages[] }
+const byText = new Map();
+const missing = [];
+
+for (const [path, meta] of Object.entries(lock.packages)) {
+  if (!path || meta.dev) continue; // "" is the root package
+  const name = path.replace(/^.*node_modules\//, "");
+  const dir = join(root, path);
+  const text = licenseText(dir, meta.license);
+  if (!text) {
+    missing.push(`${name} ${meta.version} (${meta.license ?? "unknown licence"})`);
+    continue;
+  }
+  const declared = meta.license ?? "unknown";
+  const elected = /\bMIT\b/.test(declared) && /\bOR\b/.test(declared) ? "MIT" : declared;
+  const entry = byText.get(text) ?? { license: elected, packages: [] };
+  entry.packages.push(`\`${name} ${meta.version}\``);
+  byText.set(text, entry);
+}
+
+if (missing.length) {
+  console.error("No licence file found for:\n  " + missing.join("\n  "));
+  process.exit(1);
+}
+
+let js = "## JavaScript packages\n\n";
+for (const [text, { license, packages }] of byText) {
+  js += `### ${license}\n\nUsed by: ${packages.join(", ")}\n\n\`\`\`\n${text}\n\`\`\`\n\n`;
+}
+
+// --- Assemble ---------------------------------------------------------------
+
+const header = `# Third-party notices
+
+Shotly is built on open-source software. The components below are bundled
+into the application, and this file reproduces their licences and copyright
+notices as those licences require. Shotly's own licence is in
+[LICENSE.md](LICENSE.md).
+
+This file is generated by \`npm run notices\`; do not edit it by hand.
+
+`;
+
+writeFileSync(out, header + crates.trimEnd() + "\n\n" + js.trimEnd() + "\n");
+console.log(`wrote ${out}`);

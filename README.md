@@ -435,3 +435,17 @@ colours · <kbd>[</kbd> <kbd>]</kbd> size · <kbd>D</kbd> move the toolbar ·
 Everything about the source — running it locally, signing, architecture, and the
 mistakes worth not repeating — is in [docs/DEVELOPING.md](docs/DEVELOPING.md).
 Release mechanics are in [docs/RELEASING.md](docs/RELEASING.md).
+
+## Licence
+
+Shotly's source is published under the
+[Functional Source License 1.1, ALv2 Future License](LICENSE.md): read it,
+build it, change it, use it for anything except a competing product — and two
+years after each release, that release becomes Apache 2.0. The signed,
+notarized, auto-updating build is sold separately under commercial terms.
+
+Contributions are welcome and need a one-time
+[contributor licence agreement](CONTRIBUTING.md). The open-source components
+Shotly is built on are credited in
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) and under
+**Shotly → Acknowledgements** in the app.
