@@ -8,6 +8,20 @@ The release notes on GitHub and the "what's new" text the in-app updater shows
 are both taken from this file — see `docs/RELEASING.md`. A version with nothing
 written here cannot be published.
 
+## 0.14.2 — 2026-08-22
+
+- **Shapes can be moved again while the arrow tool is in hand.** 0.14.1
+  taught a press on a shape to draw a connector from it, which took away the
+  press that moves it — and since the arrow tool stays selected after you
+  draw one, adding a single arrow made every shape on the page unmovable
+  until you changed tools. Pressing a shape moves it again, as it does with
+  every other tool.
+- **Connectors start from anchors.** Hover a shape with the arrow tool and
+  four dots appear on its edges: press one to draw an arrow tied to that
+  shape, press the shape itself to move it. Everything 0.14.1 got right is
+  still here — the head lights up what it is about to land on, and an end
+  that stops at a shape's edge still lands on it.
+
 ## 0.14.1 — 2026-08-22
 
 - **Arrows connect to shapes on the first try.** Tying an arrow to a shape
