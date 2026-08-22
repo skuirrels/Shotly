@@ -8,6 +8,15 @@ The release notes on GitHub and the "what's new" text the in-app updater shows
 are both taken from this file — see `docs/RELEASING.md`. A version with nothing
 written here cannot be published.
 
+## 0.14.4 — 2026-08-22
+
+- **Nothing changes on a Mac.** This release is the build going green: a
+  platform-parity check had been failing on every release since 0.13.2 over a
+  type spelled two ways in the Windows backend, and the two workflow actions
+  that ran on a deprecated Node. The release script now runs the same checks
+  the build does, before the tag exists rather than minutes after it, so a
+  version cannot ship red again.
+
 ## 0.14.3 — 2026-08-22
 
 - **The tool palette is six slots rather than sixteen icons.** Grouped by
