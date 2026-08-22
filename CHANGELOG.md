@@ -8,6 +8,22 @@ The release notes on GitHub and the "what's new" text the in-app updater shows
 are both taken from this file — see `docs/RELEASING.md`. A version with nothing
 written here cannot be published.
 
+## 0.14.3 — 2026-08-22
+
+- **The tool palette is six slots rather than sixteen icons.** Grouped by
+  what the tool makes — a shape, some words, an emphasis, a reading taken off
+  the capture — each slot showing whichever of its tools you used last, with
+  a caret opening a menu that names the rest and the key that reaches each
+  one. No key has changed: every letter works exactly as it did, and the
+  menus are how you find that out without being told.
+- **The palette stops sliding about.** The style controls shared the tools'
+  pill, so its width changed with the tool — and since it is centred,
+  choosing spotlight after rectangle moved every icon about seventy pixels
+  sideways, under the hand already reaching for the next one. They now sit in
+  a pill of their own and the tools stay put.
+- **The keyboard sheet has a button**, next to focus mode. Sixteen letters
+  were only reachable by already knowing ⌘/.
+
 ## 0.14.2 — 2026-08-22
 
 - **Shapes can be moved again while the arrow tool is in hand.** 0.14.1
