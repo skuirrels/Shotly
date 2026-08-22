@@ -13,8 +13,16 @@ git push
 npm run publish
 ```
 
-`publish` builds, then refuses to upload anything that would break an existing
-install. Read [What can go wrong](#what-can-go-wrong) before overriding it.
+`publish` starts with `npm run ci` — the same five checks the CI workflow runs,
+in the same order — then builds, then refuses to upload anything that would
+break an existing install. Read [What can go wrong](#what-can-go-wrong) before
+overriding it.
+
+Running them here rather than only on GitHub is the point: CI answers minutes
+after the tag exists, which is too late to stop a release going out red. Every
+release from 0.13.2 to 0.14.3 was published with a failing CI run — a platform
+parity difference that had been sitting there the whole time — because nothing
+between the working tree and the tag ever asked.
 
 The build starts by regenerating `THIRD_PARTY_NOTICES.md` — the licences of
 everything in the bundle, which the app shows under **Shotly →

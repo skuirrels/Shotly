@@ -29,6 +29,7 @@ pub fn cursor() -> Option<(f64, f64)> {
 // answer" caveat that MESSAGING_TIMEOUT exists for.
 
 use crate::ax::Node;
+use crate::capture::Rect;
 
 /// Has the user granted whatever permission the hit test needs?
 ///
@@ -64,7 +65,7 @@ pub fn chain_at(_x: f64, _y: f64) -> Vec<Node> {
 /// is on the macOS side: the caller already knows which window it means.
 /// `None` until implemented, and the outline frames whole windows in the
 /// meantime, which is the answer a Mac without accessibility access gives.
-pub fn window_children(_pid: i32, _frame: crate::capture::Rect) -> Option<Vec<Node>> {
+pub fn window_children(_pid: i32, _frame: Rect) -> Option<Vec<Node>> {
     None
 }
 
